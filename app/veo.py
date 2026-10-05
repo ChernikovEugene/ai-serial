@@ -119,12 +119,15 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
         _finish(take_id, shot_id, "error", str(e))
 
 
-def start(shot: dict, refs: list[dict], settings: dict, user_id: int | None) -> int:
+def start(shot: dict, refs: list[dict], settings: dict, user_id: int | None, reason: str = "") -> int:
+    """Creates a take that remembers the exact prompt it was generated from and why it was (re)generated."""
     with db.connect() as c:
         n = c.execute("SELECT COALESCE(MAX(take_no), 0) + 1 FROM takes WHERE shot_id=?", (shot["id"],)).fetchone()[0]
         take_id = c.execute(
-            "INSERT INTO takes(shot_id, take_no, status, prompt, duration, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
-            (shot["id"], n, "queued", shot["prompt"], shot["duration"], user_id, db.now())).lastrowid
+            "INSERT INTO takes(shot_id, take_no, status, prompt, duration, reason, provider, created_by, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (shot["id"], n, "queued", shot["prompt"], shot["duration"], reason.strip(),
+             settings.get("veo_provider", "stub"), user_id, db.now())).lastrowid
     pool().submit(_run, take_id, shot, refs, settings)
     return take_id
 

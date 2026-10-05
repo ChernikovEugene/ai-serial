@@ -43,7 +43,7 @@ export async function renderAsset(id) {
   view().innerHTML = `
     <div class="row"><a href="#/${k.path}" class="btn ghost">←</a><h1 style="margin:0">${esc(a.name)}</h1>
       <span class="badge">${k.one}</span><code class="handle" title="Скопировать" id="copy">${esc(handle(a.name))}</code><div class="spacer"></div>
-      ${can.edit() ? `<button class="danger ghost" id="del">Удалить</button>` : ""}</div>
+      ${can.admin() ? `<button class="danger ghost" id="del">Удалить</button>` : ""}</div>
     <div class="two-col" style="margin-top:16px">
       <div class="card">
         <label>Название</label><input id="a-name" value="${esc(a.name)}" ${ro}>

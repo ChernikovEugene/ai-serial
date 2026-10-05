@@ -1,5 +1,5 @@
 // Router, navigation and login.
-import { $, $$, api, esc, state, toast, view } from "./core.js";
+import { $, $$, api, can, esc, state, toast, view } from "./core.js";
 import { renderQueue } from "./queue.js";
 import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
@@ -26,7 +26,7 @@ async function route() {
   try {
     if (!section || section === "queue") return await renderQueue();
     if (section === "calendar") return await renderCalendar();
-    if (section === "episodes") return id ? await renderEpisode(+id, sub || "script") : await renderQueue();
+    if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderQueue();
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
     if (section === "settings") return await renderSettings();

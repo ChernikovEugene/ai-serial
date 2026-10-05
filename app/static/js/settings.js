@@ -79,7 +79,7 @@ function userDialog() {
     <label>Имя</label><input id="u-name">
     <label>Логин</label><input id="u-login" autocomplete="off">
     <label>Пароль (от 4 символов)</label><input id="u-pass" type="password" autocomplete="new-password">
-    <label>Роль</label><select id="u-role">${Object.entries(state.meta.roles).map(([k, n]) => `<option value="${k}" ${k === "editor" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+    <label>Роль</label><select id="u-role">${Object.entries(state.meta.roles).map(([k, n]) => `<option value="${k}" ${k === "writer" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
     <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="cancel">Отмена</button><button class="primary" id="ok">Добавить</button></div>`);
   $("#cancel", m).onclick = closeModal;
   $("#ok", m).onclick = async () => {

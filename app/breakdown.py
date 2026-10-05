@@ -8,6 +8,7 @@ Two modes:
 Recognised inside the text (all optional):
   ИНТ. КАФЕ — ДЕНЬ / НАТ. ... / СЦЕНА 2: Парк / ЛОКАЦИЯ: Кафе   -> scene + location
   МАША: Привет!  /  Маша (шёпотом): Привет!  /  @Маша:Пижама: Привет!
+  МАША (за кадром): Он ещё не знает.   -> закадровая озвучка (голос не в кадре, без липсинка)
   МАША  (caps line, dialogue on next lines)  /  — Привет, — сказала Маша.
   КАМЕРА: крупный план  /  [медленный наезд]                       -> camera
   @Маша, @Маша:Пижама, @Кафе, @Кафе:Ночь                           -> character / location (+ version)
@@ -33,6 +34,19 @@ PAREN_RE = re.compile(r"^\(([^)]{1,80})\)$")
 MENTION_RE = re.compile(r"@([\wЁё\-]+)(?::([\wЁё\-]+))?")
 TITLE_RE = re.compile(r"^(?:серия|эпизод|название|episode)\b", re.I)
 SENTENCE_SPLIT_RE =re.compile(r"(?<=[.!?…])\s+")
+# «МАША (за кадром): …», «Маша (з/к, тихо): …», «Маша (V.O.): …» -> закадровая озвучка
+VOICEOVER_RE = re.compile(r"^(?:за\s*кадр\w*|з\s*[./]?\s*к\.?|закадр\w*|v\.?\s?o\.?|o\.?\s?s\.?|voice[\s-]*over|голос)$", re.I)
+VOICE_DIRECT, VOICE_OVER = "direct", "voiceover"
+
+
+def split_voice(paren: str | None) -> tuple[str, str]:
+    """Pulls the voice-over marker out of a parenthetical. Returns (voice, remaining parenthetical)."""
+    if not paren:
+        return VOICE_DIRECT, ""
+    parts = [p.strip() for p in re.split(r"[,;]", paren) if p.strip()]
+    rest = [p for p in parts if not VOICEOVER_RE.match(p)]
+    voice = VOICE_OVER if len(rest) != len(parts) else VOICE_DIRECT
+    return voice, ", ".join(rest)
 
 
 def _stem(word: str) -> str:
@@ -221,9 +235,11 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
         speaker = idx.exact(speaker_name, "character") if speaker_name else None
         name = speaker["name"] if speaker else (speaker_name or "").strip().title()
 
+        voice, paren = split_voice(paren)
+
         def line(chunk):
             return {"speaker": name, "asset_id": speaker["id"] if speaker else None, "text": chunk,
-                    "parenthetical": paren or ""}
+                    "parenthetical": paren, "voice": voice}
 
         if marked:
             cur = current_or_outside(text)
@@ -378,14 +394,33 @@ def shot_warnings(shot: dict, max_s: int) -> list[str]:
                  f"(речь {shot['speech_seconds']:.1f} с, {shot['words']} слов). Сократите реплики или разбейте шот.")
     elif shot["est_seconds"] > max_s - 0.8:
         w.append(f"Впритык: ~{shot['est_seconds']:.1f} с из {max_s} с — актёр может не успеть договорить")
-    if len(shot["dialogue"]) > MAX_DIALOGUE_LINES_PER_SHOT:
-        w.append(f"{len(shot['dialogue'])} реплики в одном шоте — Veo лучше справляется с 1–2")
+    on_screen = [d for d in shot["dialogue"] if d.get("voice") != VOICE_OVER]
+    if len(on_screen) > MAX_DIALOGUE_LINES_PER_SHOT:
+        w.append(f"{len(on_screen)} реплики в кадре в одном шоте — Veo лучше справляется с 1–2")
     if len(shot["characters"]) > 3:
         w.append("Больше 3 персонажей в кадре — Veo может путать внешность")
-    for d in shot["dialogue"]:
+    for d in on_screen:
         if not d.get("asset_id"):
             w.append(f"Персонаж «{d['speaker'] or '?'}» не найден в библиотеке")
     return w
+
+
+def shot_missing(shot: dict, max_s: int) -> list[str]:
+    """What still blocks a shot from being 'fully filled'. A script cannot be approved while any shot has these."""
+    miss = []
+    if not (shot.get("action") or "").strip() and not shot.get("dialogue"):
+        miss.append("пустой шот: нет ни действия, ни реплик")
+    if not shot.get("location_version_id"):
+        miss.append("не выбрана локация")
+    if shot.get("est_seconds", 0) > max_s:
+        miss.append(f"не влезает в {max_s} с (нужно ~{shot['est_seconds']:.1f} с)")
+    for d in shot.get("dialogue", []):
+        who = d.get("speaker") or "?"
+        if not (d.get("text") or "").strip():
+            miss.append(f"у реплики «{who}» нет текста")
+        elif d.get("voice") != VOICE_OVER and not d.get("asset_id"):
+            miss.append(f"«{who}» говорит в кадре, но его нет в библиотеке персонажей")
+    return miss
 
 
 def _finalize(s: dict, i: int, idx: AssetIndex, max_s: int, wps: float, marked: bool) -> dict:
@@ -485,13 +520,17 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
     if shot.get("camera"):
         parts.append(_sent(f"Camera: {shot['camera']}"))
 
-    if shot.get("dialogue"):
-        for d in shot["dialogue"]:
+    on_screen = [d for d in shot.get("dialogue", []) if d.get("voice") != VOICE_OVER]
+    if on_screen:
+        for d in on_screen:
             v = next((v for c, v in char_vs if c["asset_id"] == d.get("asset_id")), None)
             how = f", {d['parenthetical']}" if d.get("parenthetical") else ""
             voice = " " + _sent(f"Voice: {v['voice']}") if v and v.get("voice") else ""
             parts.append(f'{d["speaker"]} says in {lang}{how}: "{d["text"].strip()}"{voice}')
         parts.append("Lip-sync the spoken lines. No background music.")
+    elif shot.get("dialogue"):
+        # voice-over only: the voice is recorded separately, so nobody on screen speaks
+        parts.append("Nobody on screen speaks, lips closed, natural ambient sound only. No background music.")
     else:
         parts.append("No dialogue, natural ambient sound only.")
 

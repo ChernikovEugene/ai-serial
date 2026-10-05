@@ -101,6 +101,8 @@ TABLES = {
         prompt TEXT NOT NULL DEFAULT '',
         duration INTEGER NOT NULL DEFAULT 8,
         source TEXT NOT NULL DEFAULT 'veo',
+        provider TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT '',
         finished_at TEXT""",
@@ -161,6 +163,7 @@ STATUSES = [
     ("posted", "Опубликовано"),
 ]
 STATUS_NAMES = dict(STATUSES)
+STATUS_ORDER = [k for k, _ in STATUSES]
 
 
 def now() -> str:

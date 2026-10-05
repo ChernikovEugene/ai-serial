@@ -31,7 +31,7 @@ app = FastAPI(title="Студия сериала")
 # ---------- auth middleware ----------
 
 OPEN_PATHS = ("/api/auth/",)
-VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+(/resolve)?|auth/.*)$")
+VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+|auth/.*)$")
 
 
 @app.middleware("http")
@@ -128,7 +128,7 @@ def create_user(u: UserIn):
             raise HTTPException(400, "Такой логин уже есть")
         c.execute("INSERT INTO users(login, name, pass_hash, role, created_at) VALUES (?,?,?,?,?)",
                   (u.login.strip().lower(), (u.name or u.login).strip(), auth.hash_password(u.password),
-                   u.role or "editor", db.now()))
+                   u.role or "writer", db.now()))
     return list_users()
 
 
@@ -163,6 +163,12 @@ def delete_user(user_id: int, request: Request):
     return list_users()
 
 
+def status_flow(role: str) -> dict:
+    """Which statuses the role may move an episode from / to (null = any). The UI uses it to build the status menu."""
+    sources, targets = auth.STATUS_SOURCES.get(role, set()), auth.STATUS_TARGETS.get(role, set())
+    return {"from": None if sources is None else sorted(sources), "to": None if targets is None else sorted(targets)}
+
+
 @app.get("/api/meta")
 def meta(request: Request):
     s = db.get_settings()
@@ -170,6 +176,7 @@ def meta(request: Request):
         "user": request.state.user,
         "statuses": [{"key": k, "name": n} for k, n in db.STATUSES],
         "roles": auth.ROLES,
+        "status_flow": status_flow(request.state.user["role"]),
         "veo_provider": s["veo_provider"], "veo_model": s["veo_model"],
         "max_shot_seconds": int(s["max_shot_seconds"]), "words_per_second": float(s["words_per_second"]),
         "anchor_number": int(s["anchor_number"]), "anchor_date": s["anchor_date"],
@@ -244,6 +251,8 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     if not s.get("location_version_id") and s.get("scene"):
         w.append(f"Локация «{s['scene']}» не найдена в библиотеке")
     s["warnings"] = w + warns
+    s["missing"] = breakdown.shot_missing(s, ctx.max_s)
+    s["revisions"] = max(0, len(takes) - 1)  # how many times this shot was re-generated
     s["over_limit"] = s["est_seconds"] > ctx.max_s
     s["forced_8"] = bool(breakdown.forced_duration(refs, s, ctx.settings))
     s["references"] = refs
@@ -285,6 +294,20 @@ def load_episode_row(eid: int) -> dict:
     return ep
 
 
+def writer_may_edit(request: Request, status: str) -> None:
+    """Once the script is approved only the producer can change it, so the editor works on a stable text."""
+    if request.state.user["role"] == "writer" and status not in ("dev", "review"):
+        raise HTTPException(403, "Сценарий уже согласован — править его может только продюсер. "
+                                 "Верните серию в «В разработке» или попросите продюсера")
+
+
+def incomplete_shots(eid: int) -> list[str]:
+    ep = get_episode(eid)
+    if not ep["shots"]:
+        return ["В серии нет ни одного шота"]
+    return [f"Шот {s['label']}: {'; '.join(s['missing'])}" for s in ep["shots"] if s["missing"]]
+
+
 def user_names() -> dict:
     with db.connect() as c:
         return {r["id"]: r["name"] or r["login"] for r in c.execute("SELECT id, name, login FROM users")}
@@ -297,7 +320,7 @@ def list_assets(kind: str | None = None):
     return load_assets(kind)
 
 
-@app.post("/api/assets")
+@app.post("/api/assets", dependencies=[Depends(auth.writer)])
 def create_asset(request: Request, kind: str = Form(...), name: str = Form(...), aliases: str = Form(""),
                  label: str = Form("Базовый"), description: str = Form(""), voice: str = Form(""),
                  notes: str = Form(""), images: list[UploadFile] = File(default=[])):
@@ -325,7 +348,7 @@ class AssetPatch(BaseModel):
     aliases: list[str] | None = None
 
 
-@app.put("/api/assets/{asset_id}")
+@app.put("/api/assets/{asset_id}", dependencies=[Depends(auth.writer)])
 def update_asset(asset_id: int, p: AssetPatch):
     with db.connect() as c:
         if p.name is not None and p.name.strip():
@@ -335,14 +358,14 @@ def update_asset(asset_id: int, p: AssetPatch):
     return get_asset(asset_id)
 
 
-@app.delete("/api/assets/{asset_id}")
+@app.delete("/api/assets/{asset_id}", dependencies=[Depends(auth.admin)])
 def delete_asset(asset_id: int):
     with db.connect() as c:
         c.execute("DELETE FROM assets WHERE id=?", (asset_id,))
     return {"ok": True}
 
 
-@app.post("/api/assets/{asset_id}/versions")
+@app.post("/api/assets/{asset_id}/versions", dependencies=[Depends(auth.writer)])
 def create_version(request: Request, asset_id: int, label: str = Form(""), description: str = Form(""),
                    voice: str = Form(""), notes: str = Form(""), keep_images: str = Form("[]"),
                    base_version_id: int | None = Form(None), activate: bool = Form(True),
@@ -363,7 +386,7 @@ def create_version(request: Request, asset_id: int, label: str = Form(""), descr
     return get_asset(asset_id)
 
 
-@app.post("/api/assets/{asset_id}/versions/{version_id}/activate")
+@app.post("/api/assets/{asset_id}/versions/{version_id}/activate", dependencies=[Depends(auth.writer)])
 def activate_version(asset_id: int, version_id: int):
     with db.connect() as c:
         if not c.execute("SELECT 1 FROM asset_versions WHERE id=? AND asset_id=?", (version_id, asset_id)).fetchone():
@@ -374,7 +397,14 @@ def activate_version(asset_id: int, version_id: int):
 
 # ---------- episodes ----------
 
-def episode_summaries() -> list[dict]:
+def visible_or_404(request: Request, eid: int) -> None:
+    """The editor (монтажёр) only sees episodes whose script is approved."""
+    role = request.state.user["role"]
+    if role == "editor" and not auth.can_see(role, load_episode_row(eid)["status"]):
+        raise HTTPException(404, "Серия пока недоступна: сценарий ещё не согласован")
+
+
+def episode_summaries(role: str = "admin") -> list[dict]:
     settings = db.get_settings()
     max_s = int(settings.get("max_shot_seconds") or 8)
     with db.connect() as c:
@@ -393,18 +423,18 @@ def episode_summaries() -> list[dict]:
                  over=st.get("over", 0) or 0, with_take=st.get("with_take", 0) or 0, redo=st.get("redo", 0) or 0,
                  open_fixes=fixes.get(e["id"], 0), date=schedule.date_for(e["number"], settings),
                  status_name=db.STATUS_NAMES.get(e["status"], e["status"]))
-    return eps
+    return [e for e in eps if auth.can_see(role, e["status"])]
 
 
 @app.get("/api/episodes")
-def list_episodes():
-    return episode_summaries()
+def list_episodes(request: Request):
+    return episode_summaries(request.state.user["role"])
 
 
 @app.get("/api/schedule")
-def get_schedule(start: str, end: str):
+def get_schedule(start: str, end: str, request: Request):
     d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
-    eps = [e for e in episode_summaries() if e["date"] and start <= e["date"] <= end]
+    eps = [e for e in episode_summaries(request.state.user["role"]) if e["date"] and start <= e["date"] <= end]
     with db.connect() as c:
         custom = db.rows(c.execute("SELECT * FROM calendar_events"))
     events = []
@@ -426,7 +456,7 @@ class CalendarEventIn(BaseModel):
     yearly: bool = False
 
 
-@app.post("/api/calendar-events")
+@app.post("/api/calendar-events", dependencies=[Depends(auth.writer)])
 def add_calendar_event(e: CalendarEventIn, request: Request):
     date.fromisoformat(e.date)
     with db.connect() as c:
@@ -435,7 +465,7 @@ def add_calendar_event(e: CalendarEventIn, request: Request):
     return {"ok": True}
 
 
-@app.delete("/api/calendar-events/{ev_id}")
+@app.delete("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.writer)])
 def delete_calendar_event(ev_id: int):
     with db.connect() as c:
         c.execute("DELETE FROM calendar_events WHERE id=?", (ev_id,))
@@ -447,7 +477,7 @@ class AnchorIn(BaseModel):
     date: str
 
 
-@app.put("/api/schedule/anchor")
+@app.put("/api/schedule/anchor", dependencies=[Depends(auth.writer)])
 def set_anchor(a: AnchorIn):
     date.fromisoformat(a.date)
     with db.connect() as c:
@@ -457,7 +487,7 @@ def set_anchor(a: AnchorIn):
     return {"ok": True}
 
 
-@app.post("/api/schedule/compact")
+@app.post("/api/schedule/compact", dependencies=[Depends(auth.writer)])
 def compact_schedule():
     schedule.compact()
     return {"ok": True}
@@ -486,7 +516,7 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
     return eid
 
 
-@app.post("/api/episodes")
+@app.post("/api/episodes", dependencies=[Depends(auth.writer)])
 def create_episode(e: EpisodeIn, request: Request):
     return get_episode(create_episode_row(e, uid(request)))
 
@@ -500,7 +530,7 @@ def decode_text(raw: bytes) -> str:
     raise HTTPException(400, "Не удалось прочитать файл: нужен текст в UTF-8 или Windows-1251")
 
 
-@app.post("/api/episodes/upload")
+@app.post("/api/episodes/upload", dependencies=[Depends(auth.writer)])
 async def upload_episode(request: Request, file: UploadFile = File(...), title: str = Form(""),
                          date_: str = Form("", alias="date"), backlog: bool = Form(False)):
     text = decode_text(await file.read())
@@ -508,13 +538,18 @@ async def upload_episode(request: Request, file: UploadFile = File(...), title: 
     return get_episode(create_episode_row(e, uid(request)))
 
 
-@app.post("/api/read-text")
+@app.post("/api/read-text", dependencies=[Depends(auth.writer)])
 async def read_text(file: UploadFile = File(...)):
     return {"text": decode_text(await file.read()), "name": Path(file.filename or "").stem}
 
 
 @app.get("/api/episodes/{eid}")
-def get_episode(eid: int):
+def api_get_episode(eid: int, request: Request):
+    visible_or_404(request, eid)
+    return get_episode(eid)
+
+
+def get_episode(eid: int) -> dict:
     ep = load_episode_row(eid)
     ctx = Ctx()
     with db.connect() as c:
@@ -533,6 +568,7 @@ def get_episode(eid: int):
     ep["total_seconds"] = sum(s["duration"] for s in shots)
     ep["est_seconds"] = round(sum(s["est_seconds"] for s in shots), 1)
     ep["over_limit"] = sum(1 for s in ep["shots"] if s["over_limit"])
+    ep["incomplete"] = sum(1 for s in ep["shots"] if s["missing"])
     ep["date"] = schedule.date_for(ep["number"], ctx.settings)
     ep["status_name"] = db.STATUS_NAMES.get(ep["status"], ep["status"])
     ep["cast"] = episode_cast(eid)
@@ -546,9 +582,10 @@ class EpisodePatch(BaseModel):
     notes: str | None = None
 
 
-@app.put("/api/episodes/{eid}")
+@app.put("/api/episodes/{eid}", dependencies=[Depends(auth.writer)])
 def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = True):
     ep = load_episode_row(eid)
+    writer_may_edit(request, ep["status"])
     with db.connect() as c:
         for k, v in p.model_dump(exclude_unset=True).items():
             if v is not None:
@@ -562,13 +599,25 @@ def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = 
 
 class StatusIn(BaseModel):
     status: str
+    force: bool = False  # producer only: approve even though some shots are incomplete
 
 
 @app.post("/api/episodes/{eid}/status")
 def set_status(eid: int, s: StatusIn, request: Request):
     if s.status not in db.STATUS_NAMES:
         raise HTTPException(400, "Неизвестный статус")
+    role = request.state.user["role"]
     ep = load_episode_row(eid)
+    if s.status != ep["status"] and s.status not in auth.allowed_statuses(role, ep["status"]):
+        raise HTTPException(403, f"Роль «{auth.ROLES[role]}» не может перевести серию из статуса "
+                                 f"«{db.STATUS_NAMES[ep['status']]}» в «{db.STATUS_NAMES[s.status]}»")
+    # Gate: a script is approved only when every shot is fully filled in
+    crossing = db.STATUS_ORDER.index(s.status) >= db.STATUS_ORDER.index("approved") > db.STATUS_ORDER.index(ep["status"])
+    if crossing:
+        problems = incomplete_shots(eid)
+        if problems and not (s.force and role == "admin"):
+            raise HTTPException(409, "Сценарий нельзя согласовать, пока шоты заполнены не полностью:\n"
+                                + "\n".join(problems[:12]) + ("\n…" if len(problems) > 12 else ""))
     with db.connect() as c:
         c.execute("UPDATE episodes SET status=?, updated_at=?, posted_at=CASE WHEN ?='posted' THEN ? ELSE posted_at END "
                   "WHERE id=?", (s.status, db.now(), s.status, date.today().isoformat(), eid))
@@ -582,7 +631,7 @@ class MoveIn(BaseModel):
     date: str | None = None
 
 
-@app.post("/api/episodes/{eid}/move")
+@app.post("/api/episodes/{eid}/move", dependencies=[Depends(auth.writer)])
 def move_episode(eid: int, m: MoveIn, request: Request):
     ep = load_episode_row(eid)
     number = schedule.number_for(m.date) if m.date else m.number
@@ -598,14 +647,14 @@ class PinIn(BaseModel):
     pinned: bool
 
 
-@app.post("/api/episodes/{eid}/pin")
+@app.post("/api/episodes/{eid}/pin", dependencies=[Depends(auth.writer)])
 def pin_episode(eid: int, p: PinIn, request: Request):
     schedule.set_pinned(eid, p.pinned)
     db.log(eid, uid(request), "Дата закреплена" if p.pinned else "Дата откреплена")
     return {"ok": True}
 
 
-@app.delete("/api/episodes/{eid}")
+@app.delete("/api/episodes/{eid}", dependencies=[Depends(auth.admin)])
 def delete_episode(eid: int):
     with db.connect() as c:
         c.execute("DELETE FROM episodes WHERE id=?", (eid,))
@@ -613,7 +662,8 @@ def delete_episode(eid: int):
 
 
 @app.get("/api/episodes/{eid}/events")
-def episode_events(eid: int):
+def episode_events(eid: int, request: Request):
+    visible_or_404(request, eid)
     names = user_names()
     with db.connect() as c:
         evs = db.rows(c.execute("SELECT * FROM events WHERE episode_id=? ORDER BY id DESC LIMIT 200", (eid,)))
@@ -627,7 +677,7 @@ class AnalyzeIn(BaseModel):
     episode_id: int | None = None
 
 
-@app.post("/api/analyze")
+@app.post("/api/analyze", dependencies=[Depends(auth.writer)])
 def analyze(a: AnalyzeIn):
     """Live analysis while typing: nothing is saved."""
     ctx = Ctx()
@@ -684,8 +734,9 @@ def apply_breakdown(eid: int):
         c.execute("UPDATE episodes SET parse_notes=?, updated_at=? WHERE id=?", (db.dumps(notes), db.now(), eid))
 
 
-@app.post("/api/episodes/{eid}/breakdown")
-def breakdown_episode(eid: int):
+@app.post("/api/episodes/{eid}/breakdown", dependencies=[Depends(auth.writer)])
+def breakdown_episode(eid: int, request: Request):
+    writer_may_edit(request, load_episode_row(eid)["status"])
     apply_breakdown(eid)
     return get_episode(eid)
 
@@ -694,8 +745,9 @@ class CastIn(BaseModel):
     cast: list[dict]  # [{asset_id, version_id|null}]
 
 
-@app.put("/api/episodes/{eid}/cast")
+@app.put("/api/episodes/{eid}/cast", dependencies=[Depends(auth.writer)])
 def set_cast(eid: int, body: CastIn, request: Request):
+    writer_may_edit(request, load_episode_row(eid)["status"])
     with db.connect() as c:
         for item in body.cast:
             if item.get("version_id"):
@@ -712,7 +764,7 @@ class GenerateIn(BaseModel):
     mode: str = "missing"  # missing | redo | all
 
 
-@app.post("/api/episodes/{eid}/generate")
+@app.post("/api/episodes/{eid}/generate", dependencies=[Depends(auth.editor)])
 def generate_episode(eid: int, g: GenerateIn, request: Request):
     ep = get_episode(eid)
     if not ep["shots"]:
@@ -737,7 +789,8 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
 
 
 @app.get("/api/episodes/{eid}/export")
-def export_episode(eid: int):
+def export_episode(eid: int, request: Request):
+    visible_or_404(request, eid)
     ep = get_episode(eid)
     name = re.sub(r"[^\w\-]+", "_", f"episode_{ep['number'] or 'backlog'}_{ep['title']}")[:60]
     return JSONResponse(ep, headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
@@ -779,10 +832,25 @@ def shot_response(sid: int) -> dict:
     return shot_out(s, Ctx(), takes)
 
 
+# Content belongs to the writer, generation settings to the editor (the producer may touch both).
+WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location"}
+EDITOR_SHOT_FIELDS = {"duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
+                      "prompt_locked", "needs_redo"}
+
+
 @app.put("/api/shots/{sid}")
-def update_shot(sid: int, p: ShotPatch):
+def update_shot(sid: int, p: ShotPatch, request: Request):
     s = load_shot(sid)
     data = p.model_dump(exclude_unset=True)
+    role = request.state.user["role"]
+    if role != "admin":
+        own = WRITER_SHOT_FIELDS if role == "writer" else EDITOR_SHOT_FIELDS if role == "editor" else set()
+        foreign = sorted(set(data) - own)
+        if foreign:
+            who = "сценарист" if role == "editor" else "монтажёр"
+            raise HTTPException(403, f"Эти поля меняет {who}: {', '.join(foreign)}")
+        if role == "writer":
+            writer_may_edit(request, load_episode_row(s["episode_id"])["status"])
     if data.pop("clear_location", False):
         s["location_version_id"] = None
     if "duration" in data and data["duration"] not in breakdown.ALLOWED_DURATIONS:
@@ -801,7 +869,7 @@ def update_shot(sid: int, p: ShotPatch):
     return shot_response(sid)
 
 
-@app.post("/api/shots/{sid}/composition")
+@app.post("/api/shots/{sid}/composition", dependencies=[Depends(auth.editor)])
 def upload_composition(sid: int, image: UploadFile = File(...)):
     s = load_shot(sid)
     s["composition_image"] = save_upload(image, f"compositions/{s['episode_id']}")
@@ -811,7 +879,7 @@ def upload_composition(sid: int, image: UploadFile = File(...)):
     return shot_response(sid)
 
 
-@app.delete("/api/shots/{sid}/composition")
+@app.delete("/api/shots/{sid}/composition", dependencies=[Depends(auth.editor)])
 def delete_composition(sid: int):
     s = load_shot(sid)
     s["composition_image"] = ""
@@ -821,7 +889,7 @@ def delete_composition(sid: int):
     return shot_response(sid)
 
 
-@app.post("/api/shots/{sid}/rebuild-prompt")
+@app.post("/api/shots/{sid}/rebuild-prompt", dependencies=[Depends(auth.editor)])
 def rebuild_prompt(sid: int):
     s = load_shot(sid)
     s["prompt_locked"] = 0
@@ -837,16 +905,29 @@ def shot_request(sid: int):
     return veo.preview(s, s["references"], db.get_settings())
 
 
-@app.post("/api/shots/{sid}/generate")
-def generate_shot(sid: int, request: Request):
+class RegenerateIn(BaseModel):
+    prompt: str | None = None   # improved prompt for this attempt; saved to the shot
+    reason: str = ""            # what was wrong with the previous take
+
+
+@app.post("/api/shots/{sid}/generate", dependencies=[Depends(auth.editor)])
+def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     s = shot_response(sid)
     if s["gen_status"] in ("queued", "running"):
         raise HTTPException(400, "Этот шот уже генерируется")
-    veo.start(s, s["references"], db.get_settings(), uid(request))
+    g = g or RegenerateIn()
+    if g.prompt is not None and g.prompt.strip() and g.prompt.strip() != s["prompt"].strip():
+        raw = load_shot(sid)
+        raw["prompt"], raw["prompt_locked"] = g.prompt.strip(), 1
+        with db.connect() as c:
+            save_shot(c, raw)
+        s = shot_response(sid)
+    veo.start(s, s["references"], db.get_settings(), uid(request), g.reason)
     with db.connect() as c:
         c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=? AND status NOT IN ('posted')",
                   (db.now(), s["episode_id"]))
-    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: новый дубль отправлен в Veo")
+    note = f" — причина: {g.reason.strip()}" if g.reason.strip() else ""
+    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: новый дубль (№{len(s['takes']) + 1}) отправлен в Veo{note}")
     return shot_response(sid)
 
 
@@ -854,7 +935,7 @@ class SelectTakeIn(BaseModel):
     take_id: int
 
 
-@app.post("/api/shots/{sid}/select-take")
+@app.post("/api/shots/{sid}/select-take", dependencies=[Depends(auth.editor)])
 def select_take(sid: int, t: SelectTakeIn, request: Request):
     with db.connect() as c:
         take = c.execute("SELECT * FROM takes WHERE id=? AND shot_id=?", (t.take_id, sid)).fetchone()
@@ -866,7 +947,7 @@ def select_take(sid: int, t: SelectTakeIn, request: Request):
     return shot_response(sid)
 
 
-@app.post("/api/shots/{sid}/upload-take")
+@app.post("/api/shots/{sid}/upload-take", dependencies=[Depends(auth.editor)])
 def upload_take(sid: int, request: Request, video: UploadFile = File(...)):
     s = load_shot(sid)
     rel = save_upload(video, f"renders/manual/{s['episode_id']}", VIDEO_EXT)
@@ -903,14 +984,18 @@ def comments_for(eid: int) -> list[dict]:
 
 
 @app.get("/api/episodes/{eid}/comments")
-def list_comments(eid: int):
+def list_comments(eid: int, request: Request):
+    visible_or_404(request, eid)
     return comments_for(eid)
 
 
 @app.post("/api/episodes/{eid}/comments")
 def add_comment(eid: int, cm: CommentIn, request: Request):
+    visible_or_404(request, eid)
     if not cm.text.strip():
         raise HTTPException(400, "Пустой комментарий")
+    # Anyone can comment, but only the editor (or producer) decides what goes to re-generation
+    cm.is_fix = cm.is_fix and request.state.user["role"] in auth.GEN_ROLES
     with db.connect() as c:
         c.execute("INSERT INTO comments(episode_id, shot_id, take_id, user_id, text, timecode, is_fix, created_at)"
                   " VALUES (?,?,?,?,?,?,?,?)",
@@ -927,7 +1012,7 @@ class ResolveIn(BaseModel):
     resolved: bool = True
 
 
-@app.post("/api/comments/{cid}/resolve")
+@app.post("/api/comments/{cid}/resolve", dependencies=[Depends(auth.editor)])
 def resolve_comment(cid: int, r: ResolveIn, request: Request):
     with db.connect() as c:
         cm = c.execute("SELECT * FROM comments WHERE id=?", (cid,)).fetchone()

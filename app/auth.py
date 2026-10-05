@@ -1,8 +1,9 @@
-"""Accounts: PBKDF2 password hashes, cookie sessions, three roles.
+"""Accounts: PBKDF2 password hashes, cookie sessions, four roles.
 
-admin  - everything, including managing users and settings
-editor - create and edit episodes, assets, run generation
-viewer - read and comment only
+admin  (Продюсер)   - everything: approves scripts, manages users and settings, can act as any role
+writer (Сценарист)  - writes episodes: script, shots, characters, locations; sends the script for approval
+editor (Монтажёр)   - sees only approved episodes; generates video, edits prompts, picks takes, flags re-dos
+viewer (Зритель)    - read and comment only
 """
 import hashlib
 import hmac
@@ -15,7 +16,42 @@ from . import db
 
 COOKIE = "studio_session"
 SESSION_DAYS = 30
-ROLES = {"admin": "Администратор", "editor": "Редактор", "viewer": "Зритель (смотрит и комментирует)"}
+ROLES = {"admin": "Продюсер", "writer": "Сценарист", "editor": "Монтажёр",
+         "viewer": "Зритель (смотрит и комментирует)"}
+
+# Who may do what. The API checks these; the UI mirrors them (see `can` in static/js/core.js).
+WRITE_ROLES = ("admin", "writer")   # script, shots content, library, schedule
+GEN_ROLES = ("admin", "editor")     # prompts, generation, takes, re-dos
+
+# Statuses a role may set. The editor can also send a script back to the writer ("review").
+STATUS_TARGETS = {
+    "admin": None,  # any
+    "writer": {"dev", "review"},
+    "editor": {"review", "generating", "fixes", "ready"},
+}
+# Status a role may change an episode FROM (None = any).
+STATUS_SOURCES = {
+    "admin": None,
+    "writer": {"dev", "review"},
+    "editor": {"approved", "generating", "fixes", "ready"},
+}
+# The editor only sees episodes whose script is already approved.
+EDITOR_VISIBLE = {"approved", "generating", "fixes", "ready", "posted"}
+
+
+def can_see(role: str, status: str) -> bool:
+    return role != "editor" or status in EDITOR_VISIBLE
+
+
+def allowed_statuses(role: str, current: str) -> list[str]:
+    """Statuses this role may move an episode to from `current` (empty = read-only)."""
+    if role not in STATUS_TARGETS:
+        return []
+    src, dst = STATUS_SOURCES[role], STATUS_TARGETS[role]
+    if src is not None and current not in src:
+        return []
+    keys = [k for k, _ in db.STATUSES]
+    return [k for k in keys if (dst is None or k in dst) and k != current]
 
 
 def hash_password(password: str) -> str:
@@ -73,8 +109,12 @@ def require(request: Request, *roles: str) -> dict:
     return u
 
 
+def writer(request: Request) -> dict:
+    return require(request, *WRITE_ROLES)
+
+
 def editor(request: Request) -> dict:
-    return require(request, "admin", "editor")
+    return require(request, *GEN_ROLES)
 
 
 def admin(request: Request) -> dict:

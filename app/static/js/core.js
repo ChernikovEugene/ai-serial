@@ -27,8 +27,10 @@ export async function api(path, opts = {}) {
   if (!r.ok) {
     let msg = r.statusText;
     try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch {}
-    toast(msg, true);
-    throw new Error(msg);
+    if (!opts.quiet) toast(msg, true);
+    const err = new Error(msg);
+    err.status = r.status;
+    throw err;
   }
   return r.json();
 }
@@ -55,7 +57,9 @@ export function statusPill(key, small = false) {
 }
 
 export function statusSelect(current, attrs = "") {
-  return `<select class="status-select" ${attrs} style="--c:${STATUS_COLORS[current]}">${state.meta.statuses
+  const allowed = allowedStatuses(current);
+  return `<select class="status-select" ${attrs} ${allowed.length ? "" : "disabled"} style="--c:${STATUS_COLORS[current]}">${state.meta.statuses
+    .filter((s) => s.key === current || allowed.includes(s.key))
     .map((s) => `<option value="${s.key}" ${s.key === current ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>`;
 }
 
@@ -84,10 +88,20 @@ export function addDays(iso, n) {
   return isoDate(d);
 }
 
+// Mirrors the server rules in app/auth.py (the server is what actually enforces them).
 export const can = {
-  edit: () => ["admin", "editor"].includes(state.meta?.user?.role),
+  edit: () => ["admin", "writer"].includes(state.meta?.user?.role),   // script, shots content, library, schedule
+  write: () => ["admin", "writer"].includes(state.meta?.user?.role),  // same as edit, clearer in episode code
+  gen: () => ["admin", "editor"].includes(state.meta?.user?.role),    // prompts, generation, takes, re-dos
   admin: () => state.meta?.user?.role === "admin",
 };
+
+/** Statuses the current user may move an episode to from `current` (empty list = read-only). */
+export function allowedStatuses(current) {
+  const flow = state.meta.status_flow;
+  if (flow.from && !flow.from.includes(current)) return [];
+  return state.meta.statuses.map((s) => s.key).filter((k) => k !== current && (!flow.to || flow.to.includes(k)));
+}
 
 export async function loadAssets() {
   state.assets = await api("/api/assets");

@@ -63,23 +63,28 @@ function draw() {
   drawTab();
 }
 
+// The writer cannot touch a script once the producer has approved it.
+const writerLocked = () => state.meta.user.role === "writer" && !["dev", "review"].includes(E.ep.status);
+const canWrite = () => can.write() && !writerLocked();
+
 function drawHeader() {
   const ep = E.ep, max = state.meta.max_shot_seconds;
   const withVideo = ep.shots.filter((s) => s.selected_take_id).length;
   const fixes = ep.shots.reduce((n, s) => n + (s.open_fixes || 0), 0);
+  const filled = ep.shots.length - ep.incomplete;
   $("#ep-header").innerHTML = `
     <div class="ep-head">
       <div class="row">
         <a href="#/queue" class="btn ghost" title="К очереди">←</a>
         <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `№${ep.number}` : "бэклог"}</div>
         <div style="flex:1;min-width:220px">
-          <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${can.edit() ? "" : "disabled"}>
+          <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
           <div class="muted small">${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Без даты — в бэклоге"}
             · <a href="#" id="move-ep">${ep.number != null ? "перенести" : "назначить дату"}</a></div>
         </div>
-        ${can.edit() ? statusSelect(ep.status, 'id="ep-status"') : statusPill(ep.status)}
+        ${statusSelect(ep.status, 'id="ep-status"')}
         <a class="btn" href="/api/episodes/${ep.id}/export" title="Выгрузить серию в JSON">JSON</a>
-        ${can.edit() ? `<select id="gen-mode" style="width:auto">
+        ${can.gen() ? `<select id="gen-mode" style="width:auto">
             <option value="missing">шоты без видео</option><option value="redo">шоты с правками</option><option value="all">все шоты заново</option></select>
           <button class="primary" id="gen">▶ Отправить в Veo</button>` : ""}
       </div>
@@ -87,19 +92,37 @@ function drawHeader() {
         <span><b>${ep.shots.length}</b> шотов</span>
         <span>хронометраж <b>${fmtDur(ep.total_seconds)}</b> <span class="muted">(по тексту ~${fmtDur(ep.est_seconds)})</span></span>
         ${ep.over_limit ? `<span class="warn-t">⚠ не влезают в ${max} с: <b>${ep.over_limit}</b></span>` : `<span class="ok-t">✓ все шоты влезают в Veo</span>`}
+        ${ep.shots.length ? (ep.incomplete
+          ? `<span class="warn-t" title="Согласовать сценарий можно, когда у каждого шота выбрана локация, заполнены реплики и текст влезает в лимит">заполнено <b>${filled}/${ep.shots.length}</b> шотов</span>`
+          : `<span class="ok-t">✓ все шоты заполнены</span>`) : ""}
         <span>видео <b>${withVideo}/${ep.shots.length}</b></span>
         ${fixes ? `<span class="warn-t">открытых правок: <b>${fixes}</b></span>` : ""}
         <span class="muted">${state.meta.veo_provider === "gemini" ? "Veo API" : "режим заглушки"}</span>
       </div>
       <div class="timeline">${ep.shots.map((s) => `<span data-jump="${s.id}" title="Шот ${esc(s.label)}: ${s.duration} с, по тексту ${s.est_seconds} с"
-        class="${s.over_limit ? "over" : ""} ${s.selected_take_id ? "has-video" : ""}" style="flex:${s.duration}">${esc(s.label)}</span>`).join("")}</div>
+        class="${s.over_limit ? "over" : ""} ${s.missing.length ? "incomplete" : ""} ${s.selected_take_id ? "has-video" : ""}" style="flex:${s.duration}">${esc(s.label)}</span>`).join("")}</div>
     </div>`;
-  if (can.edit()) {
+  $("#ep-status").onchange = async (e) => {
+    const status = e.target.value;
+    try {
+      await api(`/api/episodes/${E.id}/status`, { json: { status }, quiet: true });
+    } catch (err) {
+      // 409: the script is not fully filled in. The producer may approve it anyway.
+      if (err.status === 409 && can.admin() && confirm(`${err.message}\n\nСогласовать всё равно?`)) {
+        await api(`/api/episodes/${E.id}/status`, { json: { status, force: true } });
+      } else {
+        if (err.message !== "auth") toast(err.message, true);
+        e.target.value = E.ep.status;
+        return;
+      }
+    }
+    await renderEpisode(E.id);
+    toast("Статус изменён");
+  };
+  if (canWrite()) {
     $("#ep-title").onchange = async (e) => { await api(`/api/episodes/${E.id}`, { method: "PUT", json: { title: e.target.value } }); toast("Название сохранено"); };
-    $("#ep-status").onchange = async (e) => {
-      await api(`/api/episodes/${E.id}/status`, { json: { status: e.target.value } });
-      E.ep.status = e.target.value; drawHeader(); toast("Статус изменён");
-    };
+  }
+  if (can.gen()) {
     $("#gen").onclick = async () => {
       const mode = $("#gen-mode").value;
       if (mode === "all" && !confirm("Сгенерировать заново все шоты? Каждый шот получит новый дубль (это платно при работе через API).")) return;
@@ -152,9 +175,9 @@ function drawScript(el) {
     <div class="script-layout">
       <div class="card">
         <div class="row"><b>Сценарий серии</b><div class="spacer"></div>
-          ${can.edit() ? `<label class="btn ghost small" style="margin:0">Загрузить .txt<input type="file" id="load-file" accept=".txt,.md,.fountain,text/plain" hidden></label>
+          ${canWrite() ? `<label class="btn ghost small" style="margin:0">Загрузить .txt<input type="file" id="load-file" accept=".txt,.md,.fountain,text/plain" hidden></label>
           <button class="primary" id="save-script">Сохранить и разбить на шоты</button>` : ""}</div>
-        <div class="editor-wrap"><textarea id="script" spellcheck="true" ${can.edit() ? "" : "readonly"}
+        <div class="editor-wrap"><textarea id="script" spellcheck="true" ${canWrite() ? "" : "readonly"}
           placeholder="Шот 1&#10;@Маша сидит на кровати...&#10;&#10;Шот 2&#10;МАША: Привет!">${esc(ep.script)}</textarea></div>
         <div class="muted small" id="save-state">Ctrl+S — сохранить. Введите @, чтобы вставить персонажа или локацию.</div>
         ${ep.parse_notes?.length ? `<ul class="warnings">${ep.parse_notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
@@ -186,7 +209,7 @@ function drawScript(el) {
   });
   ta.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); } });
   window.onbeforeunload = () => (dirty ? true : undefined);
-  if (can.edit()) {
+  if (canWrite()) {
     $("#save-script").onclick = save;
     $("#load-file").onchange = async (e) => {
       const f = e.target.files[0];
@@ -239,7 +262,7 @@ function drawCast(cast, a) {
       return `<div class="cast-row">
         <span class="mi-thumb" style="${img ? `background-image:url('${media(img)}')` : ""}">${img ? "" : x.kind === "character" ? "👤" : "🏙️"}</span>
         <span style="flex:1"><b>${esc(x.name)}</b> <span class="muted small">${x.kind === "character" ? "персонаж" : "локация"}</span></span>
-        <select data-cast="${x.id}" style="width:auto" ${can.edit() ? "" : "disabled"}>
+        <select data-cast="${x.id}" style="width:auto" ${canWrite() ? "" : "disabled"}>
           <option value="">активная (v${active?.version_no} ${esc(active?.label || "")})</option>
           ${x.versions.map((v) => `<option value="${v.id}" ${cast?.[x.id] === v.id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}
         </select></div>`;
@@ -254,8 +277,11 @@ function drawCast(cast, a) {
 function drawShots(el) {
   const ep = E.ep;
   el.innerHTML = ep.shots.length
-    ? `<div class="help" style="margin-bottom:12px">Шоты строятся из сценария. Правки полей здесь перезапишутся, если поменять текст этого шота в сценарии;
-       референс композиции, дубли, комментарии и вручную изменённый промпт сохраняются.</div>
+    ? `${writerLocked() ? `<div class="help warn-card" style="margin-bottom:12px">🔒 Сценарий согласован, править шоты может только продюсер. Чтобы внести правки, попросите вернуть серию в «В разработке».</div>` : ""}
+       <div class="help" style="margin-bottom:12px">${can.write()
+         ? `Шоты строятся из сценария. Здесь выбирают персонажей, локацию и тип озвучки реплик. Правки полей перезапишутся, если поменять текст этого шота в сценарии;
+            референс композиции, дубли, комментарии и вручную изменённый промпт сохраняются.`
+         : `Сценарий этой серии согласован. Содержание шотов смотрите слева, а промпты и генерацию настраивайте справа.`}</div>
        <div id="shots">${ep.shots.map(shotHtml).join("")}</div>`
     : `<div class="card"><p>Шотов пока нет.</p><p class="muted">Напишите сценарий на вкладке «Сценарий» и нажмите «Сохранить и разбить на шоты».</p></div>`;
   ep.shots.forEach(bindShot);
@@ -266,73 +292,79 @@ function takeBadge(s) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+const VOICE = { direct: "в кадре", voiceover: "закадр" };
+
 function shotHtml(s) {
   const max = state.meta.max_shot_seconds;
   const chars = state.assets.filter((a) => a.kind === "character");
   const locs = state.assets.filter((a) => a.kind === "location").flatMap((a) => a.versions.map((v) => ({ ...v, asset: a })));
-  const ro = can.edit() ? "" : "disabled";
+  const roW = canWrite() ? "" : "disabled"; // content: the writer's part
+  const roG = can.gen() ? "" : "disabled";  // generation: the editor's part
   const sel = s.selected_take;
   return `
-  <div class="card shot" id="shot-${s.id}">
+  <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""}" id="shot-${s.id}">
     <div class="side">
       <div class="shot-no">Шот ${esc(s.label)}</div>
       <div>${fitMeter(s.est_seconds, max)}
         <div class="small ${s.over_limit ? "warn-t" : "muted"}">нужно ~${s.est_seconds} с${s.speech_seconds ? ` · речь ${s.speech_seconds} с · ${s.words} сл.` : ""}</div></div>
-      <div><label>Клип Veo</label><select data-f="duration" ${ro} ${s.forced_8 ? "disabled" : ""}>${[4, 6, 8].map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
+      ${s.missing.length
+        ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>`
+        : `<div class="ok-t small">✓ заполнен</div>`}
+      <div><label>Клип Veo</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${[4, 6, 8].map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
         ${s.forced_8 ? `<div class="muted small">8 с: с референсами Veo 3.1 делает только 8 с</div>` : ""}</div>
-      <div>${takeBadge(s)} ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}</span>` : ""}
+      <div>${takeBadge(s)} ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span>` : ""}
         ${s.needs_redo ? `<span class="badge warn">нужна перегенерация</span>` : ""}</div>
       ${s.takes.at(-1)?.error ? `<div class="small err-t">${esc(s.takes.at(-1).error)}</div>` : ""}
       ${sel?.video_path ? `<video src="${media(sel.video_path)}" controls preload="metadata"></video>` : ""}
-      ${can.edit() ? `<button class="primary" data-act="gen">Сгенерировать дубль</button>` : ""}
-      <button data-act="req">Запрос к Veo</button>
+      ${can.gen() ? `<button class="primary" data-act="gen">Сгенерировать дубль</button><button data-act="req">Запрос к Veo</button>` : ""}
     </div>
     <div>
-      <label>Сцена</label><input data-f="scene" value="${esc(s.scene)}" ${ro}>
+      <label>Сцена</label><input data-f="scene" value="${esc(s.scene)}" ${roW}>
       <label>Локация</label>
-      <select data-f="location_version_id" ${ro}><option value="">— не выбрана —</option>
+      <select data-f="location_version_id" ${roW} class="${s.location_version_id ? "" : "need"}"><option value="">— не выбрана —</option>
         ${locs.map((v) => `<option value="${v.id}" ${v.id === s.location_version_id ? "selected" : ""}>${esc(v.asset.name)} · v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
       <label>Персонажи в кадре</label>
       <div class="chips">${s.characters.map((c, i) => {
         const a = chars.find((x) => x.id === c.asset_id);
         return `<span class="chip">${esc(c.name)}
-          <select data-char="${i}" ${ro}>${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
-          ${can.edit() ? `<button data-rmchar="${i}" title="Убрать">✕</button>` : ""}</span>`;
-      }).join("")}
-        ${can.edit() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>
+          <select data-char="${i}" ${roW}>${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
+          ${canWrite() ? `<button data-rmchar="${i}" title="Убрать">✕</button>` : ""}</span>`;
+      }).join("") || `<span class="muted small">никого (например, макро или пейзаж)</span>`}
+        ${canWrite() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>
           ${chars.filter((a) => !s.characters.some((c) => c.asset_id === a.id)).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>` : ""}
       </div>
-      <label>Действие</label><textarea data-f="action" rows="3" ${ro}>${esc(s.action)}</textarea>
-      <label>Камера</label><input data-f="camera" value="${esc(s.camera)}" ${ro}>
-      <label>Реплики</label>
+      <label>Действие</label><textarea data-f="action" rows="3" ${roW}>${esc(s.action)}</textarea>
+      <label>Камера</label><input data-f="camera" value="${esc(s.camera)}" ${roW}>
+      <label>Реплики <span class="muted small">— «в кадре»: персонаж говорит, идёт в Veo; «закадр»: голос за кадром, озвучивается отдельно</span></label>
       <div class="dialogue">${s.dialogue.map((d, i) => `
-        <div class="dlg-line" data-line="${i}">
-          <input data-d="speaker" value="${esc(d.speaker)}" placeholder="Кто" list="char-names" ${ro}>
-          <input data-d="parenthetical" value="${esc(d.parenthetical)}" placeholder="как (тихо)" ${ro}>
-          <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${ro}>
-          ${can.edit() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
-      ${can.edit() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
+        <div class="dlg-line ${d.voice === "voiceover" ? "vo" : ""}" data-line="${i}">
+          <input data-d="speaker" value="${esc(d.speaker)}" placeholder="Кто" list="char-names" ${roW}>
+          <select data-d="voice" ${roW} title="Как звучит реплика">${Object.entries(VOICE).map(([k, n]) => `<option value="${k}" ${(d.voice || "direct") === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+          <input data-d="parenthetical" value="${esc(d.parenthetical)}" placeholder="как (тихо)" ${roW}>
+          <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
+          ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
+      ${canWrite() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
       <datalist id="char-names">${chars.map((a) => `<option value="${esc(a.name)}">`).join("")}</datalist>
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     </div>
-    <div>
+    ${can.gen() ? `<div>
       <label style="margin-top:0">Референс композиции</label>
       <div class="comp ${s.composition_image ? "has" : ""}" data-drop="${s.id}">
         ${s.composition_image
           ? `<img src="${media(s.composition_image)}"><div class="comp-tools">
-              <select data-f="composition_mode" ${ro}><option value="reference" ${s.composition_mode !== "first_frame" ? "selected" : ""}>как референс композиции</option>
+              <select data-f="composition_mode" ${roG}><option value="reference" ${s.composition_mode !== "first_frame" ? "selected" : ""}>как референс композиции</option>
                 <option value="first_frame" ${s.composition_mode === "first_frame" ? "selected" : ""}>как первый кадр видео</option></select>
-              ${can.edit() ? `<button class="ghost small danger" data-act="rmcomp">Убрать</button>` : ""}</div>`
-          : `<label class="comp-empty">${can.edit() ? `Перетащите картинку или нажмите — раскадровка, скетч, кадр-образец<input type="file" accept="image/png,image/jpeg,image/webp" data-comp hidden>` : "нет"}</label>`}
+              <button class="ghost small danger" data-act="rmcomp">Убрать</button></div>`
+          : `<label class="comp-empty">Перетащите картинку или нажмите — раскадровка, скетч, кадр-образец<input type="file" accept="image/png,image/jpeg,image/webp" data-comp hidden></label>`}
       </div>
-      <input data-f="composition_note" value="${esc(s.composition_note)}" placeholder="Пояснение к композиции (по желанию): героиня слева, окно справа…" ${ro} style="margin-top:6px">
+      <input data-f="composition_note" value="${esc(s.composition_note)}" placeholder="Пояснение к композиции (по желанию): героиня слева, окно справа…" ${roG} style="margin-top:6px">
       <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для Veo ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
-        <div class="spacer"></div>${can.edit() ? `<button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button>` : ""}</div>
-      <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${ro}>${esc(s.prompt)}</textarea>
-      <label>Негативный промпт</label><input data-f="negative_prompt" value="${esc(s.negative_prompt)}" ${ro}>
+        <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
+      <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>
+      <label>Негативный промпт</label><input data-f="negative_prompt" value="${esc(s.negative_prompt)}" ${roG}>
       <label>Уйдёт в Veo как изображения (до 3)</label>
       <div class="refs">${s.references.map((r) => `<figure><img src="${media(r.path)}"><figcaption>${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
-    </div>
+    </div>` : ""}
   </div>`;
 }
 
@@ -371,15 +403,16 @@ function bindShot(s) {
   const readLines = () => $$(".dlg-line", el).map((row) => {
     const speaker = $("[data-d=speaker]", row).value.trim();
     const a = state.assets.find((x) => x.kind === "character" && x.name.toLowerCase() === speaker.toLowerCase());
-    return { speaker: a ? a.name : speaker, asset_id: a ? a.id : null, parenthetical: $("[data-d=parenthetical]", row).value, text: $("[data-d=text]", row).value };
+    return { speaker: a ? a.name : speaker, asset_id: a ? a.id : null, voice: $("[data-d=voice]", row).value,
+      parenthetical: $("[data-d=parenthetical]", row).value, text: $("[data-d=text]", row).value };
   });
-  $$(".dlg-line input", el).forEach((inp) => (inp.onchange = () => save({ dialogue: readLines() })));
+  $$(".dlg-line input, .dlg-line select", el).forEach((inp) => (inp.onchange = () => save({ dialogue: readLines() })));
   $$("[data-rmline]", el).forEach((b) => (b.onclick = () => save({ dialogue: readLines().filter((_, i) => i !== +b.dataset.rmline) })));
 
   const comp = $("[data-comp]", el);
   if (comp) comp.onchange = () => comp.files[0] && uploadComposition(s, comp.files[0]);
   const drop = $("[data-drop]", el);
-  if (drop && can.edit()) {
+  if (drop && can.gen()) {
     drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drop-over"); });
     drop.addEventListener("dragleave", () => drop.classList.remove("drop-over"));
     drop.addEventListener("drop", (e) => {
@@ -391,7 +424,7 @@ function bindShot(s) {
 
   $$("[data-act]", el).forEach((b) => (b.onclick = async () => {
     const act = b.dataset.act;
-    if (act === "addline") return save({ dialogue: [...readLines(), { speaker: s.characters[0]?.name || "", asset_id: s.characters[0]?.asset_id ?? null, parenthetical: "", text: "" }] });
+    if (act === "addline") return save({ dialogue: [...readLines(), { speaker: s.characters[0]?.name || "", asset_id: s.characters[0]?.asset_id ?? null, voice: "direct", parenthetical: "", text: "" }] });
     if (act === "rebuild") return replaceShot(await api(`/api/shots/${s.id}/rebuild-prompt`, { json: {} }));
     if (act === "rmcomp") return replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "DELETE" }));
     if (act === "gen") {
@@ -436,13 +469,23 @@ async function drawReview(el) {
       <div>
         <div class="strip">${ep.shots.map((x) => `<button class="strip-item ${x.id === s.id ? "on" : ""}" data-sel="${x.id}">
           <b>${esc(x.label)}</b><span class="dot ${x.selected_take?.status || x.gen_status}"></span>${x.open_fixes ? `<i class="fx">${x.open_fixes}</i>` : ""}</button>`).join("")}</div>
-        ${can.edit() && redo ? `<div class="card warn-card row">Шотов с правками: <b>${redo}</b><div class="spacer"></div>
-          <button class="primary" id="redo-all">Перегенерировать их</button></div>` : ""}
+        ${can.gen() && redo ? `<div class="card warn-card row">Шотов с правками: <b>${redo}</b><div class="spacer"></div>
+          <button class="primary" id="redo-all">Перегенерировать их с текущими промптами</button></div>` : ""}
         <div class="card" style="margin-top:12px">
-          <div class="row"><h2 style="margin:0">Шот ${esc(s.label)}</h2>${takeBadge(s)}<div class="spacer"></div>
-            ${can.edit() ? `<button data-act="gen">+ Новый дубль</button>
-            <label class="btn" style="margin:0">Загрузить видео<input type="file" id="up-take" accept="video/mp4,video/quicktime,video/webm" hidden></label>` : ""}</div>
-          <div class="muted small" style="margin:6px 0">${esc(s.action || "")} ${s.dialogue.map((d) => `<br><b>${esc(d.speaker)}:</b> ${esc(d.text)}`).join("")}</div>
+          <div class="row"><h2 style="margin:0">Шот ${esc(s.label)}</h2>${takeBadge(s)}
+            <span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span><div class="spacer"></div>
+            ${can.gen() ? `<label class="btn" style="margin:0">Загрузить видео<input type="file" id="up-take" accept="video/mp4,video/quicktime,video/webm" hidden></label>` : ""}</div>
+          <div class="muted small" style="margin:6px 0">${esc(s.action || "")} ${s.dialogue.map((d) => `<br><b>${esc(d.speaker)}</b>${d.voice === "voiceover" ? " <i>(за кадром)</i>" : ""}: ${esc(d.text)}`).join("")}</div>
+          ${can.gen() ? `<details class="regen" id="regen" ${s.needs_redo || s.open_fixes || !s.takes.length ? "open" : ""}>
+            <summary><b>${s.takes.length ? "Перегенерировать шот" : "Сгенерировать шот"}</b>
+              <span class="muted small">— можно улучшить промпт перед запуском; новый дубль не удаляет старые</span></summary>
+            <label>Промпт для нового дубля</label>
+            <textarea id="r-prompt" rows="8" class="prompt">${esc(s.prompt)}</textarea>
+            <label>Что не так с прошлым дублем <span class="muted small">(запишется в историю шота)</span></label>
+            <input id="r-reason" placeholder="например: лицо поплыло, камера слишком далеко">
+            <div class="row" style="margin-top:10px"><button class="ghost small" id="r-reset" title="Вернуть промпт из карточки шота">↻ как в карточке</button>
+              <div class="spacer"></div><button class="primary" id="r-go" ${["queued", "running"].includes(s.gen_status) ? "disabled" : ""}>▶ Сгенерировать дубль ${s.takes.length + 1}</button></div>
+          </details>` : ""}
           <div class="takes">${s.takes.length ? [...s.takes].reverse().map((t) => {
             const [lab, cls] = TAKE_STATUS[t.status] || [t.status, ""];
             return `<div class="take ${t.id === s.selected_take_id ? "on" : ""}">
@@ -450,10 +493,14 @@ async function drawReview(el) {
               <span class="muted small">${fmtDateTime(t.created_at)}${t.source === "upload" ? " · загружен вручную" : ""}</span>
               <div class="spacer"></div>
               ${t.request_path ? `<a class="small" href="${media(t.request_path)}" target="_blank">запрос</a>` : ""}
-              ${t.id === s.selected_take_id ? `<span class="badge ok">в монтаже</span>` : can.edit() && ["done", "stub"].includes(t.status) ? `<button class="small" data-take="${t.id}">Выбрать</button>` : ""}
+              ${t.id === s.selected_take_id ? `<span class="badge ok">в монтаже</span>` : can.gen() && ["done", "stub"].includes(t.status) ? `<button class="small" data-take="${t.id}">Выбрать</button>` : ""}
+              ${t.reason ? `<div class="small" style="width:100%">Почему перегенерировали: ${esc(t.reason)}</div>` : ""}
               ${t.error && t.status === "error" ? `<div class="small err-t" style="width:100%">${esc(t.error)}</div>` : ""}
+              ${t.prompt ? `<details style="width:100%"><summary class="small muted">промпт этого дубля</summary>
+                <pre class="code small">${esc(t.prompt)}</pre>
+                ${can.gen() ? `<button class="small" data-reuse="${t.id}">Взять этот промпт</button>` : ""}</details>` : ""}
             </div>`;
-          }).join("") : `<div class="muted small">Дублей ещё нет. Нажмите «Новый дубль» или «Отправить в Veo» вверху.</div>`}</div>
+          }).join("") : `<div class="muted small">Дублей ещё нет.</div>`}</div>
         </div>
         <div class="card" style="margin-top:12px">
           <div class="row"><h2 style="margin:0">Обсуждение и правки</h2><div class="spacer"></div>
@@ -465,7 +512,7 @@ async function drawReview(el) {
           <div class="comment-form">
             <textarea id="c-text" rows="2" placeholder="Комментарий к шоту ${esc(s.label)}… (Ctrl+Enter — отправить)"></textarea>
             <div class="row">
-              <label class="check"><input type="checkbox" id="c-fix"> это правка — шот нужно переделать</label>
+              ${can.gen() ? `<label class="check"><input type="checkbox" id="c-fix"> пометить шот на перегенерацию</label>` : ""}
               <label class="check"><input type="checkbox" id="c-time" checked> с таймкодом</label>
               <label class="check"><input type="checkbox" id="c-ep"> ко всей серии</label>
               <div class="spacer"></div><button class="primary" id="c-send">Отправить</button></div>
@@ -484,7 +531,7 @@ async function drawReview(el) {
           ${c.timecode != null ? `<span class="badge" data-seek="${c.timecode}" title="Перейти">${c.timecode.toFixed(1)} с</span>` : ""}
           ${c.is_fix ? `<span class="badge warn">правка</span>` : ""}
           <div class="spacer"></div>
-          ${c.is_fix ? `<label class="check" style="margin:0"><input type="checkbox" data-resolve="${c.id}" ${c.resolved ? "checked" : ""}> исправлено</label>` : ""}
+          ${c.is_fix && can.gen() ? `<label class="check" style="margin:0"><input type="checkbox" data-resolve="${c.id}" ${c.resolved ? "checked" : ""}> исправлено</label>` : ""}
           ${c.user_id === state.meta.user.id || can.admin() ? `<button class="ghost small" data-delc="${c.id}" title="Удалить">✕</button>` : ""}
         </div>
         <div>${esc(c.text).replace(/\n/g, "<br>")}</div>
@@ -503,11 +550,12 @@ async function drawReview(el) {
     if (!text) return;
     const v = $("#player video");
     const whole = $("#c-ep").checked;
+    const fix = !!$("#c-fix")?.checked;
     const list = await api(`/api/episodes/${E.id}/comments`, { json: {
-      text, is_fix: $("#c-fix").checked, shot_id: whole ? null : s.id, take_id: whole ? null : s.selected_take_id,
+      text, is_fix: fix, shot_id: whole ? null : s.id, take_id: whole ? null : s.selected_take_id,
       timecode: !whole && $("#c-time").checked && v ? Math.round(v.currentTime * 10) / 10 : null } });
     $("#c-text").value = "";
-    if ($("#c-fix").checked) { const ep2 = await api(`/api/episodes/${E.id}`); E.ep = ep2; drawHeader(); return drawReview(el); }
+    if (fix) { const ep2 = await api(`/api/episodes/${E.id}`); E.ep = ep2; drawHeader(); return drawReview(el); }
     comments.splice(0, comments.length, ...list);
     drawComments(comments);
   };
@@ -523,8 +571,26 @@ async function drawReview(el) {
     const r = await api(`/api/episodes/${E.id}/generate`, { json: { mode: "redo" } });
     toast(`Отправлено на перегенерацию: ${r.started}`); renderEpisode(E.id);
   });
-  const gen = $("[data-act=gen]", el);
-  if (gen) gen.onclick = async () => { await api(`/api/shots/${s.id}/generate`, { json: {} }); toast("Новый дубль отправлен в Veo"); renderEpisode(E.id); };
+  // Re-generation: the editor improves the prompt, says what was wrong, and a new take is created (old takes stay)
+  const go = $("#r-go");
+  if (go) {
+    go.onclick = async () => {
+      const prompt = $("#r-prompt").value.trim();
+      if (!prompt) return toast("Промпт не может быть пустым", true);
+      go.disabled = true;
+      await api(`/api/shots/${s.id}/generate`, { json: { prompt, reason: $("#r-reason").value } });
+      toast(`Шот ${s.label}: новый дубль отправлен в Veo`);
+      renderEpisode(E.id);
+    };
+    $("#r-reset").onclick = () => { $("#r-prompt").value = s.prompt; };
+    $$("[data-reuse]").forEach((b) => (b.onclick = () => {
+      const t = s.takes.find((x) => x.id === +b.dataset.reuse);
+      $("#r-prompt").value = t.prompt;
+      $("#regen").open = true;
+      $("#regen").scrollIntoView({ behavior: "smooth", block: "center" });
+      toast(`Промпт дубля ${t.take_no} подставлен — отредактируйте и запускайте`);
+    }));
+  }
   const up = $("#up-take");
   if (up) up.onchange = async () => {
     const f = up.files[0]; if (!f) return;
@@ -606,7 +672,7 @@ async function drawHistory(el) {
   const evs = await api(`/api/episodes/${E.id}/events`);
   el.innerHTML = `<div class="card">${evs.map((e) => `<div class="event"><span class="muted small">${fmtDateTime(e.created_at)}</span>
       <b>${esc(e.user_name)}</b> ${esc(e.text)}</div>`).join("") || `<span class="muted">Пока пусто</span>`}
-    ${can.edit() ? `<div style="margin-top:16px"><button class="danger ghost" id="del-ep">Удалить серию</button></div>` : ""}</div>`;
+    ${can.admin() ? `<div style="margin-top:16px"><button class="danger ghost" id="del-ep">Удалить серию</button></div>` : ""}</div>`;
   $("#del-ep") && ($("#del-ep").onclick = async () => {
     if (!confirm("Удалить серию со всеми шотами, видео-дублями и комментариями?")) return;
     await api(`/api/episodes/${E.id}`, { method: "DELETE" });
