@@ -1,15 +1,3 @@
-# Секреты и ключи — никогда не публиковать
-.env
-*.key
-
-# Зависимости и окружения
-node_modules/
-venv/
 .venv/
 __pycache__/
-
-# Мусор систем и редакторов
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
+data/
