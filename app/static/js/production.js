@@ -11,11 +11,16 @@ const COLUMNS = [
   { key: "fixes", name: "Монтаж", statuses: ["fixes"], drop: "fixes" },
   { key: "client_review", name: "У клиента", hint: "сдано на согласование", statuses: ["client_review"], drop: "client_review" },
   { key: "ready", name: "Готов к постингу", hint: "согласовано, можно выкладывать", statuses: ["ready"], drop: "ready" },
+  // Узкая зона: выложенная серия висит здесь несколько секунд и уходит в архив (статус «Выложено» везде)
+  { key: "posted", name: "Выложено", hint: "уйдёт в архив", statuses: ["posted"], drop: "posted", narrow: true },
 ];
+const FRESH_SECONDS = 4;
+const fresh = new Map(); // id → когда серию выложили: пока не прошло FRESH_SECONDS, карточка остаётся в зоне «Выложено»
 const canMove = () => can.gen(); // продюсер и монтажёр
 
 export async function renderProduction() {
-  const eps = (await api("/api/production")).filter((e) => e.status !== "posted");
+  const all = await api("/api/production");
+  const eps = all.filter((e) => e.status !== "posted" || fresh.has(e.id));
   const today = state.meta.today;
   view().innerHTML = `
     <div class="row"><h1>Продакшн</h1><div class="spacer"></div>
@@ -23,9 +28,9 @@ export async function renderProduction() {
     <div class="prod-board">
       ${COLUMNS.map((col) => {
         const items = eps.filter((e) => col.statuses.includes(e.status)).sort((a, b) => a.number - b.number);
-        return `<section class="prod-col" data-drop="${col.drop || ""}" style="--c:${STATUS_COLORS[col.statuses.at(-1)]}">
-          <header><b>${col.name}</b><span class="muted small">${items.length}${col.hint ? ` · ${col.hint}` : ""}</span></header>
-          ${items.map((e) => card(e, today)).join("") || `<p class="muted small prod-empty">Пусто</p>`}
+        return `<section class="prod-col ${col.narrow ? "narrow" : ""}" data-drop="${col.drop || ""}" style="--c:${STATUS_COLORS[col.statuses.at(-1)]}">
+          <header><b>${col.name}</b><span class="muted small">${col.narrow ? "" : `${items.length}${col.hint ? " · " : ""}`}${col.hint || ""}</span></header>
+          ${items.map((e) => card(e, today)).join("") || `<p class="muted small prod-empty">${col.narrow ? "Перетащите сюда выложенное" : "Пусто"}</p>`}
         </section>`;
       }).join("")}
     </div>`;
@@ -41,6 +46,12 @@ function deadline(e, today) {
 }
 
 function card(e, today) {
+  if (e.status === "posted") {
+    const gone = (Date.now() - fresh.get(e.id)) / 1000;
+    return `<div class="prod-card just-posted" style="--c:${STATUS_COLORS.posted};animation-delay:-${Math.min(gone, FRESH_SECONDS).toFixed(2)}s">
+      <b>${esc(e.title || "Без названия")}</b><span class="arc-label">${e.arc_id ? `${esc(e.arc_title)} · серия ${e.arc_number}` : "Вне арки"}</span>
+      <span class="ok-t small">✓ Выложено, уходит в архив</span></div>`;
+  }
   const dl = deadline(e, today);
   const arc = e.arc_id ? `${esc(e.arc_title)} · серия ${e.arc_number}` : "Вне арки";
   const movable = canMove() && !e.locked;
@@ -64,6 +75,15 @@ async function setStatus(id, status) {
   } catch { return false; } // причину уже показал api() во всплывашке
 }
 
+/** Серия выложена: на несколько секунд остаётся в зоне «Выложено», потом исчезает с доски (в архив). */
+async function markPosted(id) {
+  if (!(await setStatus(id, "posted"))) return;
+  id = +id;
+  fresh.set(id, Date.now());
+  setTimeout(() => { fresh.delete(id); if (location.hash === "#/production") renderProduction(); }, FRESH_SECONDS * 1000);
+  renderProduction();
+}
+
 function bindBoard(eps) {
   $$("[data-post-text]").forEach((b) => (b.onclick = (ev) => {
     ev.preventDefault();
@@ -71,7 +91,7 @@ function bindBoard(eps) {
   }));
   $$("[data-posted]").forEach((b) => (b.onclick = async (ev) => {
     ev.preventDefault();
-    if (await setStatus(b.dataset.posted, "posted")) { toast("Серия выложена и ушла с доски"); renderProduction(); }
+    markPosted(b.dataset.posted);
   }));
   if (!canMove()) return;
   let drag = null;
@@ -81,14 +101,17 @@ function bindBoard(eps) {
   });
   $$(".prod-col[data-drop]").forEach((col) => {
     if (!col.dataset.drop) return;
-    col.addEventListener("dragover", (ev) => { if (drag && drag.dataset.status !== col.dataset.drop) { ev.preventDefault(); col.classList.add("drop-over"); } });
+    // В «Выложено» можно переносить только то, что уже готово к постингу
+    const accepts = () => drag && drag.dataset.status !== col.dataset.drop && (col.dataset.drop !== "posted" || drag.dataset.status === "ready");
+    col.addEventListener("dragover", (ev) => { if (accepts()) { ev.preventDefault(); col.classList.add("drop-over"); } });
     col.addEventListener("dragleave", (ev) => { if (!col.contains(ev.relatedTarget)) col.classList.remove("drop-over"); });
     col.addEventListener("drop", async (ev) => {
       ev.preventDefault();
       col.classList.remove("drop-over");
-      if (!drag) return;
+      if (!drag || !(col.dataset.drop !== "posted" || drag.dataset.status === "ready")) return;
       const id = drag.dataset.card;
       drag = null;
+      if (col.dataset.drop === "posted") return markPosted(id);
       if (await setStatus(id, col.dataset.drop)) renderProduction();
     });
   });
