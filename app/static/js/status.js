@@ -27,6 +27,14 @@ export function stopStatusPolling() { clearInterval(S.timer); S.timer = null; }
 const pad = (n) => String(n).padStart(2, "0");
 const plural = (k) => (k % 10 === 1 && k % 100 !== 11 ? "день" : (k % 10 >= 2 && k % 10 <= 4 && (k % 100 < 12 || k % 100 > 14) ? "дня" : "дней"));
 const daysFromToday = (iso, today) => Math.round((new Date(iso + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+/** Слоты подряд → «3–5 окт, 8 окт». */
+const dateRanges = (nums) => rng(nums).split(", ").map((part) => {
+  const [a, b] = part.split("–").map(Number);
+  const ra = S.rows.find((x) => x.number === a), rb = b && S.rows.find((x) => x.number === b);
+  const fmt = (r) => `${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}`;
+  if (!rb) return fmt(ra);
+  return ra.mon === rb.mon ? `${ra.d}–${fmt(rb)}` : `${fmt(ra)} – ${fmt(rb)}`;
+}).join(", ");
 const rng = (a) => {
   const o = []; let i = 0;
   while (i < a.length) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; o.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j + 1; }
@@ -68,7 +76,7 @@ function buildRows(data, today) {
 }
 
 /** Как назвать серию в тексте: внутри арки «арка „Косплей“, серия 2», иначе сквозной номер. */
-const epName = (r) => (r.arcNumber ? `арка «${r.arcTitle}», серия ${r.arcNumber}` : `серия ${r.number}`);
+const epName = (r) => (r.arcNumber ? `арка «${r.arcTitle}», серия ${r.arcNumber}` : `серия ${r.number}`); // вне арок — сквозной
 
 function rowHtml(r) {
   const color = STAGES[r.stage].color;
@@ -82,7 +90,7 @@ function rowHtml(r) {
   const tag = link ? "a" : "div";
   const href = link ? ` href="#/episodes/${r.ep.id}"` : "";
   return `<${tag} class="${cls}" style="--c:${color}"${href}>
-    <div class="sm-num"><b>${r.arcNumber ? `Серия ${r.arcNumber}` : `№ ${r.number}`}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
+    <div class="sm-num"><b>Серия ${r.arcNumber ?? r.number}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
     <div class="sm-info"><div class="sm-title ${r.ep ? "" : "muted"}">${title}</div><div class="sm-desc muted">${desc}</div></div>
     <div class="sm-segs">${segs}</div>
     <div class="sm-stat"><span class="status" style="--c:${color}">${esc(r.label)}</span>${r.flag ? `<span class="sm-flag ${r.flagCls}">${esc(r.flag)}</span>` : ""}</div>
@@ -93,6 +101,7 @@ function render() {
   const data = S.data;
   const today = data.today;
   const rows = buildRows(data, today);
+  S.rows = rows;
   const arcAt = Object.fromEntries(data.arcs.map((a) => [a.start_number, a]));
   const by = STAGES.map(() => []);
   rows.forEach((r) => by[r.stage].push(r.number));
@@ -146,7 +155,7 @@ function render() {
     </div>
 
     <div class="sm-tiles">
-      ${STAGES.map((s, k) => `<div class="sm-tile" style="--c:${s.color}"><div class="sm-tile-name"><i></i>${s.name}</div><div class="sm-tile-n">${by[k].length}</div><div class="muted small">${by[k].length ? "№ " + rng(by[k]) : "—"}</div></div>`).join("")}
+      ${STAGES.map((s, k) => `<div class="sm-tile" style="--c:${s.color}"><div class="sm-tile-name"><i></i>${s.name}</div><div class="sm-tile-n">${by[k].length}</div><div class="muted small">${by[k].length ? dateRanges(by[k]) : "—"}</div></div>`).join("")}
     </div>
 
     <div class="card sm-strip-card">

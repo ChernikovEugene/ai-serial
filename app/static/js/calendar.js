@@ -36,7 +36,7 @@ export async function renderCalendar() {
           ${arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
           ${(evs[iso] || []).map((ev) => `<div class="cal-ev ${ev.builtin ? "" : "own"}">🎉 ${esc(ev.title)}${!ev.builtin && can.edit() ? ` <span data-delev="${ev.id}" title="Удалить">✕</span>` : ""}</div>`).join("")}
           ${eps.map((e) => `<div class="cal-ep" draggable="${can.edit()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
-              <b>${e.arc_id ? `${e.arc_number}` : `№${e.number}`}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
+              <b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
           ${!eps.length && iso >= today && can.edit() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
         </div>`;
       }).join("")}

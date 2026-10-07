@@ -76,8 +76,8 @@ label.check input { width: auto; }
 .q-row.dragging { opacity: .4; }
 .drop-over { outline: 2px dashed var(--accent2) !important; outline-offset: 2px; }
 .grip { color: var(--muted); cursor: grab; user-select: none; }
-.q-num input { width: 62px; font-size: 18px; font-weight: 700; padding: 2px 6px; text-align: center; background: transparent; border-color: transparent; }
-.q-num input:hover, .q-num input:focus { border-color: var(--line); }
+.q-row.ep.draggable { cursor: grab; }
+.q-row.ep.draggable:active { cursor: grabbing; }
 .q-num { font-size: 18px; font-weight: 700; text-align: center; }
 .q-date { font-size: 13px; }
 .q-title { display: flex; flex-direction: column; min-width: 0; }

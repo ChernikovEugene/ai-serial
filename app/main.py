@@ -493,7 +493,7 @@ def _arc_values(a: ArcIn) -> tuple:
     else:
         number = a.start_number
     if not number or number < 1:
-        raise HTTPException(400, "Арка должна начинаться с серии № 1 или позже")
+        raise HTTPException(400, "Арка не может начинаться раньше старта сериала")
     members = [{"asset_id": int(m["asset_id"]), "version_id": int(m["version_id"]) if m.get("version_id") else None}
                for m in a.members if m.get("asset_id")]
     return title, number, a.notes.strip(), db.dumps(members)
@@ -508,7 +508,7 @@ def _arc_or_404(c, arc_id: int) -> dict:
 
 def _check_start_free(c, number: int, arc_id: int | None = None) -> None:
     if c.execute("SELECT 1 FROM arcs WHERE start_number=? AND id IS NOT ?", (number, arc_id)).fetchone():
-        raise HTTPException(400, f"С серии № {number} уже начинается другая арка")
+        raise HTTPException(400, f"{date.fromisoformat(schedule.date_for(number)).strftime('%d.%m')} уже начинается другая арка")
 
 
 @app.get("/api/arcs")
@@ -691,6 +691,7 @@ def get_episode(eid: int) -> dict:
     ep["over_limit"] = sum(1 for s in ep["shots"] if s["over_limit"])
     ep["incomplete"] = sum(1 for s in ep["shots"] if s["missing"])
     ep["date"] = schedule.date_for(ep["number"], ctx.settings)
+    ep.update(schedule.arc_info(ep["number"], schedule.load_arcs()))
     ep["status_name"] = db.STATUS_NAMES.get(ep["status"], ep["status"])
     ep["cast"] = episode_cast(eid)
     ep["marked"] = breakdown.has_markers(ep["script"])
@@ -760,7 +761,7 @@ def move_episode(eid: int, m: MoveIn, request: Request):
         raise HTTPException(400, "Эта дата раньше старта сериала. Поменяйте точку отсчёта в очереди")
     schedule.move(eid, number)
     if ep["number"] != number:
-        db.log(eid, uid(request), f"Перенесена: {'в бэклог' if number is None else f'серия №{number}, {schedule.date_for(number)}'}")
+        db.log(eid, uid(request), f"Перенесена: {'в бэклог' if number is None else f'на {schedule.date_for(number)}'}")
     return {"ok": True}
 
 

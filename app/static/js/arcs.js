@@ -2,15 +2,12 @@
 // Shown as a divider in the queue and on «Статус», and as a banner on the start day in the calendar.
 import { $, $$, api, can, closeModal, esc, fmtDate, loadAssets, modal, state, toast } from "./core.js";
 
-/** "Арка «Косплей» · серия 2", or "" outside arcs. */
-export const arcLabel = (e) => (e?.arc_id ? `«${e.arc_title}» · серия ${e.arc_number}` : "");
-
 /** Divider row before the first slot of an arc. `extraCls` lets each page fit it into its own layout. */
 export function arcDivider(arc, extraCls = "") {
   const members = (arc.members || []).map(memberName).filter(Boolean);
   return `<div class="arc-div ${extraCls}" data-arc="${arc.id}" title="${can.edit() ? "Нажмите, чтобы изменить арку" : ""}">
     <div class="arc-div-head"><span class="arc-tag">Новая арка</span><b>${esc(arc.title)}</b>
-      <span class="muted small">с серии № ${arc.start_number}${arc.start_date ? ` · ${fmtDate(arc.start_date)}` : ""} · счёт серий начинается заново</span></div>
+      <span class="muted small">${arc.start_date ? `с ${fmtDate(arc.start_date)} · ` : ""}счёт серий начинается заново</span></div>
     ${arc.notes ? `<div class="arc-notes">${esc(arc.notes)}</div>` : ""}
     ${members.length ? `<div class="arc-members">${members.map((m) => `<span class="badge">${esc(m)}</span>`).join("")}</div>` : ""}
   </div>`;
