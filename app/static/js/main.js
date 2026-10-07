@@ -54,8 +54,8 @@ function drawNav(section) {
   $("#nav").hidden = false;
   $("#nav").innerHTML = `
     <div class="brand">🎬 Студия</div>
-    <a href="#/status" data-nav="status">Статус</a>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
+    <a href="#/status" data-nav="status">Статус</a>
     <a href="#/series" data-nav="series">Серии</a>
     <a href="#/production" data-nav="production">Продакшн</a>
     <a href="#/publish" data-nav="publish">Публикация</a>

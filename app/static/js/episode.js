@@ -67,6 +67,24 @@ function draw() {
 const writerLocked = () => state.meta.user.role === "writer" && !["dev", "review"].includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
 
+const canPost = () => can.write(); // описание поста — сценарист и продюсер, на любом этапе
+
+export async function copyText(text) {
+  if (!text.trim()) return toast("Описание для поста пока пустое", true);
+  // Сначала через скрытое поле (работает сразу по клику, без разрешений), иначе — Clipboard API
+  const ta = Object.assign(document.createElement("textarea"), { value: text, readOnly: true });
+  ta.style.cssText = "position:fixed;opacity:0;top:0;left:0";
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  if (!ok) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch {}
+  }
+  toast(ok ? "Скопировано" : "Не удалось скопировать: выделите текст и нажмите ⌘C", !ok);
+}
+
 function drawHeader() {
   const ep = E.ep, max = state.meta.max_shot_seconds;
   const withVideo = ep.shots.filter((s) => s.selected_take_id).length;
@@ -101,7 +119,19 @@ function drawHeader() {
       </div>
       <div class="timeline">${ep.shots.map((s) => `<span data-jump="${s.id}" title="Шот ${esc(s.label)}: ${s.duration} с, по тексту ${s.est_seconds} с"
         class="${s.over_limit ? "over" : ""} ${s.missing.length ? "incomplete" : ""} ${s.selected_take_id ? "has-video" : ""}" style="flex:${s.duration}">${esc(s.label)}</span>`).join("")}</div>
+      <details class="post-text" ${ep.post_text ? "" : "open"}>
+        <summary>Описание для поста ${ep.post_text ? `<span class="muted small">· ${ep.post_text.length} симв.</span>` : `<span class="muted small">· пока не написано</span>`}</summary>
+        <textarea id="post-text" rows="4" placeholder="Текст под роликом: подпись, хэштеги, призыв…" ${canPost() ? "" : "readonly"}>${esc(ep.post_text || "")}</textarea>
+        <div class="row"><button class="ghost small" id="copy-post">📋 Скопировать</button>
+          <span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span></div>
+      </details>
     </div>`;
+  $("#copy-post").onclick = () => copyText($("#post-text").value);
+  if (canPost()) $("#post-text").onchange = async (ev) => {
+    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { post_text: ev.target.value } });
+    ep.post_text = ev.target.value;
+    toast("Описание для поста сохранено");
+  };
   $("#ep-status").onchange = async (e) => {
     const status = e.target.value;
     try {

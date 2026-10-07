@@ -2,6 +2,7 @@
 // Карточки перетаскиваются между колонками — это и есть смена статуса серии. «Выложено ✓» убирает серию с доски.
 // Серии без готового ТЗ видны в «Ждёт ТЗ» (название, дата, арка), но не открываются и не двигаются.
 import { $$, api, can, esc, fmtDate, state, STATUS_COLORS, toast, view } from "./core.js";
+import { copyText } from "./episode.js";
 
 const COLUMNS = [
   { key: "wait", name: "Ждёт ТЗ", hint: "сценарист ещё пишет", statuses: ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review"] },
@@ -28,7 +29,7 @@ export async function renderProduction() {
         </section>`;
       }).join("")}
     </div>`;
-  bindBoard();
+  bindBoard(eps);
 }
 
 function deadline(e, today) {
@@ -49,7 +50,8 @@ function card(e, today) {
     <span class="arc-label">${arc}</span>
     ${e.locked ? `<span class="muted small">Ждёт ТЗ от сценариста</span>`
       : `<span class="muted small">${e.shots ? `${e.shots} шотов · видео ${e.with_take}/${e.shots}` : "шотов пока нет"}${e.open_fixes ? ` · <span class="warn-t">правок: ${e.open_fixes}</span>` : ""}${e.redo ? ` · на перегенерацию: ${e.redo}` : ""}</span>`}
-    ${movable && e.status === "ready" ? `<button class="small prod-posted-btn" data-posted="${e.id}">Выложено ✓</button>` : ""}`;
+    ${movable && e.status === "ready" ? `<div class="row prod-actions"><button class="ghost small" data-post-text="${e.id}" title="${e.post_text ? "Скопировать описание для поста" : "Сценарист ещё не написал описание"}">📋 Текст поста</button>
+      <button class="small prod-posted-btn" data-posted="${e.id}">Выложено ✓</button></div>` : ""}`;
   return e.locked
     ? `<div class="prod-card locked" style="--c:${STATUS_COLORS[e.status]}">${body}</div>`
     : `<a class="prod-card" href="#/episodes/${e.id}/shots" data-card="${e.id}" data-status="${e.status}" draggable="${movable}" style="--c:${STATUS_COLORS[e.status]}">${body}</a>`;
@@ -62,7 +64,11 @@ async function setStatus(id, status) {
   } catch { return false; } // причину уже показал api() во всплывашке
 }
 
-function bindBoard() {
+function bindBoard(eps) {
+  $$("[data-post-text]").forEach((b) => (b.onclick = (ev) => {
+    ev.preventDefault();
+    copyText(eps.find((e) => e.id === +b.dataset.postText)?.post_text || "");
+  }));
   $$("[data-posted]").forEach((b) => (b.onclick = async (ev) => {
     ev.preventDefault();
     if (await setStatus(b.dataset.posted, "posted")) { toast("Серия выложена и ушла с доски"); renderProduction(); }

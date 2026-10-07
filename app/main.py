@@ -188,6 +188,7 @@ def meta(request: Request):
         "user": request.state.user,
         "statuses": [{"key": k, "name": n} for k, n in db.STATUSES],
         "roles": auth.ROLES,
+        "role_duties": auth.ROLE_DUTIES,
         "status_flow": status_flow(request.state.user["role"]),
         "veo_provider": s["veo_provider"], "veo_model": s["veo_model"],
         "max_shot_seconds": int(s["max_shot_seconds"]), "words_per_second": float(s["words_per_second"]),
@@ -421,7 +422,7 @@ def episode_summaries(role: str = "admin") -> list[dict]:
     max_s = int(settings.get("max_shot_seconds") or 8)
     with db.connect() as c:
         eps = db.rows(c.execute("SELECT id, number, pinned, planned_date, title, status, posted_at, updated_at, "
-                                "arc_id, position, synopsis FROM episodes ORDER BY number IS NULL, number, position, id"))
+                                "arc_id, position, synopsis, post_text FROM episodes ORDER BY number IS NULL, number, position, id"))
         stats = {r["episode_id"]: dict(r) for r in c.execute(
             "SELECT episode_id, COUNT(*) AS shots, COALESCE(SUM(duration),0) AS seconds, "
             "COALESCE(SUM(est_seconds),0) AS est, SUM(est_seconds > ?) AS over, "
@@ -918,9 +919,11 @@ class EpisodePatch(BaseModel):
 @app.put("/api/episodes/{eid}", dependencies=[Depends(auth.writer)])
 def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = True):
     ep = load_episode_row(eid)
-    writer_may_edit(request, ep["status"])
+    changes = p.model_dump(exclude_unset=True)
+    if set(changes) - {"post_text"}:  # описание для поста сценарист правит на любом этапе
+        writer_may_edit(request, ep["status"])
     with db.connect() as c:
-        for k, v in p.model_dump(exclude_unset=True).items():
+        for k, v in changes.items():
             if v is not None:
                 c.execute(f"UPDATE episodes SET {k}=?, updated_at=? WHERE id=?", (v, db.now(), eid))
     if p.script is not None and p.script != ep["script"]:
