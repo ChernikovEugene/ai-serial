@@ -22,26 +22,40 @@
 
 /* ---------- основа ---------- */
 .grafit body { font: 14px/1.5 Onest, system-ui, sans-serif; background: var(--bg); color: var(--text); }
-.grafit h1 { font-size: 32px; font-weight: 500; letter-spacing: -.025em; margin-bottom: 18px; }
+.grafit h1 { font-size: clamp(24px, 6vw, 32px); font-weight: 500; letter-spacing: -.025em; margin-bottom: 18px; }
 .grafit h2 { font-size: 19px; font-weight: 500; letter-spacing: -.01em; }
-.grafit main { padding: 28px 36px 80px; }
 .grafit a { color: var(--accent-text); }
 .grafit code { color: var(--accent-text); }
 
 /* меню: активный пункт — тонкая бирюзовая полоска слева */
-.grafit .nav { background: var(--nav-bg); border-right: 1px solid var(--nav-line); padding: 22px 14px; gap: 4px; }
-.grafit .nav a { color: var(--nav-text); font-weight: 500; padding: 9px 12px; border-radius: 6px; }
+.grafit .nav { background: var(--nav-bg); border-right: 1px solid var(--nav-line); }
+.grafit .nav a { color: var(--nav-text); font-weight: 500; border-radius: 6px; }
 .grafit .nav a:hover { background: var(--nav-hover); }
 .grafit .nav a.active { position: relative; background: var(--nav-active-bg); color: var(--nav-active-fg); }
 .grafit .nav a.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: #00c7b2; }
 .grafit .nav-foot { color: var(--nav-muted); }
-@media (min-width: 801px) { .grafit .nav { width: 224px; } }
+@media (min-width: 801px) {
+  .grafit main { padding: 28px 36px 80px; }
+  .grafit .nav { width: 224px; padding: 22px 14px; gap: 4px; }
+  .grafit .nav a { padding: 9px 12px; }
+  .grafit .brand { padding: 2px 8px 22px; }
+}
+/* телефон: меню — полоса сверху (style.css), активный пункт отмечен полоской снизу */
+@media (max-width: 800px) {
+  .grafit .nav { border-right: 0; border-bottom: 1px solid var(--nav-line); }
+  .grafit .brand { padding: 0 8px; gap: 8px; }
+  .grafit .logo-mark { width: 28px; height: 28px; }
+  .grafit .logo-text small { display: none; }
+  .grafit .nav a.active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 2px; }
+  .theme-switch { margin-right: 6px; }
+  .theme-switch button { flex: none; padding: 4px 8px; }
+}
 .grafit .nav-foot .me { color: var(--nav-text); }
 .grafit .nav-foot .badge { align-self: flex-start; }
 
 /* логотип: в старом дизайне — «🎬 Студия», в «Графите» — бирюзовый значок со стрелкой */
 .brand-new { display: none; }
-.grafit .brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px 22px; }
+.grafit .brand { display: flex; align-items: center; gap: 11px; }
 .grafit .brand-old { display: none; }
 .grafit .brand-new { display: contents; }
 .logo-mark { width: 34px; height: 34px; border-radius: 7px; background: #00c7b2; display: grid; place-items: center; flex: none; }
