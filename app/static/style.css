@@ -394,6 +394,16 @@ a.arc-card:hover { border-color: var(--accent2); }
 .arc-chip { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 99px; color: var(--accent2);
   border: 1px solid color-mix(in srgb, var(--accent2) 45%, transparent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arc-chip.none { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.q-arc { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 12px 0 2px; padding: 9px 14px;
+  border-radius: 10px; border: 1px dashed var(--accent2); background: color-mix(in srgb, var(--accent2) 8%, transparent);
+  color: var(--text); text-decoration: none; }
+.q-arc:first-child { margin-top: 0; }
+.q-arc:hover { background: color-mix(in srgb, var(--accent2) 14%, transparent); }
+.q-arc b { font-size: 15px; }
+.q-arc-syn { flex-basis: 100%; }
+.q-arc.again { border-style: dotted; padding: 6px 14px; }
+.q-arc.none { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.q-arc.none .arc-tag { background: var(--warn); }
 .queue-gap { display: flex; align-items: center; gap: 10px; padding: 6px 14px; border: 1px dashed var(--line); border-radius: 10px;
   color: var(--muted); font-size: 13px; }
 .queue-gap span { flex: 1; }

@@ -43,9 +43,9 @@ export async function renderSeries() {
     <div class="row queue-head"><h2>Очередь выкладки</h2>
       <span class="muted small">1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте.</span>
       <div class="spacer"></div>${can.edit() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
-    <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today)}</div>
+    <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today, arcs)}</div>
     ${history.length ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
-      ${showHistory ? `<div class="ep-list queue-list history">${history.map((e) => queueRow(e, today)).join("")}</div>` : ""}` : ""}`;
+      ${showHistory ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : ""}` : ""}`;
 
   $("#new-ep") && ($("#new-ep").onclick = () => newEpisodeQuick(arcs, renderSeries));
   $("#new-arc") && ($("#new-arc").onclick = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) }));
@@ -61,14 +61,23 @@ export async function renderSeries() {
 const daysAgo = (iso, today) => Math.round((new Date(today + "T00:00:00") - new Date(iso + "T00:00:00")) / 86400000);
 const addDay = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
-/** Строки очереди: серии по дням, между ними — свободные дни (пропуски), с кнопкой «+ серия на этот день». */
-function queueRows(list, today) {
+/** Строки очереди: серии по дням, перед серией каждой арки — отбивка арки, между сериями — свободные дни
+ * (пропуски) с кнопкой «+ серия на этот день» (`gaps`). */
+function queueRows(list, today, arcs, gaps = true) {
   if (!list.length) return `<p class="muted">В очереди пока нет серий. Добавьте их в арке или кнопкой «+ Новая серия».</p>`;
   const out = [];
+  const seen = new Set();
+  let prev;
   list.forEach((e, i) => {
+    const key = e.arc_id ?? "none";
+    if (key !== prev) {
+      out.push(arcBreak(arcs.find((a) => a.id === e.arc_id), seen.has(key)));
+      seen.add(key);
+      prev = key;
+    }
     out.push(queueRow(e, today));
     const next = list[i + 1];
-    if (next && next.number - e.number > 1) {
+    if (gaps && next && next.number - e.number > 1) {
       const gap = next.number - e.number - 1;
       const first = addDay(e.date, 1);
       out.push(`<div class="queue-gap"><span>${gap === 1 ? `Свободный день · ${fmtDate(first)}` : `Свободно ${gap} дн. · ${fmtDate(first)} — ${fmtDate(addDay(e.date, gap))}`}</span>
@@ -78,9 +87,22 @@ function queueRows(list, today) {
   return out.join("");
 }
 
+/** Отбивка арки в очереди; `again` — арка продолжается после перерыва (между её сериями вклинилась другая). */
+function arcBreak(arc, again) {
+  if (!arc) return `<a class="q-arc none" href="#/series/none"><span class="arc-tag">Вне арки</span>
+    <span class="muted small">праздники, события, отдельные ролики</span></a>`;
+  const syn = (arc.notes || "").replace(/\s+/g, " ");
+  return `<a class="q-arc ${again ? "again" : ""}" href="#/series/${arc.id}" title="Открыть арку">
+    <span class="arc-tag">${again ? "Арка · продолжение" : "Арка"}</span><b>${esc(arc.title)}</b>
+    <span class="status small" style="--c:${ARC_STATUS_COLORS[arc.status]}">${esc(arc.status_name)}</span>
+    ${arc.start_date ? `<span class="muted small">${shortDate(arc.start_date)} — ${shortDate(arc.end_date)} · ${plural(arc.episodes, "серия", "серии", "серий")}</span>` : ""}
+    ${!again && syn ? `<span class="q-arc-syn muted small">${esc(syn.slice(0, 180))}${syn.length > 180 ? "…" : ""}</span>` : ""}
+  </a>`;
+}
+
 function queueRow(e, today) {
   const movable = can.edit() && e.status !== "posted" && !e.pinned;
-  const arc = e.arc_id ? `<span class="arc-chip">${esc(e.arc_title)} · ${e.arc_number}</span>` : `<span class="arc-chip none">Вне арки</span>`;
+  const arc = e.arc_id ? `<span class="arc-chip">Серия ${e.arc_number}</span>` : `<span class="arc-chip none">Вне арки</span>`;
   return `<div class="ep-card queue-row ${e.date === today ? "today" : ""} ${e.date < today ? "past" : ""}" data-ep="${e.id}" data-open="${e.id}" data-movable="${movable ? 1 : ""}" style="--c:${STATUS_COLORS[e.status]}">
     <div class="q-when">${movable ? `<span class="grip">⋮⋮</span>` : ""}<b>${fmtDate(e.date)}</b>${e.date === today ? ` <span class="today-tag">сегодня</span>` : ""}${e.pinned ? " 📌" : ""}</div>
     <div>${arc}</div>
