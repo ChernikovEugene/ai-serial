@@ -5,6 +5,7 @@ import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
 import { renderAssets, renderAsset } from "./assets.js";
 import { renderSettings, renderPublish } from "./settings.js";
+import { initFeedback, stopFeedback } from "./feedback.js";
 
 let lastHash = location.hash;
 
@@ -52,7 +53,13 @@ function drawNav(section) {
       <button class="ghost small" id="logout">Выйти</button>
     </div>`;
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.nav === active));
-  $("#logout").onclick = async () => { await api("/api/auth/logout", { json: {} }); state.meta = null; location.hash = "#/login"; };
+  $("#logout").onclick = async () => {
+    await api("/api/auth/logout", { json: {} });
+    state.meta = null;
+    stopFeedback();
+    location.hash = "#/login";
+  };
+  initFeedback();
 }
 
 async function renderLogin() {

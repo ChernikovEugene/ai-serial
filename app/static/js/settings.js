@@ -34,6 +34,12 @@ export async function renderSettings() {
           <div style="flex:1">${field("max_shot_seconds", "Лимит шота, с")}</div></div>
       </div>
     </div>
+    <div class="card" style="margin-top:14px">
+      <h2 style="margin-top:0">GitHub (кнопка «Правка»)</h2>
+      <p class="muted small">Правки хранятся в задачах (Issues) репозитория на GitHub. Если на компьютере выполнен вход в GitHub CLI
+        (<code>gh auth login</code>), токен не нужен.</p>
+      ${field("github_token", "Токен GitHub (хранится только у вас в data/studio.db)", "input", `type="password" placeholder="ghp_…" autocomplete="off"`)}
+    </div>
     ${admin ? `<div class="row" style="margin-top:14px"><div class="spacer"></div><button class="primary" id="save">Сохранить настройки</button></div>` : ""}
 
     <h2>Команда</h2>
