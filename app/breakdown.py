@@ -488,6 +488,8 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
     parts = []
     if settings.get("style"):
         parts.append(_sent(settings["style"]))
+    if settings.get("tt_prompt"):  # шаблоны «Тех. требований» с галочкой «Подставлять в промпт»
+        parts.append(_sent(settings["tt_prompt"]))
     parts.append(f"Vertical {settings.get('aspect_ratio', '9:16')} video, {shot['duration']} seconds, one continuous shot.")
 
     comp = shot.get("composition_image")

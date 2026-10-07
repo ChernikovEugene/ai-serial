@@ -294,6 +294,19 @@ def save_shot(c, s: dict):
             (s["episode_id"], *vals, db.now())).lastrowid
 
 
+def refresh_all_prompts() -> int:
+    """Пересобрать промпты шотов после смены общих настроек или шаблонов ТТ. Шоты с закреплённым вручную промптом
+    и выложенные серии не трогаются. Возвращает, сколько шотов пересобрано."""
+    ctx = Ctx()
+    with db.connect() as c:
+        shots = db.rows(c.execute("SELECT s.* FROM shots s JOIN episodes e ON e.id=s.episode_id "
+                                  "WHERE s.prompt_locked=0 AND e.status<>'posted'"))
+        for sh in shots:
+            refresh_shot(sh, ctx)
+            save_shot(c, sh)
+    return len(shots)
+
+
 def episode_cast(eid: int) -> dict:
     with db.connect() as c:
         return {r["asset_id"]: r["version_id"] for r in c.execute("SELECT * FROM episode_cast WHERE episode_id=?", (eid,))}
@@ -1499,9 +1512,64 @@ def feedback_shot(path: str):
                     headers={"Cache-Control": "max-age=86400"})
 
 
+# ---------- «Тех. требования»: шаблоны ТТ ----------
+
+class TemplateIn(BaseModel):
+    name: str
+    kind: str = "video"
+    model: str = ""
+    specs: str = ""
+    prompt: str = ""
+    notes: str = ""
+    in_prompt: bool = False
+
+
+def _template_values(t: TemplateIn) -> tuple:
+    if not t.name.strip():
+        raise HTTPException(400, "Назовите шаблон")
+    if t.kind not in db.TEMPLATE_KINDS:
+        raise HTTPException(400, "Неизвестный вид шаблона")
+    return t.name.strip(), t.kind, t.model.strip(), t.specs.strip(), t.prompt.strip(), t.notes.strip(), int(t.in_prompt)
+
+
+@app.get("/api/templates")
+def list_templates():
+    with db.connect() as c:
+        return {"kinds": db.TEMPLATE_KINDS,
+                "templates": db.rows(c.execute("SELECT * FROM templates ORDER BY position, id"))}
+
+
+@app.post("/api/templates", dependencies=[Depends(auth.editor)])
+def create_template(t: TemplateIn):
+    with db.connect() as c:
+        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM templates").fetchone()[0]
+        c.execute("INSERT INTO templates(name, kind, model, specs, prompt, notes, in_prompt, position, created_at) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (*_template_values(t), pos, db.now()))
+    refresh_all_prompts()
+    return list_templates()
+
+
+@app.put("/api/templates/{tid}", dependencies=[Depends(auth.editor)])
+def update_template(tid: int, t: TemplateIn):
+    with db.connect() as c:
+        c.execute("UPDATE templates SET name=?, kind=?, model=?, specs=?, prompt=?, notes=?, in_prompt=? WHERE id=?",
+                  (*_template_values(t), tid))
+    refresh_all_prompts()
+    return list_templates()
+
+
+@app.delete("/api/templates/{tid}", dependencies=[Depends(auth.editor)])
+def delete_template(tid: int):
+    with db.connect() as c:
+        c.execute("DELETE FROM templates WHERE id=?", (tid,))
+    refresh_all_prompts()
+    return list_templates()
+
+
 # ---------- settings ----------
 
 SECRET_SETTINGS = ("veo_api_key", "github_token")
+PROMPT_SETTINGS = {"style", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
 @app.get("/api/settings")
@@ -1521,6 +1589,8 @@ def write_settings(values: dict):
             if k in SECRET_SETTINGS and str(v).startswith("••••"):
                 continue
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)", (k, str(v)))
+    if PROMPT_SETTINGS & values.keys():
+        refresh_all_prompts()
     return read_settings()
 
 

@@ -145,6 +145,17 @@ TABLES = {
         members TEXT NOT NULL DEFAULT '[]',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
+    "templates": """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'video',
+        model TEXT NOT NULL DEFAULT '',
+        specs TEXT NOT NULL DEFAULT '',
+        prompt TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        in_prompt INTEGER NOT NULL DEFAULT 0,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT ''""",
     "settings": """
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL""",
@@ -236,6 +247,34 @@ def init():
         c.execute("UPDATE settings SET value=? WHERE key='anchor_date' AND value=''",
                   (datetime.now().date().isoformat(),))
         _migrate_arcs_v2(c)
+        _seed_templates(c)
+
+
+# Шаблоны технических требований: примеры при первом запуске (в промпт не подставляются, пока не включат)
+TEMPLATE_KINDS = {"video": "Видео", "sound": "Звук", "edit": "Монтаж", "other": "Другое"}
+_TEMPLATE_EXAMPLES = [
+    ("Видео: Veo 3.1", "video", "Veo 3.1 (Google)",
+     "Формат 9:16, 1080×1920\nШот до 8 с, 24 fps\nОдин непрерывный план на шот",
+     "Realistic smartphone-style vertical footage, natural light, no on-screen text, no logos except approved branding.",
+     "Референсы персонажей и локаций — только у Veo 3.1."),
+    ("Звук", "sound", "Veo 3.1 (звук в генерации)",
+     "Реплики — на русском, чисто, без музыки\nМузыка и закадровый голос — на монтаже\nГромкость финала: −14 LUFS",
+     "Clean dialogue audio, no background music.",
+     "Закадровую озвучку записываем отдельно."),
+    ("Монтаж и выкладка", "edit", "",
+     "1080×1920, H.264, 30 fps\nХронометраж 30–60 с\nСубтитры: белые, внизу, без обводки",
+     "", "Обложка — первый кадр с героиней, без текста."),
+]
+
+
+def _seed_templates(c):
+    if c.execute("SELECT 1 FROM settings WHERE key='templates_seeded'").fetchone():
+        return
+    if not c.execute("SELECT 1 FROM templates").fetchone():
+        for pos, (name, kind, model, specs, prompt, notes) in enumerate(_TEMPLATE_EXAMPLES):
+            c.execute("INSERT INTO templates(name, kind, model, specs, prompt, notes, in_prompt, position, created_at) "
+                      "VALUES (?,?,?,?,?,?,0,?,?)", (name, kind, model, specs, prompt, notes, pos, now()))
+    c.execute("INSERT INTO settings(key, value) VALUES ('templates_seeded', '1')")
 
 
 def _migrate_arcs_v2(c):
@@ -287,8 +326,12 @@ def dumps(v) -> str:
 
 
 def get_settings() -> dict:
+    """Настройки + `tt_prompt`: текст шаблонов ТТ с галочкой «Подставлять в промпт» (идёт в промпт каждого шота)."""
     with connect() as c:
-        return {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
+        s = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
+        s["tt_prompt"] = " ".join(r[0].strip() for r in c.execute(
+            "SELECT prompt FROM templates WHERE in_prompt=1 AND prompt<>'' ORDER BY position, id"))
+        return s
 
 
 def log(episode_id, user_id, text):

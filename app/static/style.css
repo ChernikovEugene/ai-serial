@@ -445,6 +445,15 @@ a.prod-card:hover { border-color: var(--muted); border-left-color: var(--c); }
 .post-text summary { cursor: pointer; font-weight: 600; }
 .post-text textarea { width: 100%; margin: 8px 0 6px; }
 
+/* «Тех. требования» */
+.tt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-bottom: 10px; }
+.tt-card { display: flex; flex-direction: column; gap: 6px; border-top: 3px solid var(--c); }
+.tt-card h3 { margin: 2px 0; font-size: 16px; }
+.tt-specs { white-space: pre-wrap; font-size: 13px; background: var(--panel2); border-radius: 8px; padding: 8px 10px; }
+.tt-prompt code { display: block; white-space: pre-wrap; font-size: 12px; background: #0d0f12; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.tt-notes { white-space: pre-wrap; }
+.tt-card label.check { margin-top: 4px; }
+
 /* «Правка» button and panel (bottom-right corner) */
 #fb { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 #fb .fb-btn { border-radius: 99px; padding: 7px 16px; background: var(--accent); border-color: var(--accent); color: #fff;

@@ -2,6 +2,7 @@
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
 import { renderSeries, renderArc } from "./series.js";
 import { renderProduction } from "./production.js";
+import { renderTech } from "./tech.js";
 import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
 import { renderAssets, renderAsset } from "./assets.js";
@@ -43,6 +44,7 @@ async function route() {
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
     if (section === "team") return await renderTeam();
+    if (section === "tech") return await renderTech();
     if (section === "settings") return await renderSettings();
     if (section === "publish") return renderPublish();
   } catch (e) { console.error(e); }
@@ -60,6 +62,7 @@ function drawNav(section) {
     <a href="#/production" data-nav="production">Продакшн</a>
     <a href="#/publish" data-nav="publish">Публикация</a>
     <a href="#/characters" data-nav="library">Библиотека</a>
+    <a href="#/tech" data-nav="tech">Тех. требования</a>
     <a href="#/team" data-nav="team">Команда</a>
     <a href="#/settings" data-nav="settings">Настройки</a>
     <div class="nav-foot">
