@@ -48,7 +48,7 @@ function drawNav(section) {
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/characters" data-nav="characters">Персонажи</a>
     <a href="#/locations" data-nav="locations">Локации</a>
-    <a href="#/status" data-nav="status">Статус месяца</a>
+    <a href="#/status" data-nav="status">Статус</a>
     <a href="#/settings" data-nav="settings">Настройки и команда</a>
     <a href="#/publish" data-nav="publish">Публикация</a>
     <div class="nav-foot">

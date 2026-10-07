@@ -251,8 +251,6 @@ pre.code.small { font-size: 11px; max-height: 160px; overflow: auto; white-space
 /* ---------- Статус месяца (#/status) ---------- */
 .sm-head { margin-bottom: 14px; }
 .sm-head h1 { margin: 0; }
-.sm-nav { gap: 8px; }
-.sm-nav b { min-width: 120px; text-align: center; }
 .sm-today { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 99px; border: 1px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: #ff8fab; font-weight: 600; }
 .sm-today::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
@@ -309,6 +307,22 @@ a.sm-row:hover { border-color: var(--muted); border-left-color: var(--c); }
 .sm-flag { font-size: 12px; font-weight: 700; }
 .sm-flag.bad { color: var(--err); } .sm-flag.risk { color: var(--warn); } .sm-flag.good { color: var(--ok); }
 @media (max-width: 900px) { .sm-colhead { display: none; } .sm-segs { max-width: none; } }
+
+/* ---------- Арки сюжета ---------- */
+.arc-div { margin: 10px 0 4px; padding: 10px 14px; border-radius: 12px; border: 1px dashed var(--accent2);
+  background: color-mix(in srgb, var(--accent2) 8%, transparent); display: flex; flex-direction: column; gap: 6px; }
+.arc-div[title^="Нажмите"] { cursor: pointer; }
+.arc-div[title^="Нажмите"]:hover { background: color-mix(in srgb, var(--accent2) 14%, transparent); }
+.arc-div-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.arc-div-head b { font-size: 16px; }
+.arc-tag { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #111317;
+  background: var(--accent2); padding: 2px 8px; border-radius: 6px; }
+.arc-notes { white-space: pre-wrap; font-size: 13px; }
+.arc-members { display: flex; flex-wrap: wrap; gap: 6px; }
+.arc-label { font-size: 12px; color: var(--accent2); }
+.arc-pick { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
+.cal-arc { font-size: 11px; font-weight: 600; color: #111317; background: var(--accent2); border-radius: 6px; padding: 2px 6px; cursor: pointer; }
+.sm-cell.arc-start .sm-sq { box-shadow: -3px 0 0 var(--accent2); }
 
 /* «Правка» button and panel (bottom-right corner) */
 #fb { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }

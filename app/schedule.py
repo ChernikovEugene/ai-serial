@@ -1,7 +1,10 @@
 """Release queue. Episode number == release slot, one episode per day:
     date(N) = anchor_date + (N - anchor_number) days
 Unpinned episodes own a number (date follows). Pinned episodes own a date (number follows),
-so a holiday episode keeps its day when the queue is reordered. Number NULL = backlog."""
+so a holiday episode keeps its day when the queue is reordered. Number NULL = backlog.
+
+Story arcs start at a release slot (start_number). Inside an arc episodes are counted again from 1:
+arc_number = number - arc.start_number + 1. The release slot itself (and so the date) does not change."""
 from datetime import date, timedelta
 
 from . import db
@@ -104,3 +107,26 @@ def next_free(settings=None) -> int:
     while n in taken:
         n += 1
     return n
+
+
+def load_arcs() -> list[dict]:
+    with db.connect() as c:
+        return db.rows(c.execute("SELECT * FROM arcs ORDER BY start_number, id"))
+
+
+def arc_for(number: int | None, arcs: list[dict]) -> dict | None:
+    """The arc a release slot belongs to: the last arc that starts at or before it."""
+    if number is None:
+        return None
+    found = None
+    for a in arcs:
+        if a["start_number"] <= number:
+            found = a
+    return found
+
+
+def arc_info(number: int | None, arcs: list[dict]) -> dict:
+    a = arc_for(number, arcs)
+    if not a:
+        return {"arc_id": None, "arc_title": "", "arc_number": None}
+    return {"arc_id": a["id"], "arc_title": a["title"], "arc_number": number - a["start_number"] + 1}
