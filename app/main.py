@@ -110,12 +110,19 @@ class UserIn(BaseModel):
     name: str | None = None
     password: str | None = None
     role: str | None = None
+    tg: str | None = None      # ник в Telegram для связи
+    tasks: str | None = None   # чем занят на проекте (свободный текст)
+
+
+def _tg(v: str | None) -> str:
+    """Ник в Telegram без собаки и пробелов: «@ksu » -> «ksu»."""
+    return (v or "").strip().lstrip("@").strip()
 
 
 @app.get("/api/users")
 def list_users():
     with db.connect() as c:
-        return db.rows(c.execute("SELECT id, login, name, role, created_at FROM users ORDER BY id"))
+        return db.rows(c.execute("SELECT id, login, name, role, created_at, tg, tasks FROM users ORDER BY id"))
 
 
 @app.post("/api/users", dependencies=[Depends(auth.admin)])
@@ -127,9 +134,9 @@ def create_user(u: UserIn):
     with db.connect() as c:
         if c.execute("SELECT 1 FROM users WHERE login=?", (u.login.strip().lower(),)).fetchone():
             raise HTTPException(400, "Такой логин уже есть")
-        c.execute("INSERT INTO users(login, name, pass_hash, role, created_at) VALUES (?,?,?,?,?)",
+        c.execute("INSERT INTO users(login, name, pass_hash, role, created_at, tg, tasks) VALUES (?,?,?,?,?,?,?)",
                   (u.login.strip().lower(), (u.name or u.login).strip(), auth.hash_password(u.password),
-                   u.role or "writer", db.now()))
+                   u.role or "writer", db.now(), _tg(u.tg), (u.tasks or "").strip()))
     return list_users()
 
 
@@ -141,6 +148,10 @@ def update_user(user_id: int, u: UserIn, request: Request):
     with db.connect() as c:
         if u.name is not None:
             c.execute("UPDATE users SET name=? WHERE id=?", (u.name.strip(), user_id))
+        if u.tg is not None:
+            c.execute("UPDATE users SET tg=? WHERE id=?", (_tg(u.tg), user_id))
+        if u.tasks is not None and me["role"] == "admin":
+            c.execute("UPDATE users SET tasks=? WHERE id=?", (u.tasks.strip(), user_id))
         if u.password:
             if len(u.password) < 4:
                 raise HTTPException(400, "Пароль от 4 символов")
@@ -446,15 +457,26 @@ STATUS_PAST, STATUS_TOTAL = 5, 30
 
 
 @app.get("/api/status-window")
-def status_window(request: Request):
+def status_window(request: Request, month: str | None = None):
     """Страница «Статус»: 30 слотов выхода — 5 прошедших дней, сегодня и дальше вперёд (если сериал начался
     недавно, недостающие прошедшие дни добавляются впереди). Окно сдвигается само каждый день.
     Серии, которые роль не видит (монтажёр до согласования сценария), показываются только этапом: без названия,
-    описания и ссылки (`locked`), чтобы картина оставалась полной."""
+    описания и ссылки (`locked`), чтобы картина оставалась полной.
+    С `month=ГГГГ-ММ` вместо окна берутся слоты выхода этого календарного месяца (для сводки, плиток и полоски)."""
     settings = db.get_settings()
-    today_n = schedule.number_for(date.today().isoformat(), settings)
-    first = max(1, today_n - STATUS_PAST)
-    last = first + STATUS_TOTAL - 1
+    if month:
+        try:
+            y, m = map(int, month.split("-"))
+            d1 = date(y, m, 1)
+        except ValueError:
+            raise HTTPException(400, "Месяц в формате ГГГГ-ММ")
+        d2 = (d1.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        first = max(1, schedule.number_for(d1.isoformat(), settings))
+        last = schedule.number_for(d2.isoformat(), settings)
+    else:
+        today_n = schedule.number_for(date.today().isoformat(), settings)
+        first = max(1, today_n - STATUS_PAST)
+        last = first + STATUS_TOTAL - 1
     role = request.state.user["role"]
     all_eps = episode_summaries()
     eps = [e for e in all_eps if e["number"] is not None and first <= e["number"] <= last]
