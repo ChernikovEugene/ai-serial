@@ -60,6 +60,8 @@ TABLES = {
         position INTEGER NOT NULL DEFAULT 0,
         synopsis TEXT NOT NULL DEFAULT '',
         post_text TEXT NOT NULL DEFAULT '',
+        result_note TEXT NOT NULL DEFAULT '',
+        result_url TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '',
         parse_notes TEXT NOT NULL DEFAULT '[]',
         posted_at TEXT,
@@ -135,6 +137,7 @@ TABLES = {
         date TEXT NOT NULL,
         title TEXT NOT NULL,
         yearly INTEGER NOT NULL DEFAULT 0,
+        end_date TEXT NOT NULL DEFAULT '',
         created_by INTEGER""",
     "arcs": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,6 +146,7 @@ TABLES = {
         notes TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'writing',
         members TEXT NOT NULL DEFAULT '[]',
+        archived INTEGER NOT NULL DEFAULT 0,
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
     "templates": """

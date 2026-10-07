@@ -1,6 +1,6 @@
 // Episode card: script editor with live analysis, shots, review & comments, history.
 import {
-  $, $$, api, can, closeModal, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, loadAssets, media, modal, state,
+  $, $$, api, can, closeModal, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state,
   statusPill, statusSelect, STATUS_COLORS, toast, view,
 } from "./core.js";
 import { attachMentions } from "./mention.js";
@@ -9,13 +9,12 @@ const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "" };
 const TAKE_STATUS = { queued: ["в очереди", "run"], running: ["генерация…", "run"], done: ["готово", "ok"],
   stub: ["заглушка", "warn"], error: ["ошибка", "err"], idle: ["не создано", ""] };
 
-export const SCRIPT_HELP = `<div class="help">
-  <b>Формат сценария</b><br>
+export const SCRIPT_HELP = `<details class="help script-help" open><summary>Формат сценария</summary>
   <code>Шот 1</code>, <code>Шот 2</code>… — каждый шот отдельным блоком. Всё, что ниже пометки, относится к этому шоту.<br>
   <code>ИНТ. КАФЕ — ДЕНЬ</code> или <code>ЛОКАЦИЯ: @Кафе</code> — сцена/локация для следующих шотов.<br>
   <code>МАША: Привет!</code>, <code>Маша (шёпотом): Привет!</code>, <code>— Привет, — сказала Маша.</code> — реплики, по ним считается хронометраж.<br>
   <code>КАМЕРА: крупный план</code> или <code>[наезд]</code> — камера. <code>@</code> — выбрать персонажа/локацию из библиотеки, <code>@Маша:Пижама</code> — конкретная версия.<br>
-  Без пометок «Шот» приложение само разобьёт текст: каждый абзац действия — шот, длинные реплики делятся по 8 с.</div>`;
+  Без пометок «Шот» приложение само разобьёт текст: каждый абзац действия — шот, длинные реплики делятся по 8 с.</details>`;
 
 export function stopEpisodePolling() { clearTimeout(E.poll); }
 
@@ -23,7 +22,7 @@ export async function renderEpisode(id, tab) {
   stopEpisodePolling();
   if (E.id !== id) { E.sel = null; }
   E.id = id;
-  if (tab) E.tab = tab;
+  if (tab) E.tab = ["script", "shots", "review", "history"].includes(tab) ? tab : "script";
   const [ep] = await Promise.all([api(`/api/episodes/${id}`), loadAssets()]);
   E.ep = ep;
   if (!E.sel || !ep.shots.some((s) => s.id === E.sel)) E.sel = ep.shots[0]?.id ?? null;
@@ -58,7 +57,7 @@ function draw() {
         .map(([k, n]) => `<button class="tab ${E.tab === k ? "on" : ""}" data-tab="${k}">${n}</button>`).join("")}
     </div>
     <div id="ep-tab"></div>`;
-  $$("[data-tab]").forEach((b) => (b.onclick = () => { location.hash = `#/episodes/${E.id}/${b.dataset.tab}`; }));
+  $$("[data-tab]").forEach((b) => (b.onclick = () => replaceHash(`#/episodes/${E.id}/${b.dataset.tab}`)));
   drawHeader();
   drawTab();
 }
@@ -93,7 +92,7 @@ function drawHeader() {
   $("#ep-header").innerHTML = `
     <div class="ep-head">
       <div class="row">
-        <a href="#/series/${ep.arc_id ?? "none"}" class="btn ghost" title="К арке">←</a>
+        <button class="ghost" id="ep-back" title="Назад">←</button>
         <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `Серия ${ep.arc_number ?? ep.number}` : "черновик"}</div>
         <div style="flex:1;min-width:220px">
           <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
@@ -125,8 +124,23 @@ function drawHeader() {
         <div class="row"><button class="ghost small" id="copy-post">📋 Скопировать</button>
           <span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span></div>
       </details>
+      <details class="post-text result-box" ${ep.result_note || ep.result_url ? "" : canResult() ? "open" : ""}>
+        <summary>Итог и готовый ролик ${ep.result_url ? `<span class="muted small">· ссылка есть</span>` : `<span class="muted small">· пока не заполнено</span>`}</summary>
+        <div class="result-grid">
+          <div>
+            <label>Итог: что получилось, что важно помнить</label>
+            <textarea id="res-note" rows="3" placeholder="Например: вышло с первого дубля, пришлось перегенерировать шот 3…" ${canResult() ? "" : "readonly"}>${esc(ep.result_note || "")}</textarea>
+            <label>Где лежит готовый ролик (ссылка)</label>
+            <input id="res-url" type="url" placeholder="https://www.dropbox.com/…" value="${esc(ep.result_url || "")}" ${canResult() ? "" : "readonly"}>
+            <div class="muted small" style="margin-top:4px">Вставьте ссылку на Dropbox или прямую ссылку на файл — ниже появится превью. Сохраняется само.</div>
+          </div>
+          <div id="res-preview">${resultPreview(ep.result_url)}</div>
+        </div>
+      </details>
     </div>`;
+  $("#ep-back").onclick = () => goBack(`#/series/${ep.arc_id ?? "none"}`);
   $("#copy-post").onclick = () => copyText($("#post-text").value);
+  bindResult(ep);
   if (canPost()) $("#post-text").onchange = async (ev) => {
     await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { post_text: ev.target.value } });
     ep.post_text = ev.target.value;
@@ -164,9 +178,45 @@ function drawHeader() {
   $("#move-ep").onclick = (e) => { e.preventDefault(); moveDialog(); };
   $$("[data-jump]").forEach((el) => (el.onclick = () => {
     E.sel = +el.dataset.jump;
-    if (E.tab === "script") location.hash = `#/episodes/${E.id}/shots`;
+    if (E.tab === "script") replaceHash(`#/episodes/${E.id}/shots`);
     else { drawTab(); $(`#shot-${E.sel}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); }
   }));
+}
+
+const canResult = () => can.write() || can.gen(); // итог и ссылку на ролик пишет любой из команды, кроме зрителя
+
+/** Превью по ссылке: ролик со ссылки Dropbox (?raw=1) или прямой ссылки на файл — как видео; иначе просто ссылка. */
+function resultPreview(url) {
+  if (!url) return `<div class="res-empty muted small">Когда ролик будет готов, вставьте ссылку: здесь появится превью.</div>`;
+  let u;
+  try { u = new URL(url); } catch { return `<div class="res-empty muted small">Не похоже на ссылку.</div>`; }
+  const link = `<a href="${esc(u.href)}" target="_blank" rel="noopener">Открыть ролик ↗</a>`;
+  let src = "";
+  if (/(^|\.)dropbox\.com$/.test(u.hostname)) {
+    const d = new URL(u.href);
+    d.searchParams.delete("dl");
+    d.searchParams.set("raw", "1");
+    src = d.href;
+  } else if (/\.(mp4|mov|m4v|webm)$/i.test(u.pathname)) src = u.href;
+  if (!src) return `<div class="res-empty muted small">Превью для этой ссылки не получить, но ролик откроется по ссылке.<br>${link}</div>`;
+  return `<video class="res-video" src="${esc(src)}#t=0.1" controls preload="metadata" playsinline></video>
+    <div class="small res-link">${link}</div>`;
+}
+
+function bindResult(ep) {
+  const save = async () => {
+    await api(`/api/episodes/${E.id}/result`, { json: { note: $("#res-note").value, url: $("#res-url").value } });
+    ep.result_note = $("#res-note").value; ep.result_url = $("#res-url").value.trim();
+    $("#res-preview").innerHTML = resultPreview(ep.result_url);
+    bindVideoFallback();
+    toast("Итог сохранён");
+  };
+  const bindVideoFallback = () => {
+    const v = $("#res-preview video");
+    if (v) v.onerror = () => { $("#res-preview").innerHTML = `<div class="res-empty muted small">Не удалось показать превью (ссылка закрыта или это не видеофайл).<br><a href="${esc(ep.result_url)}" target="_blank" rel="noopener">Открыть ролик ↗</a></div>`; };
+  };
+  bindVideoFallback();
+  if (canResult()) { $("#res-note").onchange = save; $("#res-url").onchange = save; }
 }
 
 function moveDialog() {
@@ -217,9 +267,9 @@ function drawScript(el) {
       <div>
         <div class="card" id="analysis"><span class="muted">Анализ…</span></div>
         <div class="card" id="cast" style="margin-top:12px"></div>
-        <div style="margin-top:12px">${SCRIPT_HELP}</div>
       </div>
-    </div>`;
+    </div>
+    ${SCRIPT_HELP}`;
   const ta = $("#script");
   attachMentions(ta);
   $("#ep-synopsis").onchange = async (ev) => {

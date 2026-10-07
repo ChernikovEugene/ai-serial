@@ -91,6 +91,24 @@ export function addDays(iso, n) {
 }
 
 // Mirrors the server rules in app/auth.py (the server is what actually enforces them).
+/** «Назад» как в браузере: на страницу, с которой пришли (а если пришли по ссылке — на `fallback`).
+ * Стек адресов ведём сами: переход назад не должен считаться новым шагом. */
+const trail = [location.hash];
+let replacing = false;
+window.addEventListener("hashchange", () => {
+  const h = location.hash;
+  if (replacing) { replacing = false; trail[trail.length - 1] = h; } else if (trail.length > 1 && trail.at(-2) === h) trail.pop(); else trail.push(h);
+});
+export function goBack(fallback) {
+  if (trail.length > 1) history.back(); else location.hash = fallback;
+}
+/** Сменить адрес, не добавляя шаг в историю (переключение вкладок серии не должно мешать «Назад»). */
+export function replaceHash(h) {
+  if (location.hash === h) return;
+  replacing = true;
+  location.replace(h);
+}
+
 export const can = {
   edit: () => ["admin", "writer"].includes(state.meta?.user?.role),   // script, shots content, library, schedule
   write: () => ["admin", "writer"].includes(state.meta?.user?.role),  // same as edit, clearer in episode code

@@ -586,6 +586,19 @@ def delete_arc(arc_id: int):
     return list_arcs()
 
 
+class ArcArchiveIn(BaseModel):
+    archived: bool
+
+
+@app.post("/api/arcs/{arc_id}/archive", dependencies=[Depends(auth.writer)])
+def archive_arc(arc_id: int, a: ArcArchiveIn):
+    """Закончившаяся арка уходит в архив: с главной «Серий» пропадает, но остаётся доступной, чтобы вспомнить сюжет."""
+    with db.connect() as c:
+        _arc_or_404(c, arc_id)
+        c.execute("UPDATE arcs SET archived=? WHERE id=?", (int(a.archived), arc_id))
+    return next(x for x in list_arcs() if x["id"] == arc_id)
+
+
 class ArcStatusIn(BaseModel):
     status: str
 
@@ -843,25 +856,64 @@ def get_schedule(start: str, end: str, request: Request):
         if md in HOLIDAYS:
             events.append({"date": d.isoformat(), "title": HOLIDAYS[md], "builtin": True})
         for ev in custom:
-            if ev["date"] == d.isoformat() or (ev["yearly"] and ev["date"][5:] == md):
-                events.append({"id": ev["id"], "date": d.isoformat(), "title": ev["title"], "builtin": False})
+            hit = _event_start(ev, d)
+            if hit:
+                first, span = hit
+                events.append({"id": ev["id"], "date": d.isoformat(), "title": ev["title"], "builtin": False,
+                               "first": first == d, "last": (d - first).days == span, "occ_start": first.isoformat(),
+                               "ev_date": ev["date"], "ev_end": ev["end_date"] or ev["date"], "yearly": bool(ev["yearly"])})
         d += timedelta(days=1)
     arcs = [a for a in list_arcs() if a["start_date"] and start <= a["start_date"] <= end]
     return {"episodes": eps, "events": events, "arcs": arcs}
+
+
+def _event_start(ev: dict, d: date) -> tuple[date, int] | None:
+    """(первый день, длина в днях) того вхождения своего события, в которое попадает день `d` (None — не попадает).
+    Событие может тянуться на несколько дней (`end_date`) и повторяться каждый год."""
+    start = date.fromisoformat(ev["date"])
+    span = (date.fromisoformat(ev["end_date"]) - start).days if ev["end_date"] else 0
+    for year in ((d.year, d.year - 1) if ev["yearly"] else (start.year,)):
+        try:
+            s = start.replace(year=year)
+        except ValueError:  # 29 февраля в невисокосный год
+            continue
+        if s <= d <= s + timedelta(days=max(span, 0)):
+            return s, max(span, 0)
+    return None
 
 
 class CalendarEventIn(BaseModel):
     date: str
     title: str
     yearly: bool = False
+    end_date: str = ""
+
+
+def _event_values(e: CalendarEventIn) -> tuple:
+    start = date.fromisoformat(e.date)
+    end = date.fromisoformat(e.end_date) if e.end_date else start
+    if end < start:
+        raise HTTPException(400, "Событие не может заканчиваться раньше начала")
+    title = e.title.strip()
+    if not title:
+        raise HTTPException(400, "Введите название")
+    return start.isoformat(), title, int(e.yearly), end.isoformat() if end > start else ""
 
 
 @app.post("/api/calendar-events", dependencies=[Depends(auth.writer)])
 def add_calendar_event(e: CalendarEventIn, request: Request):
-    date.fromisoformat(e.date)
+    d, title, yearly, end = _event_values(e)
     with db.connect() as c:
-        c.execute("INSERT INTO calendar_events(date, title, yearly, created_by) VALUES (?,?,?,?)",
-                  (e.date, e.title.strip(), int(e.yearly), uid(request)))
+        c.execute("INSERT INTO calendar_events(date, title, yearly, end_date, created_by) VALUES (?,?,?,?,?)",
+                  (d, title, yearly, end, uid(request)))
+    return {"ok": True}
+
+
+@app.put("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.writer)])
+def update_calendar_event(ev_id: int, e: CalendarEventIn):
+    d, title, yearly, end = _event_values(e)
+    with db.connect() as c:
+        c.execute("UPDATE calendar_events SET date=?, title=?, yearly=?, end_date=? WHERE id=?", (d, title, yearly, end, ev_id))
     return {"ok": True}
 
 
@@ -1013,6 +1065,24 @@ def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = 
         if reparse:
             apply_breakdown(eid)
     return get_episode(eid)
+
+
+class ResultIn(BaseModel):
+    note: str = ""
+    url: str = ""
+
+
+@app.post("/api/episodes/{eid}/result", dependencies=[Depends(auth.writer_or_editor)])
+def set_result(eid: int, r: ResultIn, request: Request):
+    """Итог серии: что получилось и где лежит готовый ролик (ссылка, например на Dropbox). Пишет любой из команды."""
+    visible_or_404(request, eid)
+    url = r.url.strip()
+    if url and not re.match(r"^https?://", url, re.I):
+        raise HTTPException(400, "Ссылка должна начинаться с http:// или https://")
+    with db.connect() as c:
+        c.execute("UPDATE episodes SET result_note=?, result_url=?, updated_at=? WHERE id=?", (r.note, url, db.now(), eid))
+    db.log(eid, uid(request), "Итог серии обновлён")
+    return {"ok": True}
 
 
 class StatusIn(BaseModel):
