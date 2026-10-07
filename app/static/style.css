@@ -416,7 +416,6 @@ a.arc-card:hover { border-color: var(--accent2); }
 }
 
 /* «Продакшн»: доска по этапам */
-.prod-filters { margin: 10px 0 14px; gap: 6px; }
 .prod-board { display: grid; grid-template-columns: repeat(6, minmax(165px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 6px; }
 .prod-col { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--c); border-radius: 12px;
   padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 160px; }
@@ -424,8 +423,12 @@ a.arc-card:hover { border-color: var(--accent2); }
 .prod-card { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 10px; background: var(--panel2);
   border: 1px solid var(--line); border-left: 3px solid var(--c); color: var(--text); text-decoration: none; }
 a.prod-card:hover { border-color: var(--muted); border-left-color: var(--c); }
+.prod-board { margin-top: 12px; }
+.prod-col.drop-over { background: color-mix(in srgb, var(--c) 12%, var(--panel)); border-color: var(--c); }
+.prod-card[draggable="true"] { cursor: grab; }
+.prod-card.dragging { opacity: .4; }
+.prod-posted-btn { align-self: flex-start; margin-top: 4px; border-color: var(--ok); color: var(--ok); }
 .prod-card.locked { opacity: .65; border-style: dashed; border-left-style: solid; }
-.prod-posted { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 8px; }
 @media (max-width: 900px) { .prod-board { grid-template-columns: repeat(6, 78vw); scroll-snap-type: x mandatory; } .prod-col { scroll-snap-align: start; } }
 
 /* «Правка» button and panel (bottom-right corner) */
