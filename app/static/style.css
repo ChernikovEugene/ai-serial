@@ -17,7 +17,11 @@ code { color: var(--accent2); font-family: Consolas, monospace; font-size: 12px;
 .nav-foot { margin-top: auto; font-size: 12px; color: var(--muted); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .nav-foot .me { color: var(--text); font-size: 13px; }
 main { flex: 1; padding: 22px 28px 80px; min-width: 0; }
-h1 { margin: 0 0 16px; font-size: 22px; }
+.burger { display: none; }
+h1 { margin: 0 0 16px; font-size: 22px; line-height: 1.25; }
+/* заголовок в одной строке с кнопками: по центру, без нижнего отступа (он «косил» заголовок вверх) */
+.row > h1 { margin: 0; }
+.row:has(> h1) { margin-bottom: 16px; }
 h2 { font-size: 16px; margin: 22px 0 10px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .col { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
@@ -543,14 +547,16 @@ select option { background: var(--panel); color: var(--text); }
 /* мобильная версия: меню сверху полосой, страницы в одну колонку */
 @media (max-width: 800px) {
   body { flex-direction: column; }
-  .nav { width: 100%; height: auto; position: sticky; top: 0; z-index: 30; flex-direction: row; align-items: center; gap: 2px;
-    padding: 6px 8px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); scrollbar-width: none; }
-  .nav::-webkit-scrollbar { display: none; }
-  .nav a { font-size: 13px; padding: 7px 10px; white-space: nowrap; flex: none; }
-  .brand { padding: 0 8px; font-size: 15px; flex: none; }
-  .nav-foot { margin: 0 0 0 auto; flex-direction: row; align-items: center; padding: 0 2px; flex: none; font-size: 0; }
+  /* меню: сверху логотип и «бургер», ссылки раскрываются списком */
+  .nav { width: 100%; height: auto; max-height: 100vh; overflow-y: auto; position: sticky; top: 0; z-index: 30; flex-direction: row;
+    flex-wrap: wrap; align-items: center; gap: 0 8px; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { order: 0; flex: 1; padding: 0 4px; font-size: 16px; }
+  .nav-foot { order: 1; margin: 0; flex-direction: row; align-items: center; padding: 0; flex: none; font-size: 0; }
   .nav-foot .badge, .nav-foot .me { display: none; }
   .nav-foot button { font-size: 12px; }
+  .burger { order: 2; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 36px; padding: 0; font-size: 20px; line-height: 1; }
+  .nav a { order: 3; display: none; flex: 1 0 100%; padding: 11px 10px; font-size: 15px; }
+  .nav.open a { display: block; }
   .page, .page > main { width: 100%; }
   main, .page > main { padding: 14px 12px 20px; }
   .site-foot { padding: 10px 12px 14px; }
@@ -574,4 +580,22 @@ select option { background: var(--panel); color: var(--text); }
   .arc-grid, .arc-grid.compact { grid-template-columns: 1fr; }
   .sm-month { flex-wrap: wrap; }
   table { display: block; max-width: 100%; overflow-x: auto; }
+}
+
+/* служебный текст (подсказки, пояснения) тише и мельче, чтобы не отвлекал */
+:root { --hint: #7a8295; }
+.muted.small, .small.muted, .help, .sm-label, .sm-colhead { font-size: 11.5px; color: var(--hint); }
+p.muted, .muted.sm-desc { color: var(--hint); }
+.sm-label { letter-spacing: .05em; }
+.script-help code, .help code { opacity: .85; }
+.sm-strip-card > .muted.small { font-size: 11px; }
+
+@media (max-width: 800px) {
+  /* кнопки в шапке страницы: заголовок на всю ширину, кнопки ровно в ряд */
+  main > .row:first-child { gap: 8px; }
+  main > .row:first-child > h1 { flex: 1 0 100%; }
+  main > .row:first-child > button, main > .row:first-child > a.btn { flex: 1 1 0; text-align: center; padding-left: 8px; padding-right: 8px; }
+  /* полоса месяца на «Статусе» не сжимается, а прокручивается */
+  .sm-strip { overflow-x: auto; padding: 2px 4px 8px; margin-right: -4px; }
+  .sm-cell { flex: 0 0 30px; }
 }
