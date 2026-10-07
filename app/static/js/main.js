@@ -103,6 +103,7 @@ async function renderLogin() {
   ($("#l-name") || $("#l-login")).focus();
 }
 
+$("#foot").textContent = `© ${new Date().getFullYear()} Студия сериала`;
 window.addEventListener("hashchange", route);
 window.addEventListener("unhandledrejection", (e) => { if (e.reason?.message !== "auth") console.error(e.reason); });
 if (!location.hash) location.hash = "#/"; else route();

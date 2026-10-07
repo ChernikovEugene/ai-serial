@@ -1,7 +1,7 @@
 // «Серии»: сверху карточки арок; внутри арки — карточки серий для быстрых синопсисов (или список).
 // Серии арки идут в общей очереди выхода (1 серия в день), порядок меняется перетаскиванием карточек.
 // Черновики — серии без даты: не удалены, но в очередь не идут. Подробное ТЗ серии — на её странице (#/episodes/ID).
-import { $, $$, api, ARC_STATUS_COLORS, can, closeModal, esc, fmtDate, modal, state, statusPill, STATUS_COLORS, toast, view } from "./core.js";
+import { $, $$, api, ARC_STATUS_COLORS, can, closeModal, esc, fmtDate, goBack, modal, state, statusPill, STATUS_COLORS, toast, view } from "./core.js";
 import { arcDialog, ensureAssets } from "./arcs.js";
 
 const NO_ARC = { id: "none", title: "Без арки", notes: "", members: [], status: null };
@@ -18,11 +18,14 @@ const shortDate = (iso) => (iso ? fmtDate(iso) : "");
 
 const HISTORY_DAYS = 5; // выложенные серии без арки уходят в историю через столько дней
 let showHistory = false;
+let showArchive = false;
 
 export async function renderSeries() {
   const [arcs, eps] = await Promise.all([api("/api/arcs"), api("/api/episodes"), ensureAssets()]);
   const loose = eps.filter((e) => !e.arc_id);
-  const cards = [...arcs, ...(loose.length ? [{ ...NO_ARC, episodes: loose.filter((e) => e.number != null).length, drafts: loose.filter((e) => e.number == null).length }] : [])];
+  const live = arcs.filter((a) => !a.archived);
+  const archived = arcs.filter((a) => a.archived);
+  const cards = [...live, ...(loose.length ? [{ ...NO_ARC, episodes: loose.filter((e) => e.number != null).length, drafts: loose.filter((e) => e.number == null).length }] : [])];
   const today = state.meta.today;
   const queued = eps.filter((e) => e.number != null).sort((x, y) => x.number - y.number);
   // Арка закончилась, когда все её серии в очереди выложены — тогда они уходят в «Историю»
@@ -30,13 +33,16 @@ export async function renderSeries() {
     const own = queued.filter((e) => e.arc_id === a.id);
     return own.length && own.every((e) => e.status === "posted");
   }).map((a) => a.id));
-  const isHistory = (e) => e.status === "posted" && (e.arc_id ? finished.has(e.arc_id) : daysAgo(e.date, today) > HISTORY_DAYS);
+  const archivedIds = new Set(archived.map((a) => a.id));
+  const isHistory = (e) => e.status === "posted" && (e.arc_id ? finished.has(e.arc_id) || archivedIds.has(e.arc_id) : daysAgo(e.date, today) > HISTORY_DAYS);
   const history = queued.filter(isHistory);
   const active = queued.filter((e) => !isHistory(e));
 
   view().innerHTML = `
     <div class="row"><h1>Серии</h1><div class="spacer"></div>
+      <button class="${showArchive ? "on" : ""}" id="archive-btn" title="Закончившиеся арки и выложенные серии: чтобы вернуться и вспомнить сюжет">🗄 Архив${archived.length + history.length ? ` · ${archived.length + history.length}` : ""}</button>
       ${can.edit() ? `<button id="new-ep">+ Новая серия</button><button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
+    ${showArchive ? archiveBlock(archived, history, eps, today, arcs) : ""}
     <div class="arc-grid compact">
       ${cards.map((a) => arcCard(a, eps.filter((e) => (a.id === "none" ? !e.arc_id : e.arc_id === a.id)))).join("")}
     </div>
@@ -44,8 +50,9 @@ export async function renderSeries() {
       <span class="muted small">1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте.</span>
       <div class="spacer"></div>${can.edit() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
     <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today, arcs)}</div>
-    ${history.length ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
+    ${history.length && !showArchive ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
       ${showHistory ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : ""}` : ""}`;
+  $("#archive-btn").onclick = () => { showArchive = !showArchive; renderSeries(); };
 
   $("#new-ep") && ($("#new-ep").onclick = () => newEpisodeQuick(arcs, renderSeries));
   $("#new-arc") && ($("#new-arc").onclick = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) }));
@@ -56,6 +63,18 @@ export async function renderSeries() {
   }));
   $$("[data-create]").forEach((b) => (b.onclick = () => newEpisodeQuick(arcs, renderSeries, b.dataset.create)));
   if (can.edit()) bindQueueDrag(renderSeries);
+}
+
+/** «Архив»: закончившиеся арки (карточки, внутри — все серии с синопсисами) и выложенные серии завершённых арок. */
+function archiveBlock(archived, history, eps, today, arcs) {
+  return `<div class="card archive-box"><div class="row"><h2 style="margin:0">🗄 Архив</h2>
+      <span class="muted small">Выложенное и закрытое. Откройте арку, чтобы перечитать синопсисы и сюжет; вернуть арку в работу можно на её странице.</span></div>
+    <h3 class="archive-h">Арки в архиве <span class="muted small">${archived.length}</span></h3>
+    ${archived.length ? `<div class="arc-grid compact">${archived.map((a) => arcCard(a, eps.filter((e) => e.arc_id === a.id))).join("")}</div>`
+      : `<p class="muted small">Пока пусто. Когда арка закончится, на её странице нажмите «В архив».</p>`}
+    <h3 class="archive-h">Выложенные серии <span class="muted small">${history.length}</span></h3>
+    ${history.length ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : `<p class="muted small">Выложенных серий закрытых арок пока нет.</p>`}
+  </div>`;
 }
 
 const daysAgo = (iso, today) => Math.round((new Date(today + "T00:00:00") - new Date(iso + "T00:00:00")) / 86400000);
@@ -180,8 +199,8 @@ function arcCard(a, eps) {
     return n ? `<i style="flex:${n};background:${STATUS_COLORS[k]}" title="${esc(state.meta.statuses.find((s) => s.key === k)?.name || k)}: ${n}"></i>` : "";
   }).join("");
   const status = a.status ? `<span class="status small" style="--c:${ARC_STATUS_COLORS[a.status]}">${esc(a.status_name)}</span>` : "";
-  return `<a class="arc-card" href="#/series/${a.id}">
-    <div class="row">${status}<div class="spacer"></div><span class="muted small">${esc(span)}</span></div>
+  return `<a class="arc-card ${a.archived ? "archived" : ""}" href="#/series/${a.id}">
+    <div class="row">${a.archived ? `<span class="badge">в архиве</span>` : ""}${status}<div class="spacer"></div><span class="muted small">${esc(span)}</span></div>
     <h2>${esc(a.title)}</h2>
     <p class="arc-card-syn">${esc(a.notes || (a.id === "none" ? "Серии вне арок: праздники, события, отдельные ролики." : "Синопсис арки пока не написан."))}</p>
     <div class="arc-card-bar">${bar || `<i style="flex:1;background:var(--line)"></i>`}</div>
@@ -210,15 +229,18 @@ export async function renderArc(arcKey) {
 
   view().innerHTML = `
     <div class="row arc-head">
-      <a href="#/series" class="btn ghost" title="Ко всем аркам">←</a>
+      <button class="ghost" id="arc-back" title="Назад">←</button>
       <h1 style="margin:0">${esc(arc.title)}</h1>
       ${real && can.edit() ? `<select id="arc-status" class="status-select" style="--c:${ARC_STATUS_COLORS[arc.status]}">
           ${["writing", "client", "approved"].map((k) => `<option value="${k}" ${arc.status === k ? "selected" : ""}>${{ writing: "Синопсисы пишутся", client: "Синопсисы у клиента", approved: "Синопсисы согласованы" }[k]}</option>`).join("")}
         </select>` : real ? `<span class="status" style="--c:${ARC_STATUS_COLORS[arc.status]}">${esc(arc.status_name)}</span>` : ""}
       <div class="spacer"></div>
       ${real ? `<a class="btn" href="/api/arcs/${arc.id}/pdf" target="_blank" title="Синопсисы арки для клиента">PDF для клиента</a>` : ""}
-      ${real && can.edit() ? `<button class="ghost" id="arc-edit">Арка и участники</button>` : ""}
+      ${real && can.edit() ? `<button class="ghost" id="arc-edit">Арка и участники</button>
+        <button class="ghost" id="arc-archive" title="${arc.archived ? "Вернуть арку на главную «Серий»" : "Арка закончилась: убрать с главной, но не удалять"}">${arc.archived ? "↩ Из архива" : "🗄 В архив"}</button>
+        <button class="ghost danger" id="arc-del" title="Удалить арку (серии останутся)">🗑 Удалить арку</button>` : ""}
     </div>
+    ${real && arc.archived ? `<p class="muted small arc-archived-note">🗄 Арка в архиве: на главной «Серий» её нет. Здесь можно перечитать синопсисы и сюжет.</p>` : ""}
     ${real ? `<div class="card arc-syn-card">
       <label style="margin-top:0">Синопсис арки</label>
       <textarea id="arc-syn" rows="3" placeholder="О чём арка, что меняется в персонаже, локации, сюжете" ${can.edit() ? "" : "disabled"}>${esc(arc.notes)}</textarea>
@@ -240,6 +262,7 @@ export async function renderArc(arcKey) {
     </div>`;
 
   const rerender = () => renderArc(arcKey);
+  $("#arc-back").onclick = () => goBack("#/series");
   $$("[data-view]").forEach((b) => (b.onclick = () => {
     listView = b.dataset.view === "list";
     try { localStorage.setItem(VIEW_KEY, listView ? "list" : "cards"); } catch {}
@@ -252,6 +275,17 @@ export async function renderArc(arcKey) {
       rerender();
     };
     $("#arc-edit").onclick = () => arcDialog({ arc, onChange: (saved) => (saved ? rerender() : (location.hash = "#/series")) });
+    $("#arc-archive").onclick = async () => {
+      await api(`/api/arcs/${arc.id}/archive`, { json: { archived: !arc.archived } });
+      toast(arc.archived ? "Арка вернулась на главную «Серий»" : "Арка в архиве: её можно найти кнопкой «Архив» на странице «Серии»");
+      if (arc.archived) rerender(); else location.hash = "#/series";
+    };
+    $("#arc-del").onclick = async () => {
+      if (!confirm(`Удалить арку «${arc.title}»? Серии не удалятся: они останутся на своих днях в разделе «Без арки».\n\nЕсли арка просто закончилась, лучше отправить её «В архив».`)) return;
+      await api(`/api/arcs/${arc.id}`, { method: "DELETE" });
+      toast("Арка удалена, серии остались «Без арки»");
+      location.hash = "#/series";
+    };
     $("#arc-syn").onchange = async (ev) => {
       await api(`/api/arcs/${arc.id}`, { method: "PUT", json: { title: arc.title, notes: ev.target.value, members: arc.members } });
       arc.notes = ev.target.value;
@@ -277,10 +311,11 @@ function epCard(e) {
     <input class="ep-title" value="${esc(e.title)}" placeholder="Название серии" ${ed ? "" : "disabled"}>
     <textarea class="ep-syn" rows="${listView ? 1 : 4}" placeholder="Синопсис: о чём серия…" ${ed ? "" : "disabled"}>${esc(e.synopsis)}</textarea>
     <div class="ep-card-foot">
-      <a href="#/episodes/${e.id}">${e.shots ? `ТЗ: ${e.shots} шотов →` : "Открыть ТЗ →"}</a><div class="spacer"></div>
+      <a class="btn go-tz" href="#/episodes/${e.id}" title="Открыть страницу серии: подробное ТЗ, шоты, ролик">Перейти к ТЗ →${e.shots ? ` <span class="go-tz-n">${plural(e.shots, "шот", "шота", "шотов")}</span>` : ""}</a><div class="spacer"></div>
       ${can.edit() ? `${e.number != null ? `<button class="ghost small" data-pin="${e.id}" data-date="${e.date || ""}" title="Закрепить за датой (под событие)">📌</button>
         <button class="ghost small" data-draft="${e.id}" title="Убрать из очереди, не удаляя">В черновик</button>`
         : `<button class="ghost small" data-queue="${e.id}">В очередь</button>`}` : ""}
+      ${can.admin() ? `<button class="ghost small danger" data-del-ep="${e.id}" title="Удалить серию совсем">🗑</button>` : ""}
     </div>
   </div>`;
 }
@@ -305,6 +340,13 @@ function bindCards(arc, rerender) {
   $$("[data-queue]").forEach((b) => (b.onclick = async () => {
     await api(`/api/episodes/${b.dataset.queue}/queue`, { json: {} });
     toast("Серия вернулась в очередь — в конец арки");
+    rerender();
+  }));
+  $$("[data-del-ep]").forEach((b) => (b.onclick = async () => {
+    const t = $(".ep-title", b.closest(".ep-card")).value || "без названия";
+    if (!confirm(`Удалить серию «${t}» совсем? Пропадут её сценарий, шоты и ролики, вернуть нельзя.\n\nЕсли серия просто не нужна сейчас, нажмите «В черновик».`)) return;
+    await api(`/api/episodes/${b.dataset.delEp}`, { method: "DELETE" });
+    toast("Серия удалена");
     rerender();
   }));
   $$("[data-pin]").forEach((b) => (b.onclick = () => pinDialog(+b.dataset.pin, b.dataset.date, rerender)));
