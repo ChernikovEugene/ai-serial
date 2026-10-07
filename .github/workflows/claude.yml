@@ -1,0 +1,52 @@
+# Claude на серверах GitHub (https://github.com/anthropics/claude-code-action).
+# Автозапуск: задача получила метку «правка» (её ставит кнопка «Правка» в студии) — Claude вносит правку
+# по разделу «Правки с сайта» в CLAUDE.md. Ещё он отвечает на «@claude …» в задачах и pull request'ах.
+# Метки и «@claude» срабатывают только от участников с правами записи (репозиторий публичный).
+# Нужно один раз: установить приложение Claude (https://github.com/apps/claude) на репозиторий и добавить
+# секрет CLAUDE_CODE_OAUTH_TOKEN (Settings → Secrets and variables → Actions); токен даёт `claude setup-token`.
+name: Claude
+
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'правка')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@claude')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+    # одна правка — один запуск (метка ставится при создании задачи, «opened» и «labeled» приходят вместе)
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          label_trigger: "правка"
+          base_branch: main
+          claude_args: |
+            --max-turns 40
+            --append-system-prompt "Это правка по студии сериала. Работай по CLAUDE.md, раздел «Правки с сайта»: отвечай по-русски, простыми словами; непонятное не угадывай, а спроси комментарием в задаче; изменения — в отдельной ветке, в описании Closes #N и запись в docs/HISTORY.md; в конце коротко отчитайся в задаче, что изменилось и где это увидеть."
