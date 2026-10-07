@@ -18,16 +18,11 @@ const shortDate = (iso) => (iso ? fmtDate(iso) : "");
 
 const HISTORY_DAYS = 5; // выложенные серии без арки уходят в историю через столько дней
 let showHistory = false;
-let showArchive = false;
 
-export async function renderSeries() {
-  const [arcs, eps] = await Promise.all([api("/api/arcs"), api("/api/episodes"), ensureAssets()]);
-  const loose = eps.filter((e) => !e.arc_id);
-  const live = arcs.filter((a) => !a.archived);
-  const archived = arcs.filter((a) => a.archived);
-  const cards = [...live, ...(loose.length ? [{ ...NO_ARC, episodes: loose.filter((e) => e.number != null).length, drafts: loose.filter((e) => e.number == null).length }] : [])];
-  const today = state.meta.today;
+/** Разбор очереди: живые арки и арки в архиве; выложенные серии закончившихся арок (и старые «вне арки») уходят в историю. */
+function splitQueue(arcs, eps, today) {
   const queued = eps.filter((e) => e.number != null).sort((x, y) => x.number - y.number);
+  const archived = arcs.filter((a) => a.archived);
   // Арка закончилась, когда все её серии в очереди выложены — тогда они уходят в «Историю»
   const finished = new Set(arcs.filter((a) => {
     const own = queued.filter((e) => e.arc_id === a.id);
@@ -35,14 +30,20 @@ export async function renderSeries() {
   }).map((a) => a.id));
   const archivedIds = new Set(archived.map((a) => a.id));
   const isHistory = (e) => e.status === "posted" && (e.arc_id ? finished.has(e.arc_id) || archivedIds.has(e.arc_id) : daysAgo(e.date, today) > HISTORY_DAYS);
-  const history = queued.filter(isHistory);
-  const active = queued.filter((e) => !isHistory(e));
+  return { live: arcs.filter((a) => !a.archived), archived, history: queued.filter(isHistory), active: queued.filter((e) => !isHistory(e)) };
+}
+
+export async function renderSeries() {
+  const [arcs, eps] = await Promise.all([api("/api/arcs"), api("/api/episodes"), ensureAssets()]);
+  const loose = eps.filter((e) => !e.arc_id);
+  const today = state.meta.today;
+  const { live, history, active } = splitQueue(arcs, eps, today);
+  const cards = [...live, ...(loose.length ? [{ ...NO_ARC, episodes: loose.filter((e) => e.number != null).length, drafts: loose.filter((e) => e.number == null).length }] : [])];
 
   view().innerHTML = `
     <div class="row"><h1>Серии</h1><div class="spacer"></div>
-      <button class="${showArchive ? "on" : ""}" id="archive-btn" title="Закончившиеся арки и выложенные серии: чтобы вернуться и вспомнить сюжет">🗄 Архив${archived.length + history.length ? ` · ${archived.length + history.length}` : ""}</button>
+      <a class="btn" href="#/archive" title="Закончившиеся арки и выложенные серии: чтобы вернуться и вспомнить сюжет">Архив</a>
       ${can.edit() ? `<button id="new-ep">+ Новая серия</button><button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
-    ${showArchive ? archiveBlock(archived, history, eps, today, arcs) : ""}
     <div class="arc-grid compact">
       ${cards.map((a) => arcCard(a, eps.filter((e) => (a.id === "none" ? !e.arc_id : e.arc_id === a.id)))).join("")}
     </div>
@@ -50,9 +51,8 @@ export async function renderSeries() {
       <span class="muted small">1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте.</span>
       <div class="spacer"></div>${can.edit() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
     <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today, arcs)}</div>
-    ${history.length && !showArchive ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
+    ${history.length ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
       ${showHistory ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : ""}` : ""}`;
-  $("#archive-btn").onclick = () => { showArchive = !showArchive; renderSeries(); };
 
   $("#new-ep") && ($("#new-ep").onclick = () => newEpisodeQuick(arcs, renderSeries));
   $("#new-arc") && ($("#new-arc").onclick = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) }));
@@ -65,16 +65,21 @@ export async function renderSeries() {
   if (can.edit()) bindQueueDrag(renderSeries);
 }
 
-/** «Архив»: закончившиеся арки (карточки, внутри — все серии с синопсисами) и выложенные серии завершённых арок. */
-function archiveBlock(archived, history, eps, today, arcs) {
-  return `<div class="card archive-box"><div class="row"><h2 style="margin:0">🗄 Архив</h2>
-      <span class="muted small">Выложенное и закрытое. Откройте арку, чтобы перечитать синопсисы и сюжет; вернуть арку в работу можно на её странице.</span></div>
-    <h3 class="archive-h">Арки в архиве <span class="muted small">${archived.length}</span></h3>
+/** Страница «Архив»: закончившиеся арки (внутри — все серии с синопсисами) и выложенные серии закрытых арок. */
+export async function renderArchive() {
+  const [arcs, eps] = await Promise.all([api("/api/arcs"), api("/api/episodes"), ensureAssets()]);
+  const today = state.meta.today;
+  const { archived, history } = splitQueue(arcs, eps, today);
+  view().innerHTML = `
+    <div class="row"><button class="ghost" id="arch-back" title="Назад">←</button><h1 style="margin:0">Архив</h1></div>
+    <p class="muted small">Выложенное и закрытое. Откройте арку, чтобы перечитать синопсисы и сюжет; вернуть арку в работу можно на её странице («↩ Из архива»).</p>
+    <h2>Арки <span class="muted small">${archived.length}</span></h2>
     ${archived.length ? `<div class="arc-grid compact">${archived.map((a) => arcCard(a, eps.filter((e) => e.arc_id === a.id))).join("")}</div>`
       : `<p class="muted small">Пока пусто. Когда арка закончится, на её странице нажмите «В архив».</p>`}
-    <h3 class="archive-h">Выложенные серии <span class="muted small">${history.length}</span></h3>
-    ${history.length ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : `<p class="muted small">Выложенных серий закрытых арок пока нет.</p>`}
-  </div>`;
+    <h2>Выложенные серии <span class="muted small">${history.length}</span></h2>
+    ${history.length ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : `<p class="muted small">Выложенных серий закрытых арок пока нет.</p>`}`;
+  $("#arch-back").onclick = () => goBack("#/series");
+  $$(".queue-row[data-open]").forEach((r) => r.addEventListener("click", () => (location.hash = `#/episodes/${r.dataset.open}`)));
 }
 
 const daysAgo = (iso, today) => Math.round((new Date(today + "T00:00:00") - new Date(iso + "T00:00:00")) / 86400000);
@@ -277,8 +282,8 @@ export async function renderArc(arcKey) {
     $("#arc-edit").onclick = () => arcDialog({ arc, onChange: (saved) => (saved ? rerender() : (location.hash = "#/series")) });
     $("#arc-archive").onclick = async () => {
       await api(`/api/arcs/${arc.id}/archive`, { json: { archived: !arc.archived } });
-      toast(arc.archived ? "Арка вернулась на главную «Серий»" : "Арка в архиве: её можно найти кнопкой «Архив» на странице «Серии»");
-      if (arc.archived) rerender(); else location.hash = "#/series";
+      toast(arc.archived ? "Арка вернулась на главную «Серий»" : "Арка в архиве: она на странице «Архив»");
+      if (arc.archived) rerender(); else location.hash = "#/archive";
     };
     $("#arc-del").onclick = async () => {
       if (!confirm(`Удалить арку «${arc.title}»? Серии не удалятся: они останутся на своих днях в разделе «Без арки».\n\nЕсли арка просто закончилась, лучше отправить её «В архив».`)) return;

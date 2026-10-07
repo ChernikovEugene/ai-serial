@@ -1,24 +1,25 @@
-// "@" autocomplete for characters and locations (and their versions) in a textarea.
+// "@" autocomplete for characters and locations (and their versions) in a textarea or a text input.
 import { esc, media, state } from "./core.js";
 
 const token = (s) => s.trim().replace(/\s+/g, "_");
 
 function caretCoords(ta) {
+  const single = ta.tagName === "INPUT"; // однострочное поле: каретка не переносится, список — под полем
   const div = document.createElement("div");
   const cs = getComputedStyle(ta);
   for (const p of ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "paddingTop", "paddingLeft",
     "paddingRight", "paddingBottom", "borderTopWidth", "borderLeftWidth", "boxSizing", "whiteSpace", "wordWrap", "tabSize"]) {
     div.style[p] = cs[p];
   }
-  Object.assign(div.style, { position: "absolute", visibility: "hidden", whiteSpace: "pre-wrap", wordWrap: "break-word",
-    width: ta.clientWidth + "px", overflow: "hidden" });
+  Object.assign(div.style, { position: "absolute", visibility: "hidden", whiteSpace: single ? "pre" : "pre-wrap", wordWrap: "break-word",
+    width: single ? "auto" : ta.clientWidth + "px", overflow: "hidden" });
   div.textContent = ta.value.slice(0, ta.selectionStart);
   const span = document.createElement("span");
   span.textContent = "​";
   div.append(span);
   document.body.append(div);
-  const top = span.offsetTop - ta.scrollTop + parseFloat(cs.lineHeight || 18);
-  const left = Math.min(span.offsetLeft, ta.clientWidth - 260);
+  const top = single ? ta.offsetHeight : span.offsetTop - ta.scrollTop + parseFloat(cs.lineHeight || 18);
+  const left = Math.min(span.offsetLeft - (single ? ta.scrollLeft : 0), ta.clientWidth - 260);
   div.remove();
   return { top, left };
 }

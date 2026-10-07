@@ -3,6 +3,7 @@ import { $, $$, api, can, closeModal, esc, isoDate, modal, MONTHS, state, STATUS
 import { newEpisodeDialog } from "./episode.js";
 import { arcDialog, bindArcDividers, ensureAssets } from "./arcs.js";
 
+const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 let cursor = null; // first day of shown month
 
 // Что показывать в календаре (галочки над сеткой); выбор запоминается в браузере
@@ -30,8 +31,8 @@ export async function renderCalendar() {
   view().innerHTML = `
     <div class="row"><h1>Календарь постинга</h1><div class="spacer"></div>
       <a class="btn" href="#/series">Серии</a>
-      <button id="prev">←</button><b class="month-title">${MONTHS[first.getMonth()]} ${first.getFullYear()}</b><button id="next">→</button>
-      <button class="ghost" id="today">Сегодня</button></div>
+      <div class="row cal-nav"><button id="prev">←</button><b class="month-title">${MONTHS[first.getMonth()]} ${first.getFullYear()}</b><button id="next">→</button>
+        <button class="ghost" id="today">Сегодня</button></div></div>
     <div class="row cal-filters">
       ${LAYERS.map(([k, name]) => `<label class="check"><input type="checkbox" data-layer="${k}" ${show[k] ? "checked" : ""}> ${name}</label>`).join("")}
       <span class="muted small">1 серия в день. Перетащите серию на другой день; клик по числу — своё событие или новая арка. Своё событие можно растянуть на несколько дней: потяните «⟩» на другой день.</span>
@@ -43,7 +44,7 @@ export async function renderCalendar() {
         const eps = byDate[iso] || [];
         const other = d.getMonth() !== first.getMonth();
         return `<div class="cal-day ${other ? "other" : ""} ${iso === today ? "today" : ""} ${iso < today ? "past" : ""}" data-date="${iso}">
-          <div class="cal-num" data-addev="${iso}" title="Добавить событие">${d.getDate()}</div>
+          <div class="cal-num" data-addev="${iso}" data-wd="${WEEKDAYS[(d.getDay() + 6) % 7]}" title="Добавить событие">${d.getDate()}</div>
           ${show.arcs && arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
           ${(evs[iso] || []).filter((ev) => (ev.builtin ? show.holidays : show.own)).map((ev) => evChip(ev)).join("")}
           ${(show.eps ? eps : []).map((e) => `<div class="cal-ep" draggable="${can.edit()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
