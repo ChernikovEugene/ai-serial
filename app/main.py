@@ -418,13 +418,131 @@ def episode_summaries(role: str = "admin") -> list[dict]:
             (max_s,))}
         fixes = {r[0]: r[1] for r in c.execute(
             "SELECT episode_id, COUNT(*) FROM comments WHERE is_fix=1 AND resolved=0 GROUP BY episode_id")}
+    arcs = schedule.load_arcs()
     for e in eps:
+        e.update(schedule.arc_info(e["number"], arcs))
         st = stats.get(e["id"], {})
         e.update(shots=st.get("shots", 0), seconds=st.get("seconds", 0), est=round(st.get("est", 0), 1),
                  over=st.get("over", 0) or 0, with_take=st.get("with_take", 0) or 0, redo=st.get("redo", 0) or 0,
                  open_fixes=fixes.get(e["id"], 0), date=schedule.date_for(e["number"], settings),
                  status_name=db.STATUS_NAMES.get(e["status"], e["status"]))
     return [e for e in eps if auth.can_see(role, e["status"])]
+
+
+def _blurb(script: str, limit: int = 170) -> str:
+    """Короткое описание серии из сценария: только действие и реплики, без «Шот N», локаций и камеры."""
+    out = []
+    for line in (script or "").splitlines():
+        t = line.strip()
+        if (not t or re.match(r"^(шот|кадр|серия)", t, re.I) or re.match(r"^(инт|нат)\.", t, re.I)
+                or t.upper().startswith("КАМЕРА")):
+            continue
+        out.append(re.sub(r"@([^\s:]+)(?::\S+)?", r"\1", t))  # @Ксю:Мерч → Ксю
+    text = " / ".join(out)
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+STATUS_PAST, STATUS_TOTAL = 5, 30
+
+
+@app.get("/api/status-window")
+def status_window(request: Request):
+    """Страница «Статус»: 30 слотов выхода — 5 прошедших дней, сегодня и дальше вперёд (если сериал начался
+    недавно, недостающие прошедшие дни добавляются впереди). Окно сдвигается само каждый день.
+    Серии, которые роль не видит (монтажёр до согласования сценария), показываются только этапом: без названия,
+    описания и ссылки (`locked`), чтобы картина оставалась полной."""
+    settings = db.get_settings()
+    today_n = schedule.number_for(date.today().isoformat(), settings)
+    first = max(1, today_n - STATUS_PAST)
+    last = first + STATUS_TOTAL - 1
+    role = request.state.user["role"]
+    all_eps = episode_summaries()
+    eps = [e for e in all_eps if e["number"] is not None and first <= e["number"] <= last]
+    with db.connect() as c:
+        scripts = {r["id"]: r["script"] or "" for r in c.execute("SELECT id, script FROM episodes")}
+    for e in eps:
+        e["has_script"] = bool(scripts.get(e["id"], "").strip())
+        e["locked"] = not auth.can_see(role, e["status"])
+        e["blurb"] = "" if e["locked"] else _blurb(scripts.get(e["id"], ""))
+        if e["locked"]:
+            e["title"] = "Сценарий ещё не согласован"
+    arcs = schedule.load_arcs()
+    slots = [{"number": n, "date": schedule.date_for(n, settings), **schedule.arc_info(n, arcs)}
+             for n in range(first, last + 1)]
+    return {"today": date.today().isoformat(), "slots": slots, "episodes": eps,
+            "arcs": [a for a in arcs if first <= a["start_number"] <= last],
+            "backlog": sum(1 for e in all_eps if e["number"] is None and auth.can_see(role, e["status"]))}
+
+
+# ---------- story arcs ----------
+
+class ArcIn(BaseModel):
+    title: str
+    start_number: int | None = None
+    start_date: str | None = None
+    notes: str = ""
+    members: list[dict] = []  # [{asset_id, version_id|null}]
+
+
+def _arc_values(a: ArcIn) -> tuple:
+    title = a.title.strip()
+    if not title:
+        raise HTTPException(400, "Назовите арку")
+    if a.start_date:
+        number = schedule.number_for(date.fromisoformat(a.start_date).isoformat())
+    else:
+        number = a.start_number
+    if not number or number < 1:
+        raise HTTPException(400, "Арка не может начинаться раньше старта сериала")
+    members = [{"asset_id": int(m["asset_id"]), "version_id": int(m["version_id"]) if m.get("version_id") else None}
+               for m in a.members if m.get("asset_id")]
+    return title, number, a.notes.strip(), db.dumps(members)
+
+
+def _arc_or_404(c, arc_id: int) -> dict:
+    row = c.execute("SELECT * FROM arcs WHERE id=?", (arc_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Арка не найдена")
+    return db.row(row)
+
+
+def _check_start_free(c, number: int, arc_id: int | None = None) -> None:
+    if c.execute("SELECT 1 FROM arcs WHERE start_number=? AND id IS NOT ?", (number, arc_id)).fetchone():
+        raise HTTPException(400, f"{date.fromisoformat(schedule.date_for(number)).strftime('%d.%m')} уже начинается другая арка")
+
+
+@app.get("/api/arcs")
+def list_arcs():
+    settings = db.get_settings()
+    return [{**a, "start_date": schedule.date_for(a["start_number"], settings)} for a in schedule.load_arcs()]
+
+
+@app.post("/api/arcs", dependencies=[Depends(auth.writer)])
+def create_arc(a: ArcIn, request: Request):
+    title, number, notes, members = _arc_values(a)
+    with db.connect() as c:
+        _check_start_free(c, number)
+        c.execute("INSERT INTO arcs(title, start_number, notes, members, created_by, created_at) VALUES (?,?,?,?,?,?)",
+                  (title, number, notes, members, uid(request), db.now()))
+    return list_arcs()
+
+
+@app.put("/api/arcs/{arc_id}", dependencies=[Depends(auth.writer)])
+def update_arc(arc_id: int, a: ArcIn):
+    title, number, notes, members = _arc_values(a)
+    with db.connect() as c:
+        _arc_or_404(c, arc_id)
+        _check_start_free(c, number, arc_id)
+        c.execute("UPDATE arcs SET title=?, start_number=?, notes=?, members=? WHERE id=?",
+                  (title, number, notes, members, arc_id))
+    return list_arcs()
+
+
+@app.delete("/api/arcs/{arc_id}", dependencies=[Depends(auth.writer)])
+def delete_arc(arc_id: int):
+    with db.connect() as c:
+        c.execute("DELETE FROM arcs WHERE id=?", (arc_id,))
+    return list_arcs()
 
 
 @app.get("/api/episodes")
@@ -448,7 +566,9 @@ def get_schedule(start: str, end: str, request: Request):
             if ev["date"] == d.isoformat() or (ev["yearly"] and ev["date"][5:] == md):
                 events.append({"id": ev["id"], "date": d.isoformat(), "title": ev["title"], "builtin": False})
         d += timedelta(days=1)
-    return {"episodes": eps, "events": events}
+    settings = db.get_settings()
+    arcs = [{**a, "start_date": schedule.date_for(a["start_number"], settings)} for a in schedule.load_arcs()]
+    return {"episodes": eps, "events": events, "arcs": [a for a in arcs if start <= a["start_date"] <= end]}
 
 
 class CalendarEventIn(BaseModel):
@@ -571,6 +691,7 @@ def get_episode(eid: int) -> dict:
     ep["over_limit"] = sum(1 for s in ep["shots"] if s["over_limit"])
     ep["incomplete"] = sum(1 for s in ep["shots"] if s["missing"])
     ep["date"] = schedule.date_for(ep["number"], ctx.settings)
+    ep.update(schedule.arc_info(ep["number"], schedule.load_arcs()))
     ep["status_name"] = db.STATUS_NAMES.get(ep["status"], ep["status"])
     ep["cast"] = episode_cast(eid)
     ep["marked"] = breakdown.has_markers(ep["script"])
@@ -640,7 +761,7 @@ def move_episode(eid: int, m: MoveIn, request: Request):
         raise HTTPException(400, "Эта дата раньше старта сериала. Поменяйте точку отсчёта в очереди")
     schedule.move(eid, number)
     if ep["number"] != number:
-        db.log(eid, uid(request), f"Перенесена: {'в бэклог' if number is None else f'серия №{number}, {schedule.date_for(number)}'}")
+        db.log(eid, uid(request), f"Перенесена: {'в бэклог' if number is None else f'на {schedule.date_for(number)}'}")
     return {"ok": True}
 
 

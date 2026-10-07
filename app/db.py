@@ -130,12 +130,20 @@ TABLES = {
         title TEXT NOT NULL,
         yearly INTEGER NOT NULL DEFAULT 0,
         created_by INTEGER""",
+    "arcs": """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        start_number INTEGER NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
+        members TEXT NOT NULL DEFAULT '[]',
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT ''""",
     "settings": """
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL""",
 }
 
-JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes"}
+JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members"}
 
 DEFAULT_SETTINGS = {
     "veo_provider": "stub",          # stub | gemini

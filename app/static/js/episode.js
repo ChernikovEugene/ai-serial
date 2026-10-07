@@ -76,10 +76,10 @@ function drawHeader() {
     <div class="ep-head">
       <div class="row">
         <a href="#/queue" class="btn ghost" title="К очереди">←</a>
-        <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `№${ep.number}` : "бэклог"}</div>
+        <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `Серия ${ep.arc_number ?? ep.number}` : "бэклог"}</div>
         <div style="flex:1;min-width:220px">
           <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
-          <div class="muted small">${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Без даты — в бэклоге"}
+          <div class="muted small">${ep.arc_id ? `Арка «${esc(ep.arc_title)}» · ` : ""}${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Без даты — в бэклоге"}
             · <a href="#" id="move-ep">${ep.number != null ? "перенести" : "назначить дату"}</a></div>
         </div>
         ${statusSelect(ep.status, 'id="ep-status"')}
@@ -142,17 +142,15 @@ function drawHeader() {
 function moveDialog() {
   const ep = E.ep;
   const m = modal(`<h1>Дата выхода</h1>
-    <div class="row"><div style="flex:1"><label>Номер серии</label><input id="mv-num" type="number" min="1" value="${ep.number ?? ""}"></div>
-      <div style="flex:1"><label>или дата</label><input id="mv-date" type="date" value="${ep.date ?? ""}"></div></div>
+    <label>Дата выхода</label><input id="mv-date" type="date" value="${ep.date ?? ""}" style="width:200px">
     <label class="check"><input type="checkbox" id="mv-pin" ${ep.pinned ? "checked" : ""}> закрепить дату (серия не сдвинется при перестановках — для праздников и инфоповодов)</label>
     <div class="row" style="margin-top:16px"><button class="ghost" id="backlog">Убрать в бэклог</button><div class="spacer"></div>
       <button class="ghost" id="cancel">Отмена</button><button class="primary" id="save">Сохранить</button></div>`);
   $("#cancel", m).onclick = closeModal;
   $("#backlog", m).onclick = async () => { await api(`/api/episodes/${E.id}/move`, { json: { number: null } }); closeModal(); renderEpisode(E.id); };
   $("#save", m).onclick = async () => {
-    const d = $("#mv-date", m).value, n = $("#mv-num", m).value;
-    const body = d && d !== ep.date ? { date: d } : { number: n ? +n : null };
-    await api(`/api/episodes/${E.id}/move`, { json: body });
+    const d = $("#mv-date", m).value;
+    if (d !== (ep.date ?? "")) await api(`/api/episodes/${E.id}/move`, { json: d ? { date: d } : { number: null } });
     await api(`/api/episodes/${E.id}/pin`, { json: { pinned: $("#mv-pin", m).checked } });
     closeModal(); renderEpisode(E.id);
   };
