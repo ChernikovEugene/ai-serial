@@ -20,7 +20,10 @@ const WD_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
 const WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
 const MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 
-const S = { filter: "all", hidePosted: false, data: null, json: "", timer: null };
+const MONTHS_NOM = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+const MONTHS_IN = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
+const S = { filter: "all", hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
+const shiftMonth = (ym, k) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + k, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 
 export function stopStatusPolling() { clearInterval(S.timer); S.timer = null; }
 
@@ -100,19 +103,23 @@ function rowHtml(r) {
 function render() {
   const data = S.data;
   const today = data.today;
-  const rows = buildRows(data, today);
-  S.rows = rows;
-  const arcAt = Object.fromEntries(data.arcs.map((a) => [a.start_number, a]));
+  const rows = buildRows(data, today); // окно в 30 серий: список и «что требует внимания»
+  // Сводка, плитки и полоска считаются по выбранному календарному месяцу
+  const mrows = buildRows(S.mdata, today);
+  S.rows = mrows;
+  const arcAt = Object.fromEntries([...data.arcs, ...S.mdata.arcs].map((a) => [a.start_number, a]));
   const by = STAGES.map(() => []);
-  rows.forEach((r) => by[r.stage].push(r.number));
+  mrows.forEach((r) => by[r.stage].push(r.number));
   const posted = by[5].length;
   const total = rows.length;
-  const tot = Math.max(total, 1);
+  const mtotal = mrows.length;
+  const tot = Math.max(mtotal, 1);
+  const mname = MONTHS_NOM[+S.month.slice(5) - 1], minn = MONTHS_IN[+S.month.slice(5) - 1];
   const lateRows = rows.filter((r) => r.late);
   const riskRows = rows.filter((r) => r.risk && !r.late);
   const inWork = by[1].length + by[2].length + by[3].length;
   // Сколько серий окна по графику должно быть выложено к концу сегодняшнего дня
-  const plan = rows.filter((r) => r.iso <= today).length;
+  const plan = mrows.filter((r) => r.iso <= today).length;
   const gap = Math.max(0, plan - posted);
   const todayRow = rows.find((r) => r.isToday);
 
@@ -143,10 +150,10 @@ function render() {
 
     <div class="sm-top">
       <div class="card">
-        <div class="sm-label">За эти ${total} дней</div>
-        <div class="sm-big">${posted}<small> / ${total}</small> <span class="muted">выложено</span></div>
+        <div class="sm-label">Выложено в ${minn} ${S.month.slice(0, 4)}</div>
+        <div class="sm-big">${posted}<small> / ${mtotal}</small> <span class="muted">выложено</span></div>
         <div class="sm-bar"><i style="width:${(posted / tot) * 100}%"></i><b style="left:${(plan / tot) * 100}%"></b></div>
-        <div class="muted small">Белая метка — где должны быть по графику к концу сегодняшнего дня: <b style="color:var(--text)">${plan}</b>. ${gap ? `Не хватает серий: ${gap}.` : "Отставания нет."}</div>
+        <div class="muted small">Белая метка — где должны быть по графику к концу сегодняшнего дня: <b style="color:var(--text)">${plan}</b>. ${mtotal ? (gap ? `Не хватает серий: ${gap}.` : "Отставания нет.") : "В этом месяце выходов нет."}</div>
       </div>
       <div class="card sm-attn">
         <div class="sm-label">Что требует внимания</div>
@@ -154,14 +161,22 @@ function render() {
       </div>
     </div>
 
+    <div class="row sm-month">
+      <button class="ghost small" id="sm-prev" title="Предыдущий месяц">‹</button>
+      <b>${mname} ${S.month.slice(0, 4)}</b>
+      <button class="ghost small" id="sm-next" title="Следующий месяц">›</button>
+      ${S.month !== today.slice(0, 7) ? `<button class="ghost small" id="sm-now">Текущий месяц</button>` : ""}
+      <span class="muted small">Сводка, плитки и полоска ниже — за этот месяц. Список серий — скользящие ${total} дней.</span>
+    </div>
+
     <div class="sm-tiles">
       ${STAGES.map((s, k) => `<div class="sm-tile" style="--c:${s.color}"><div class="sm-tile-name"><i></i>${s.name}</div><div class="sm-tile-n">${by[k].length}</div><div class="muted small">${by[k].length ? dateRanges(by[k]) : "—"}</div></div>`).join("")}
     </div>
 
     <div class="card sm-strip-card">
-      <div class="sm-label">Все ${total} дней одним взглядом: 1 клетка = 1 серия = 1 день</div>
+      <div class="sm-label">Весь ${mname.toLowerCase()} одним взглядом: 1 клетка = 1 серия = 1 день</div>
       <div class="sm-strip">
-        ${rows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/queue"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
+        ${mrows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/queue"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
           <span class="sm-arrow"></span>
           <span class="sm-sq" style="${r.stage ? `background:${STAGES[r.stage].color};color:#111317` : ""}">${r.d}${r.late ? `<i></i>` : ""}</span></a>`).join("")}
       </div>
@@ -181,21 +196,29 @@ function render() {
       || `<div class="help">В этом фильтре серий нет.</div>`}</div>`;
 
   bindArcDividers(() => load(true));
+  const go = (m) => { S.month = m; load(true); };
+  $("#sm-prev").onclick = () => go(shiftMonth(S.month, -1));
+  $("#sm-next").onclick = () => go(shiftMonth(S.month, 1));
+  $("#sm-now") && ($("#sm-now").onclick = () => go(today.slice(0, 7)));
   $$("[data-sm-filter]").forEach((b) => b.onclick = () => { S.filter = b.dataset.smFilter; render(); });
   $("#sm-hide").onchange = (e) => { S.hidePosted = e.target.checked; render(); };
 }
 
 async function load(force = false) {
   const data = await api("/api/status-window");
-  const json = JSON.stringify(data);
+  if (!S.month) S.month = data.today.slice(0, 7);
+  const mdata = await api(`/api/status-window?month=${S.month}`);
+  const json = JSON.stringify([data, mdata]);
   if (!force && json === S.json) return; // ничего не изменилось — не перерисовываем
   S.json = json;
   S.data = data;
+  S.mdata = mdata;
   render();
 }
 
 export async function renderStatus() {
   stopStatusPolling();
+  S.month = ""; // при заходе на страницу — текущий месяц
   await ensureAssets();
   await load(true);
   // «Реальное время»: раз в 30 секунд подтягиваем свежие статусы, пока открыта эта страница
