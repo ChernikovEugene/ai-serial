@@ -8,13 +8,15 @@ const STAGES = [
   { name: "Не начато", color: "#8b93a3" },
   { name: "Сценарий", color: "#f5b642" },
   { name: "Генерация", color: "#b36bff" },
-  { name: "Правки и монтаж", color: "#ff8a3d" },
+  { name: "Монтаж", color: "#ff8a3d" },
   { name: "Готов к выкладке", color: "#3ccf7e" },
   { name: "Выложено", color: "#25d0d6" },
 ];
 // Какой статус серии в приложении к какому этапу относится
-const STAGE_BY_STATUS = { dev: 1, review: 1, approved: 1, generating: 2, fixes: 3, ready: 4, posted: 5 };
-const SCRIPT_SUB = { dev: "пишется", review: "на согласовании", approved: "согласован" };
+const STAGE_BY_STATUS = { synopsis: 1, synopsis_review: 1, synopsis_ok: 1, dev: 1, review: 1, approved: 1,
+  generating: 2, fixes: 3, client_review: 3, ready: 4, posted: 5 };
+const SCRIPT_SUB = { synopsis: "синопсис", synopsis_review: "синопсис у клиента", synopsis_ok: "синопсис согласован",
+  dev: "пишется ТЗ", review: "ТЗ на проверке", approved: "ТЗ готово" };
 const SEG_LABELS = ["Сценарий", "Генерация", "Монтаж", "К выкладке", "Выложено"];
 const WD_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
 const WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
@@ -22,7 +24,7 @@ const MONTHS_GEN = ["января", "февраля", "марта", "апрел�
 
 const MONTHS_NOM = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 const MONTHS_IN = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
-const S = { stage: null, filter: "all", hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
+const S = { stage: null, hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
 const shiftMonth = (ym, k) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + k, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 
 export function stopStatusPolling() { clearInterval(S.timer); S.timer = null; }
@@ -46,7 +48,7 @@ const rng = (a) => {
 
 function stageOf(ep) {
   if (!ep) return 0;
-  if (ep.status === "dev" && !ep.has_script && !ep.shots) return 0; // серия заведена, но сценария нет
+  if (ep.status === "synopsis" && !ep.synopsis && !ep.has_script && !ep.shots) return 0; // карточка заведена, но пустая
   return STAGE_BY_STATUS[ep.status] ?? 1;
 }
 
@@ -63,7 +65,7 @@ function buildRows(data, today) {
     const todayBad = isToday && stage < 4;
     const risk = diff > 0 && diff <= 2 && stage < 4;
     const sub = stage === 1 ? SCRIPT_SUB[ep.status] : "";
-    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет сценария" : sub ? `Сценарий · ${sub}` : STAGES[stage].name;
+    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет сценария" : sub ? `Сценарий · ${sub}` : ep.status === "client_review" ? "Ролик у клиента" : STAGES[stage].name;
     let flag = "", flagCls = "";
     if (late) { flag = `Просрочено на ${-diff} ${plural(-diff)}`; flagCls = "bad"; }
     else if (todayBad) { flag = "Сегодня выход, а ролик не готов"; flagCls = "bad"; }
@@ -79,7 +81,7 @@ function buildRows(data, today) {
 }
 
 /** Как назвать серию в тексте: внутри арки «арка „Косплей“, серия 2», иначе сквозной номер. */
-const epName = (r) => (r.arcNumber ? `арка «${r.arcTitle}», серия ${r.arcNumber}` : `серия ${r.number}`); // вне арок — сквозной
+const epName = (r) => (!r.ep ? `день ${r.d} ${MONTHS_GEN[r.mon]}` : r.arcNumber ? `арка «${r.arcTitle}», серия ${r.arcNumber}` : `серия без арки`);
 
 function rowHtml(r) {
   const color = STAGES[r.stage].color;
@@ -93,7 +95,7 @@ function rowHtml(r) {
   const tag = link ? "a" : "div";
   const href = link ? ` href="#/episodes/${r.ep.id}"` : "";
   return `<${tag} class="${cls}" style="--c:${color}"${href}>
-    <div class="sm-num"><b>Серия ${r.arcNumber ?? r.number}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
+    <div class="sm-num"><b>${r.ep ? `Серия ${r.arcNumber ?? ""}`.trim() : "Свободный день"}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
     <div class="sm-info"><div class="sm-title ${r.ep ? "" : "muted"}">${title}</div><div class="sm-desc muted">${desc}</div></div>
     <div class="sm-segs">${segs}</div>
     <div class="sm-stat"><span class="status" style="--c:${color}">${esc(r.label)}</span>${r.flag ? `<span class="sm-flag ${r.flagCls}">${esc(r.flag)}</span>` : ""}</div>
@@ -117,34 +119,28 @@ function render() {
   const mname = MONTHS_NOM[+S.month.slice(5) - 1], minn = MONTHS_IN[+S.month.slice(5) - 1];
   const lateRows = rows.filter((r) => r.late);
   const riskRows = rows.filter((r) => r.risk && !r.late);
-  const inWork = by[1].length + by[2].length + by[3].length;
   // Сколько серий окна по графику должно быть выложено к концу сегодняшнего дня
   const plan = mrows.filter((r) => r.iso <= today).length;
   const gap = Math.max(0, plan - posted);
   const todayRow = rows.find((r) => r.isToday);
 
   const alerts = [];
-  lateRows.forEach((r) => alerts.push({ c: "var(--err)", h: "Опаздывает:", t: `${esc(epName(r))} — «${esc(r.ep?.title || "—")}» — ${r.isToday ? "выход сегодня" : `выход был ${-r.diff} ${plural(-r.diff)} назад`}, сейчас: ${esc(r.label.toLowerCase())}.` }));
-  riskRows.forEach((r) => alerts.push({ c: "var(--warn)", h: "Горит:", t: `${esc(epName(r))} — «${esc(r.ep?.title || "—")}» — выход через ${r.diff} ${plural(r.diff)}, сейчас: ${esc(r.label.toLowerCase())}.` }));
+  lateRows.forEach((r) => alerts.push({ c: "var(--err)", h: "Опаздывает:", t: `${esc(epName(r))}${r.ep ? ` — «${esc(r.ep.title || "без названия")}»` : ""} — ${r.isToday ? "выход сегодня" : `выход был ${-r.diff} ${plural(-r.diff)} назад`}, сейчас: ${esc(r.label.toLowerCase())}.` }));
+  riskRows.forEach((r) => alerts.push({ c: "var(--warn)", h: "Горит:", t: `${esc(epName(r))}${r.ep ? ` — «${esc(r.ep.title || "без названия")}»` : ""} — выход через ${r.diff} ${plural(r.diff)}, сейчас: ${esc(r.label.toLowerCase())}.` }));
   if (todayRow && todayRow.stage === 4) alerts.push({ c: "var(--accent)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» готова — осталось выложить.` });
   if (todayRow && todayRow.stage === 5) alerts.push({ c: "var(--ok)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» уже выложена.` });
-  if (data.backlog) alerts.push({ c: "var(--muted)", h: "Без даты:", t: `серий в бэклоге — ${data.backlog}. Назначьте им номер в разделе «Серии», и они появятся здесь.` });
+  if (data.backlog) alerts.push({ c: "var(--muted)", h: "Без даты:", t: `серий в черновиках — ${data.backlog}. Верните их в очередь в разделе «Серии», и они появятся здесь.` });
   if (!alerts.length) alerts.push({ c: "var(--ok)", h: "Всё по графику:", t: "опаздывающих серий нет." });
 
   let shown = rows;
-  if (S.filter === "late") shown = rows.filter((r) => r.late);
-  if (S.filter === "work") shown = rows.filter((r) => r.stage >= 1 && r.stage <= 3);
   if (S.hidePosted) shown = shown.filter((r) => r.stage < 5);
   if (S.stage !== null) shown = shown.filter((r) => r.stage === S.stage); // нажата плитка этапа
 
   const todayLabel = `${WD_FULL[new Date(today + "T00:00:00").getDay()]}, ${+today.slice(8)} ${MONTHS_GEN[+today.slice(5, 7) - 1]}`;
-  const span = `${rows[0].d} ${MONTHS_GEN[rows[0].mon].slice(0, 3)} — ${rows.at(-1).d} ${MONTHS_GEN[rows.at(-1).mon].slice(0, 3)}`;
-  const chip = (key, text) => `<button class="chip-btn ${S.filter === key ? "on" : ""}" data-sm-filter="${key}">${text}</button>`;
 
   view().innerHTML = `
     <div class="row sm-head">
       <h1>Статус</h1>
-      <span class="muted">${span} · 5 прошедших дней, сегодня и вперёд, всего ${total} серий. Сдвигается само каждый день.</span>
       <div class="spacer"></div>
       <div class="sm-today">Сегодня: ${todayLabel}</div>
     </div>
@@ -177,7 +173,7 @@ function render() {
     <div class="card sm-strip-card">
       <div class="sm-label">Весь ${mname.toLowerCase()} одним взглядом: 1 клетка = 1 серия = 1 день</div>
       <div class="sm-strip">
-        ${mrows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/queue"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
+        ${mrows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/series"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
           <span class="sm-arrow"></span>
           <span class="sm-sq" style="${r.stage ? `background:${STAGES[r.stage].color};color:#111317` : ""}">${r.d}${r.late ? `<i></i>` : ""}</span></a>`).join("")}
       </div>
@@ -186,7 +182,6 @@ function render() {
 
     <div class="row sm-filters">
       ${S.stage !== null ? `<button class="chip-btn on" id="sm-stage-reset" style="--c:${STAGES[S.stage].color}"><i></i>Этап: ${STAGES[S.stage].name} · показано ${shown.length} ✕</button>` : ""}
-      ${chip("all", `Все · ${total}`)}${chip("late", `Опаздывают · ${lateRows.length}`)}${chip("work", `В работе · ${inWork}`)}
       <label class="check"><input type="checkbox" id="sm-hide" ${S.hidePosted ? "checked" : ""}> Скрыть выложенные</label>
     </div>
 
@@ -194,7 +189,7 @@ function render() {
       <div class="sm-num">Серия</div><div class="sm-info">О чём ролик</div>
       <div class="sm-segs">${SEG_LABELS.map((l) => `<span>${l}</span>`).join("")}</div><div class="sm-stat">Статус</div>
     </div>
-    <div class="sm-rows">${shown.map((r) => (S.filter === "all" && arcAt[r.number] ? arcDivider(arcAt[r.number]) : "") + rowHtml(r)).join("")
+    <div class="sm-rows">${shown.map((r) => (arcAt[r.number] ? arcDivider(arcAt[r.number]) : "") + rowHtml(r)).join("")
       || `<div class="help">В этом фильтре серий нет.</div>`}</div>`;
 
   bindArcDividers(() => load(true));
@@ -202,7 +197,6 @@ function render() {
   $("#sm-prev").onclick = () => go(shiftMonth(S.month, -1));
   $("#sm-next").onclick = () => go(shiftMonth(S.month, 1));
   $("#sm-now") && ($("#sm-now").onclick = () => go(today.slice(0, 7)));
-  $$("[data-sm-filter]").forEach((b) => b.onclick = () => { S.filter = b.dataset.smFilter; render(); });
   $$("[data-sm-stage]").forEach((t) => {
     const toggle = () => {
       const k = +t.dataset.smStage;

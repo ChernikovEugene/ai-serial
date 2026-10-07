@@ -16,27 +16,44 @@ from . import db
 
 COOKIE = "studio_session"
 SESSION_DAYS = 30
-ROLES = {"admin": "Продюсер", "writer": "Сценарист", "editor": "Монтажёр",
+ROLES = {"admin": "Продюсер", "writer": "Сценарист-креативщик", "editor": "Нейронщик-монтажёр",
          "viewer": "Зритель (смотрит и комментирует)"}
+# Обязанности ролей — показываются на странице «Команда».
+ROLE_DUTIES = {
+    "writer": ["Пишет синопсисы арок и серий (раздел «Серии»)",
+               "Отправляет синопсисы клиенту на согласование (PDF арки)",
+               "Прописывает подробное ТЗ серии: сценарий, шоты, персонажи, локации",
+               "Пишет описание для поста к каждой серии"],
+    "editor": ["Берёт серии с готовым ТЗ (раздел «Продакшн»)",
+               "Генерирует шоты в нейросети и монтирует ролик",
+               "Сдаёт ролик продюсеру и клиенту на согласование",
+               "Публикует готовые ролики и отмечает «Выложено»"],
+    "admin": ["Следит за всеми статусами и сроками (раздел «Статус»)",
+              "Проверяет ТЗ и ролики, ведёт согласование с клиентом",
+              "Управляет командой и настройками"],
+}
 
 # Who may do what. The API checks these; the UI mirrors them (see `can` in static/js/core.js).
 WRITE_ROLES = ("admin", "writer")   # script, shots content, library, schedule
 GEN_ROLES = ("admin", "editor")     # prompts, generation, takes, re-dos
 
 # Statuses a role may set. The editor can also send a script back to the writer ("review").
+# Сценарист ведёт серию от синопсиса до ТЗ (включая согласование синопсисов с клиентом).
+# Монтажёр берёт серию с готовым ТЗ: генерация, монтаж, показ ролика клиенту, выкладка.
+WRITER_STATUSES = {"synopsis", "synopsis_review", "synopsis_ok", "dev", "review"}
 STATUS_TARGETS = {
     "admin": None,  # any
-    "writer": {"dev", "review"},
-    "editor": {"review", "generating", "fixes", "ready"},
+    "writer": WRITER_STATUSES,
+    "editor": {"review", "generating", "fixes", "client_review", "ready", "posted"},
 }
 # Status a role may change an episode FROM (None = any).
 STATUS_SOURCES = {
     "admin": None,
-    "writer": {"dev", "review"},
-    "editor": {"approved", "generating", "fixes", "ready"},
+    "writer": WRITER_STATUSES,
+    "editor": {"approved", "generating", "fixes", "client_review", "ready"},
 }
-# The editor only sees episodes whose script is already approved.
-EDITOR_VISIBLE = {"approved", "generating", "fixes", "ready", "posted"}
+# The editor only sees episodes whose script (ТЗ) is ready.
+EDITOR_VISIBLE = {"approved", "generating", "fixes", "client_review", "ready", "posted"}
 
 
 def can_see(role: str, status: str) -> bool:

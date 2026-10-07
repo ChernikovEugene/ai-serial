@@ -1,6 +1,13 @@
 // Settings (Veo, breakdown, GitHub) and the publish stub. The team lives in team.js.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
 
+/** День выхода серии № 1 по точке отсчёта (anchor_number выходит anchor_date). */
+function firstDay(m) {
+  const d = new Date(m.anchor_date + "T00:00:00");
+  d.setDate(d.getDate() + 1 - m.anchor_number);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export async function renderSettings() {
   const s = await api("/api/settings");
   const admin = can.admin();
@@ -11,28 +18,24 @@ export async function renderSettings() {
   view().innerHTML = `
     <h1>Настройки</h1>
     ${admin ? "" : `<p class="muted">Менять настройки может только администратор.</p>`}
-    <div class="two-col">
-      <div class="card">
-        <h2 style="margin-top:0">Veo 3</h2>
+    <div class="card" style="margin-bottom:14px">
+      <h2 style="margin-top:0">Проект</h2>
+      ${field("series_title", "Название сериала (стоит в PDF для клиента)")}
+      <label>Первая серия сериала выходит</label>
+      <div class="row"><input id="anchor-d" type="date" value="${firstDay(state.meta)}" style="width:180px" ${can.write() ? "" : "disabled"}>
+        ${can.write() ? `<button id="anchor-save">Применить</button>` : ""}
+        <span class="muted small">дальше по одной серии в день; закреплённые за датой (📌) серии не сдвигаются</span></div>
+    </div>
+    <div class="card">
+        <h2 style="margin-top:0">Подключение к нейросети (Veo)</h2>
+        <p class="muted small">Формат, модель, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
         <label>Режим</label>
         <select data-k="veo_provider" ${ro}>
           <option value="stub" ${s.veo_provider === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
           <option value="gemini" ${s.veo_provider === "gemini" ? "selected" : ""}>Gemini API — реальная генерация (платно)</option></select>
         ${field("veo_api_key", "API-ключ Google AI Studio (хранится только у вас в data/studio.db)", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
-        ${field("veo_model", "Модель (фото-референсы есть только у Veo 3.1)")}
-        <div class="row"><div style="flex:1">${field("aspect_ratio", "Соотношение сторон")}</div>
-          <div style="flex:1">${field("resolution", "Разрешение (720p / 1080p)")}</div>
-          <div style="flex:1">${field("veo_parallel", "Одновременных генераций")}</div></div>
+        <div style="max-width:260px">${field("veo_parallel", "Одновременных генераций")}</div>
         <p class="muted small">Число одновременных генераций применяется после перезапуска приложения.</p>
-      </div>
-      <div class="card">
-        <h2 style="margin-top:0">Разбивка и промпты</h2>
-        ${field("style", "Общий стиль сериала (в начале каждого промпта)", "textarea")}
-        ${field("negative_prompt", "Негативный промпт по умолчанию", "textarea")}
-        <div class="row"><div style="flex:1">${field("dialogue_language", "Язык реплик")}</div>
-          <div style="flex:1">${field("words_per_second", "Темп речи, слов/с")}</div>
-          <div style="flex:1">${field("max_shot_seconds", "Лимит шота, с")}</div></div>
-      </div>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">GitHub (кнопка «Правка»)</h2>
@@ -50,6 +53,11 @@ export async function renderSettings() {
       toast("Настройки сохранены"); renderSettings();
     };
   }
+  $("#anchor-save") && ($("#anchor-save").onclick = async () => {
+    await api("/api/schedule/anchor", { method: "PUT", json: { number: 1, date: $("#anchor-d").value } });
+    state.meta = await api("/api/meta");
+    toast("Дата старта обновлена: даты серий пересчитаны");
+  });
 }
 
 export function renderPublish() {

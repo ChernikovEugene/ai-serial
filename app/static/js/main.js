@@ -1,6 +1,8 @@
 // Router, navigation and login.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
-import { renderQueue } from "./queue.js";
+import { renderSeries, renderArc } from "./series.js";
+import { renderProduction } from "./production.js";
+import { renderTech } from "./tech.js";
 import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
 import { renderAssets, renderAsset } from "./assets.js";
@@ -10,6 +12,9 @@ import { renderTeam } from "./team.js";
 import { initFeedback, stopFeedback } from "./feedback.js";
 
 let lastHash = location.hash;
+
+/** Стартовая страница роли: сценарист — «Серии», монтажёр — «Продакшн», остальные — «Статус». */
+const homeFor = (role) => ({ writer: "#/series", editor: "#/production" }[role] || "#/status");
 
 async function route() {
   if (window.__scriptDirty?.() && !confirm("Сценарий не сохранён. Уйти без сохранения?")) {
@@ -28,30 +33,36 @@ async function route() {
   }
   drawNav(section || "status");
   try {
-    if (!section || section === "status") return await renderStatus();
-    if (section === "queue") return await renderQueue();
+    if (!section) { location.replace(homeFor(state.meta.user.role)); return; }
+    if (section === "status") return await renderStatus();
+    if (section === "production") return await renderProduction();
+    if (section === "queue") { location.replace("#/series"); return; }
+    if (section === "series") return id ? await renderArc(id) : await renderSeries();
     if (section === "calendar") return await renderCalendar();
-    if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderQueue();
+    if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderSeries();
     if (section === "library") return await renderAssets("character");
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
     if (section === "team") return await renderTeam();
+    if (section === "tech") return await renderTech();
     if (section === "settings") return await renderSettings();
     if (section === "publish") return renderPublish();
   } catch (e) { console.error(e); }
 }
 
 function drawNav(section) {
-  const active = section === "episodes" ? "queue" : ["characters", "locations", "library"].includes(section) ? "library" : section;
+  const active = section === "episodes" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
   $("#nav").innerHTML = `
     <div class="brand">🎬 Студия</div>
-    <a href="#/status" data-nav="status">Статус</a>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
-    <a href="#/queue" data-nav="queue">Серии</a>
+    <a href="#/status" data-nav="status">Статус</a>
+    <a href="#/series" data-nav="series">Серии</a>
+    <a href="#/production" data-nav="production">Продакшн</a>
     <a href="#/publish" data-nav="publish">Публикация</a>
     <a href="#/characters" data-nav="library">Библиотека</a>
+    <a href="#/tech" data-nav="tech">Тех. требования</a>
     <a href="#/team" data-nav="team">Команда</a>
     <a href="#/settings" data-nav="settings">Настройки</a>
     <div class="nav-foot">
@@ -72,7 +83,7 @@ function drawNav(section) {
 async function renderLogin() {
   $("#nav").hidden = true;
   const st = await api("/api/auth/state");
-  if (st.user) { state.meta = null; location.hash = "#/status"; return; }
+  if (st.user) { state.meta = null; location.hash = "#/"; return; }
   const setup = !st.has_users;
   view().innerHTML = `<div class="login card">
     <h1>🎬 Студия сериала</h1>
@@ -85,7 +96,7 @@ async function renderLogin() {
     const body = { login: $("#l-login").value, password: $("#l-pass").value, name: setup ? $("#l-name").value : "" };
     await api(setup ? "/api/auth/setup" : "/api/auth/login", { json: body });
     state.meta = null;
-    location.hash = "#/status";
+    location.hash = "#/";
   };
   $("#l-go").onclick = go;
   $("#l-pass").addEventListener("keydown", (e) => e.key === "Enter" && go());
@@ -94,4 +105,4 @@ async function renderLogin() {
 
 window.addEventListener("hashchange", route);
 window.addEventListener("unhandledrejection", (e) => { if (e.reason?.message !== "auth") console.error(e.reason); });
-if (!location.hash || location.hash === "#/") location.hash = "#/status"; else route();
+if (!location.hash) location.hash = "#/"; else route();

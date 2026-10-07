@@ -188,6 +188,7 @@ def meta(request: Request):
         "user": request.state.user,
         "statuses": [{"key": k, "name": n} for k, n in db.STATUSES],
         "roles": auth.ROLES,
+        "role_duties": auth.ROLE_DUTIES,
         "status_flow": status_flow(request.state.user["role"]),
         "veo_provider": s["veo_provider"], "veo_model": s["veo_model"],
         "max_shot_seconds": int(s["max_shot_seconds"]), "words_per_second": float(s["words_per_second"]),
@@ -293,6 +294,19 @@ def save_shot(c, s: dict):
             (s["episode_id"], *vals, db.now())).lastrowid
 
 
+def refresh_all_prompts() -> int:
+    """Пересобрать промпты шотов после смены общих настроек или шаблонов ТТ. Шоты с закреплённым вручную промптом
+    и выложенные серии не трогаются. Возвращает, сколько шотов пересобрано."""
+    ctx = Ctx()
+    with db.connect() as c:
+        shots = db.rows(c.execute("SELECT s.* FROM shots s JOIN episodes e ON e.id=s.episode_id "
+                                  "WHERE s.prompt_locked=0 AND e.status<>'posted'"))
+        for sh in shots:
+            refresh_shot(sh, ctx)
+            save_shot(c, sh)
+    return len(shots)
+
+
 def episode_cast(eid: int) -> dict:
     with db.connect() as c:
         return {r["asset_id"]: r["version_id"] for r in c.execute("SELECT * FROM episode_cast WHERE episode_id=?", (eid,))}
@@ -308,9 +322,9 @@ def load_episode_row(eid: int) -> dict:
 
 def writer_may_edit(request: Request, status: str) -> None:
     """Once the script is approved only the producer can change it, so the editor works on a stable text."""
-    if request.state.user["role"] == "writer" and status not in ("dev", "review"):
-        raise HTTPException(403, "Сценарий уже согласован — править его может только продюсер. "
-                                 "Верните серию в «В разработке» или попросите продюсера")
+    if request.state.user["role"] == "writer" and status not in auth.WRITER_STATUSES:
+        raise HTTPException(403, "ТЗ уже готово — править серию может только продюсер. "
+                                 "Верните серию в «Пишется ТЗ» или попросите продюсера")
 
 
 def incomplete_shots(eid: int) -> list[str]:
@@ -420,8 +434,8 @@ def episode_summaries(role: str = "admin") -> list[dict]:
     settings = db.get_settings()
     max_s = int(settings.get("max_shot_seconds") or 8)
     with db.connect() as c:
-        eps = db.rows(c.execute("SELECT id, number, pinned, planned_date, title, status, posted_at, updated_at "
-                                "FROM episodes ORDER BY number IS NULL, number, id"))
+        eps = db.rows(c.execute("SELECT id, number, pinned, planned_date, title, status, posted_at, updated_at, "
+                                "arc_id, position, synopsis, post_text FROM episodes ORDER BY number IS NULL, number, position, id"))
         stats = {r["episode_id"]: dict(r) for r in c.execute(
             "SELECT episode_id, COUNT(*) AS shots, COALESCE(SUM(duration),0) AS seconds, "
             "COALESCE(SUM(est_seconds),0) AS est, SUM(est_seconds > ?) AS over, "
@@ -429,9 +443,9 @@ def episode_summaries(role: str = "admin") -> list[dict]:
             (max_s,))}
         fixes = {r[0]: r[1] for r in c.execute(
             "SELECT episode_id, COUNT(*) FROM comments WHERE is_fix=1 AND resolved=0 GROUP BY episode_id")}
-    arcs = schedule.load_arcs()
+    arc_nums = schedule.arc_numbers(eps, schedule.load_arcs())
     for e in eps:
-        e.update(schedule.arc_info(e["number"], arcs))
+        e.update(arc_nums[e["id"]])
         st = stats.get(e["id"], {})
         e.update(shots=st.get("shots", 0), seconds=st.get("seconds", 0), est=round(st.get("est", 0), 1),
                  over=st.get("over", 0) or 0, with_take=st.get("with_take", 0) or 0, redo=st.get("redo", 0) or 0,
@@ -485,24 +499,27 @@ def status_window(request: Request, month: str | None = None):
     for e in eps:
         e["has_script"] = bool(scripts.get(e["id"], "").strip())
         e["locked"] = not auth.can_see(role, e["status"])
-        e["blurb"] = "" if e["locked"] else _blurb(scripts.get(e["id"], ""))
+        synopsis = " ".join((e.get("synopsis") or "").split())
+        e["blurb"] = "" if e["locked"] else (_blurb(scripts.get(e["id"], "")) or synopsis[:170])
         if e["locked"]:
             e["title"] = "Сценарий ещё не согласован"
     arcs = schedule.load_arcs()
-    slots = [{"number": n, "date": schedule.date_for(n, settings), **schedule.arc_info(n, arcs)}
-             for n in range(first, last + 1)]
+    by_num = {e["number"]: e for e in eps}
+    none = {"arc_id": None, "arc_title": "", "arc_number": None}
+    slots = [{"number": n, "date": schedule.date_for(n, settings),
+              **({k: by_num[n][k] for k in none} if n in by_num else none)} for n in range(first, last + 1)]
     return {"today": date.today().isoformat(), "slots": slots, "episodes": eps,
-            "arcs": [a for a in arcs if first <= a["start_number"] <= last],
+            "arcs": [a for a in arcs if a["start_number"] and first <= a["start_number"] <= last],
             "backlog": sum(1 for e in all_eps if e["number"] is None and auth.can_see(role, e["status"]))}
 
 
 # ---------- story arcs ----------
+# Арка — группа серий (episodes.arc_id) со своим синопсисом, участниками и статусом согласования синопсисов.
+# Серии арки идут в общей очереди выхода (1 серия в день); номер серии внутри арки считается заново с 1.
 
 class ArcIn(BaseModel):
     title: str
-    start_number: int | None = None
-    start_date: str | None = None
-    notes: str = ""
+    notes: str = ""           # синопсис арки / ключевые детали
     members: list[dict] = []  # [{asset_id, version_id|null}]
 
 
@@ -510,15 +527,9 @@ def _arc_values(a: ArcIn) -> tuple:
     title = a.title.strip()
     if not title:
         raise HTTPException(400, "Назовите арку")
-    if a.start_date:
-        number = schedule.number_for(date.fromisoformat(a.start_date).isoformat())
-    else:
-        number = a.start_number
-    if not number or number < 1:
-        raise HTTPException(400, "Арка не может начинаться раньше старта сериала")
     members = [{"asset_id": int(m["asset_id"]), "version_id": int(m["version_id"]) if m.get("version_id") else None}
                for m in a.members if m.get("asset_id")]
-    return title, number, a.notes.strip(), db.dumps(members)
+    return title, a.notes.strip(), db.dumps(members)
 
 
 def _arc_or_404(c, arc_id: int) -> dict:
@@ -528,43 +539,285 @@ def _arc_or_404(c, arc_id: int) -> dict:
     return db.row(row)
 
 
-def _check_start_free(c, number: int, arc_id: int | None = None) -> None:
-    if c.execute("SELECT 1 FROM arcs WHERE start_number=? AND id IS NOT ?", (number, arc_id)).fetchone():
-        raise HTTPException(400, f"{date.fromisoformat(schedule.date_for(number)).strftime('%d.%m')} уже начинается другая арка")
+def _arc_id(arc_id: str) -> int | None:
+    """В адресах «none» = серии без арки."""
+    return None if arc_id == "none" else int(arc_id)
 
 
 @app.get("/api/arcs")
 def list_arcs():
     settings = db.get_settings()
-    return [{**a, "start_date": schedule.date_for(a["start_number"], settings)} for a in schedule.load_arcs()]
+    names = dict(db.ARC_STATUSES)
+    return [{**a, "status_name": names.get(a["status"], a["status"]),
+             "start_date": schedule.date_for(a["start_number"], settings),
+             "end_date": schedule.date_for(a["end_number"], settings)} for a in schedule.load_arcs()]
 
 
 @app.post("/api/arcs", dependencies=[Depends(auth.writer)])
 def create_arc(a: ArcIn, request: Request):
-    title, number, notes, members = _arc_values(a)
+    title, notes, members = _arc_values(a)
     with db.connect() as c:
-        _check_start_free(c, number)
-        c.execute("INSERT INTO arcs(title, start_number, notes, members, created_by, created_at) VALUES (?,?,?,?,?,?)",
-                  (title, number, notes, members, uid(request), db.now()))
-    return list_arcs()
+        # start_number больше не используется (день начала считается по сериям арки), но в базах до v2 он NOT NULL
+        arc_id = c.execute("INSERT INTO arcs(title, start_number, notes, members, created_by, created_at) VALUES (?,0,?,?,?,?)",
+                           (title, notes, members, uid(request), db.now())).lastrowid
+    return next(x for x in list_arcs() if x["id"] == arc_id)
 
 
 @app.put("/api/arcs/{arc_id}", dependencies=[Depends(auth.writer)])
 def update_arc(arc_id: int, a: ArcIn):
-    title, number, notes, members = _arc_values(a)
+    title, notes, members = _arc_values(a)
     with db.connect() as c:
         _arc_or_404(c, arc_id)
-        _check_start_free(c, number, arc_id)
-        c.execute("UPDATE arcs SET title=?, start_number=?, notes=?, members=? WHERE id=?",
-                  (title, number, notes, members, arc_id))
-    return list_arcs()
+        c.execute("UPDATE arcs SET title=?, notes=?, members=? WHERE id=?", (title, notes, members, arc_id))
+    return next(x for x in list_arcs() if x["id"] == arc_id)
 
 
 @app.delete("/api/arcs/{arc_id}", dependencies=[Depends(auth.writer)])
 def delete_arc(arc_id: int):
+    """Серии не удаляются: они остаются в очереди «без арки»."""
     with db.connect() as c:
+        c.execute("UPDATE episodes SET arc_id=NULL WHERE arc_id=?", (arc_id,))
         c.execute("DELETE FROM arcs WHERE id=?", (arc_id,))
     return list_arcs()
+
+
+class ArcStatusIn(BaseModel):
+    status: str
+
+
+@app.post("/api/arcs/{arc_id}/status", dependencies=[Depends(auth.writer)])
+def set_arc_status(arc_id: int, s: ArcStatusIn, request: Request):
+    """Согласование синопсисов с клиентом идёт по арке целиком: статус переносится на её серии,
+    которые ещё на этапе синопсиса (серии, ушедшие дальше, не трогаются)."""
+    if s.status not in db.ARC_TO_EPISODE:
+        raise HTTPException(400, "Неизвестный статус арки")
+    with db.connect() as c:
+        arc = _arc_or_404(c, arc_id)
+        c.execute("UPDATE arcs SET status=? WHERE id=?", (s.status, arc_id))
+        stage = tuple(db.SYNOPSIS_STAGE)
+        changed = [r[0] for r in c.execute(
+            f"SELECT id FROM episodes WHERE arc_id=? AND status IN ({','.join('?' * len(stage))})", (arc_id, *stage))]
+        c.execute(f"UPDATE episodes SET status=?, updated_at=? WHERE arc_id=? AND status IN ({','.join('?' * len(stage))})",
+                  (db.ARC_TO_EPISODE[s.status], db.now(), arc_id, *stage))
+    names = dict(db.ARC_STATUSES)
+    for eid in changed:
+        db.log(eid, uid(request), f"Арка «{arc['title']}»: {names[s.status].lower()}")
+    return {"ok": True}
+
+
+class CardIn(BaseModel):
+    title: str = ""
+    synopsis: str = ""
+    draft: bool = False
+
+
+@app.post("/api/arcs/{arc_id}/episodes", dependencies=[Depends(auth.writer)])
+def add_arc_episode(arc_id: str, card: CardIn, request: Request):
+    """Новая карточка серии в арке: встаёт в очередь в конец арки (или в черновики)."""
+    aid = _arc_id(arc_id)
+    if aid is not None:
+        with db.connect() as c:
+            _arc_or_404(c, aid)
+    e = EpisodeIn(title=card.title, synopsis=card.synopsis, arc_id=aid, backlog=card.draft)
+    return get_episode(create_episode_row(e, uid(request)))
+
+
+class OrderIn(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/arcs/{arc_id}/order", dependencies=[Depends(auth.writer)])
+def order_arc(arc_id: str, o: OrderIn, request: Request):
+    schedule.reorder_arc(_arc_id(arc_id), o.ids)
+    return {"ok": True}
+
+
+@app.post("/api/schedule/reorder", dependencies=[Depends(auth.writer)])
+def reorder_schedule(o: OrderIn):
+    schedule.reorder_queue(o.ids)
+    return {"ok": True}
+
+
+@app.get("/api/production")
+def production(request: Request):
+    """Доска «Продакшн»: все серии в очереди. Серии, которые роль ещё не видит (ТЗ не готово), приходят
+    с `locked` — только название, дата и арка, без открытия."""
+    role = request.state.user["role"]
+    eps = [e for e in episode_summaries() if e["number"] is not None]
+    for e in eps:
+        e["locked"] = not auth.can_see(role, e["status"])
+    return eps
+
+
+class EpisodeArcIn(BaseModel):
+    arc_id: int | None = None
+
+
+@app.post("/api/episodes/{eid}/arc", dependencies=[Depends(auth.writer)])
+def move_to_arc(eid: int, a: EpisodeArcIn, request: Request):
+    """Перенести серию в другую арку (в конец её очереди)."""
+    ep = load_episode_row(eid)
+    with db.connect() as c:
+        if a.arc_id is not None:
+            _arc_or_404(c, a.arc_id)
+        c.execute("UPDATE episodes SET arc_id=? WHERE id=?", (a.arc_id, eid))
+    if ep["number"] is not None and not ep["pinned"]:
+        schedule.append_to_arc(eid, a.arc_id)
+    db.log(eid, uid(request), "Перенесена в другую арку")
+    return {"ok": True}
+
+
+@app.post("/api/episodes/{eid}/queue", dependencies=[Depends(auth.writer)])
+def queue_episode(eid: int, request: Request):
+    """Из черновиков обратно в очередь — в конец своей арки."""
+    ep = load_episode_row(eid)
+    number = schedule.append_to_arc(eid, ep["arc_id"])
+    db.log(eid, uid(request), f"Из черновиков в очередь: выход {schedule.date_for(number)}")
+    return {"ok": True}
+
+
+MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
+              "ноября", "декабря"]
+
+
+def _ru_date(iso: str | None) -> str:
+    if not iso:
+        return ""
+    d = date.fromisoformat(iso)
+    return f"{d.day} {MONTHS_GEN[d.month - 1]}"
+
+
+def _streaks() -> str:
+    """Вертикальные «шторки» тёмного слайда PARI: полосы разной ширины и плотности поверх бирюзового свечения."""
+    import random
+    rnd, x, out = random.Random(7), 0, []
+    while x < 1280:
+        w = rnd.randint(14, 46)
+        out.append(f'<i style="left:{x}px;width:{w}px;--a:{rnd.uniform(.25, .7):.2f}"></i>')
+        x += w - rnd.randint(2, 8)
+    return '<div class="streaks">' + "".join(out) + "</div>"
+
+
+@app.get("/api/arcs/{arc_id}/pdf")
+def arc_pdf(arc_id: int):
+    """Синопсисы арки для клиента в стиле презентации PARI (16:9): «Скачать PDF» собирает файл в браузере,
+    «Печать» — запасной путь.
+    В выгрузку идут серии арки, стоящие в очереди (черновики — нет)."""
+    from html import escape as h
+    arc = next((a for a in list_arcs() if a["id"] == arc_id), None)
+    if not arc:
+        raise HTTPException(404, "Арка не найдена")
+    eps = [e for e in episode_summaries() if e["arc_id"] == arc_id and e["number"] is not None]
+    eps.sort(key=lambda e: e["number"])
+    series = db.get_settings().get("series_title") or "Сериал"
+    assets = {a["id"]: a for a in load_assets()}
+    members = []
+    for m in arc["members"]:
+        a = assets.get(m["asset_id"])
+        if a:
+            v = next((v for v in a["versions"] if v["id"] == m["version_id"]), None)
+            members.append(a["name"] + (f" · {v['label']}" if v else ""))
+    span = (f"{_ru_date(arc['start_date'])} — {_ru_date(arc['end_date'])}" if arc["start_date"] else "даты не назначены")
+    n = len(eps)
+    n_word = "серия" if n % 10 == 1 and n % 100 != 11 else "серии" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "серий"
+    # Слайды 16:9 в стиле презентации PARI (Figma): тёмная обложка с бирюзовым свечением, бирюзовые листы с карточками
+    def card(e):
+        return f"""<article class="ep"><h3>{e['arc_number']}. «{h((e['title'] or 'Без названия').upper())}»</h3>
+          <div class="card"><div class="date">{_ru_date(e['date'])}</div><p>{h(e['synopsis'] or 'Синопсис пока не написан.')}</p></div></article>"""
+    per = 6
+    pages = "".join(f"""<section class="sheet teal"><div class="shape s1"></div><div class="shape s2"></div>
+  <div class="grid">{"".join(card(e) for e in eps[k:k + per])}</div>
+  <div class="pno dark">{k // per + 2}</div></section>""" for k in range(0, len(eps), per))
+    toc = "".join(f"<li><b>{e['arc_number']}.</b> «{h(e['title'] or 'Без названия')}» <span>{_ru_date(e['date'])}</span></li>" for e in eps)
+    page = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>{h(arc['title'])} — синопсисы</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Sans+Extra+Condensed:wght@800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  @page {{ size: 338.67mm 190.5mm; margin: 0; }}
+  :root {{ --teal: #00c7b2; --teal-light: #77f6e8; --card: #0a3833; --ink: #161616; --text: #ffffff; --muted: #b9c9c6; }}
+  * {{ box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  body {{ margin: 0; background: #2b2b2b; font: 15px/1.45 Inter, system-ui, sans-serif; color: var(--text); }}
+  .bar {{ position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 12px 20px;
+         background: #111; color: #ddd; font-size: 14px; }}
+  .bar button {{ background: var(--teal); color: #04110e; border: 0; border-radius: 8px; padding: 9px 16px; font-weight: 600; cursor: pointer; }}
+  .bar button.ghost {{ background: transparent; color: #ddd; border: 1px solid #555; }}
+  .bar button:disabled {{ opacity: .6; cursor: default; }}
+  .sheet {{ width: 1280px; height: 720px; margin: 20px auto; padding: 56px 64px; position: relative; overflow: hidden; page-break-after: always; }}
+  .head {{ font: 900 108px/.92 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; letter-spacing: -.5px; margin: 0; }}
+  .pno {{ position: absolute; right: 40px; bottom: 26px; font-size: 22px; color: var(--teal); }}
+  .pno.dark {{ color: #111; }}
+  /* обложка: тёмный слайд */
+  .sheet.cover {{ background:
+      radial-gradient(ellipse 36% 90% at 50% 80%, rgba(0,199,178,.8), rgba(0,199,178,.22) 55%, rgba(0,199,178,0) 78%),
+      radial-gradient(ellipse 24% 70% at 80% 10%, rgba(0,199,178,.32), rgba(0,199,178,0) 72%),
+      var(--ink); }}
+  .streaks {{ position: absolute; inset: 0; pointer-events: none; }}
+  .streaks i {{ position: absolute; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(22,22,22,0), rgba(22,22,22,var(--a)), rgba(22,22,22,0)); }}
+  .cover > *:not(.streaks):not(.pno) {{ position: relative; }}
+  .cover .kicker {{ color: var(--teal); font: 800 20px "Fira Sans Extra Condensed", sans-serif; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 22px; }}
+  .cover .cols {{ display: grid; grid-template-columns: 1fr 480px; gap: 48px; margin-top: 34px; }}
+  .cover .lead {{ font-size: 17px; white-space: pre-wrap; max-width: 640px; }}
+  .cover .meta {{ margin-top: 18px; color: var(--muted); font-size: 15px; }}
+  .glass {{ background: rgba(18,24,23,.55); border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 22px 26px; }}
+  .glass h4 {{ margin: 0 0 10px; font: 800 18px "Fira Sans Extra Condensed", sans-serif; letter-spacing: .06em; text-transform: uppercase; color: var(--teal); }}
+  .glass ul {{ margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }}
+  .glass li span {{ color: var(--muted); font-size: 13px; margin-left: 6px; }}
+  .chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }}
+  .chips span {{ border: 1px solid rgba(0,199,178,.6); color: var(--teal-light); border-radius: 99px; padding: 4px 14px; font-size: 14px; }}
+  /* листы с сериями: бирюзовый слайд */
+  .sheet.teal {{ background: linear-gradient(180deg, var(--teal) 0%, #10d9c3 70%, var(--teal-light) 100%); }}
+  .shape {{ position: absolute; background: rgba(255,255,255,.10); }}
+  .shape.s1 {{ width: 520px; height: 520px; left: -200px; top: -260px; transform: rotate(32deg); }}
+  .shape.s2 {{ width: 640px; height: 640px; right: -260px; bottom: -380px; transform: rotate(-28deg); background: rgba(255,255,255,.14); }}
+  .grid {{ position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 18px; }}
+  .ep h3 {{ margin: 0 0 12px; text-align: center; color: #111; font: 900 28px/1 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; }}
+  .card {{ background: var(--card); border-radius: 6px; padding: 22px 28px; min-height: 214px; }}
+  .card .date {{ color: var(--teal-light); font-size: 13px; margin-bottom: 10px; }}
+  .card p {{ margin: 0; white-space: pre-wrap; }}
+  @media print {{ body {{ background: none; }} .bar {{ display: none; }} .sheet {{ margin: 0; zoom: 1; }} }}
+</style></head><body>
+<div class="bar"><button id="dl" onclick="downloadPdf()">Скачать PDF</button>
+  <button class="ghost" onclick="print()">Печать</button>
+  <span id="msg">Файл сохранится в «Загрузки». Серий в выгрузке: {n}{' (черновики не входят)' if arc['drafts'] else ''}.</span></div>
+<section class="sheet cover">{_streaks()}
+  <div class="kicker">{h(series)} · синопсисы на согласование</div>
+  <h1 class="head">{h(arc['title'])}</h1>
+  <div class="cols">
+    <div><div class="lead">{h(arc['notes']) if arc['notes'] else 'Синопсис арки пока не написан.'}</div>
+      <div class="meta">{n} {n_word} · {span}</div>
+      {('<div class="chips">' + ''.join(f'<span>{h(m)}</span>' for m in members) + '</div>') if members else ''}</div>
+    <div class="glass"><h4>Серии арки</h4><ul>{toc or '<li>Серий пока нет</li>'}</ul></div>
+  </div>
+  <div class="pno">1</div></section>
+{pages}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+// «Скачать PDF»: каждый лист (A4, альбомный) снимается картинкой и складывается в файл — без окна печати
+async function downloadPdf() {{
+  const btn = document.getElementById("dl"), msg = document.getElementById("msg");
+  if (!window.html2canvas || !window.jspdf) {{ msg.textContent = "Нет интернета для сборки PDF — нажмите «Печать» и выберите «Сохранить как PDF»."; return; }}
+  btn.disabled = true; btn.textContent = "Готовлю PDF…";
+  try {{
+    await document.fonts.ready;
+    const pdf = new window.jspdf.jsPDF({{ orientation: "landscape", unit: "px", format: [1280, 720], hotfixes: ["px_scaling"] }});
+    const sheets = [...document.querySelectorAll(".sheet")];
+    for (let i = 0; i < sheets.length; i++) {{
+      msg.textContent = `Лист ${{i + 1}} из ${{sheets.length}}…`;
+      const canvas = await html2canvas(sheets[i], {{ scale: 2, backgroundColor: "#161616", useCORS: true, logging: false }});
+      if (i) pdf.addPage([1280, 720], "landscape");
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 1280, 720);
+    }}
+    pdf.save({json.dumps(arc["title"] + " — синопсисы.pdf", ensure_ascii=False)});
+    msg.textContent = "Готово: файл в «Загрузках».";
+  }} catch (e) {{
+    msg.textContent = "Не получилось собрать PDF — нажмите «Печать» и выберите «Сохранить как PDF».";
+  }} finally {{ btn.disabled = false; btn.textContent = "Скачать PDF"; }}
+}}
+</script>
+</body></html>"""
+    return Response(page, media_type="text/html")
 
 
 @app.get("/api/episodes")
@@ -588,9 +841,8 @@ def get_schedule(start: str, end: str, request: Request):
             if ev["date"] == d.isoformat() or (ev["yearly"] and ev["date"][5:] == md):
                 events.append({"id": ev["id"], "date": d.isoformat(), "title": ev["title"], "builtin": False})
         d += timedelta(days=1)
-    settings = db.get_settings()
-    arcs = [{**a, "start_date": schedule.date_for(a["start_number"], settings)} for a in schedule.load_arcs()]
-    return {"episodes": eps, "events": events, "arcs": [a for a in arcs if start <= a["start_date"] <= end]}
+    arcs = [a for a in list_arcs() if a["start_date"] and start <= a["start_date"] <= end]
+    return {"episodes": eps, "events": events, "arcs": arcs}
 
 
 class CalendarEventIn(BaseModel):
@@ -639,6 +891,8 @@ def compact_schedule():
 class EpisodeIn(BaseModel):
     title: str = ""
     script: str = ""
+    synopsis: str = ""
+    arc_id: int | None = None
     number: int | None = None
     date: str | None = None
     backlog: bool = False
@@ -646,13 +900,22 @@ class EpisodeIn(BaseModel):
 
 def create_episode_row(e: EpisodeIn, user_id) -> int:
     with db.connect() as c:
-        eid = c.execute("INSERT INTO episodes(title, script, status, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                        (e.title.strip(), e.script, "dev", user_id, db.now(), db.now())).lastrowid
+        status = "dev" if e.script.strip() else "synopsis"
+        if e.arc_id and status == "synopsis":  # новая серия согласованной арки сразу идёт со статусом арки
+            arc = c.execute("SELECT status FROM arcs WHERE id=?", (e.arc_id,)).fetchone()
+            status = db.ARC_TO_EPISODE.get(arc["status"], status) if arc else status
+        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM episodes WHERE arc_id IS ?", (e.arc_id,)).fetchone()[0]
+        eid = c.execute("INSERT INTO episodes(title, script, synopsis, status, arc_id, position, created_by, created_at, "
+                        "updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (e.title.strip(), e.script, e.synopsis.strip(), status, e.arc_id, pos, user_id,
+                         db.now(), db.now())).lastrowid
     if e.date:
         schedule.move(eid, schedule.number_for(e.date))
         schedule.set_pinned(eid, True)
+    elif e.number:
+        schedule.move(eid, e.number)
     elif not e.backlog:
-        schedule.move(eid, e.number or schedule.next_free())
+        schedule.append_to_arc(eid, e.arc_id)
     db.log(eid, user_id, "Серия создана")
     if e.script.strip():
         apply_breakdown(eid)
@@ -713,7 +976,9 @@ def get_episode(eid: int) -> dict:
     ep["over_limit"] = sum(1 for s in ep["shots"] if s["over_limit"])
     ep["incomplete"] = sum(1 for s in ep["shots"] if s["missing"])
     ep["date"] = schedule.date_for(ep["number"], ctx.settings)
-    ep.update(schedule.arc_info(ep["number"], schedule.load_arcs()))
+    with db.connect() as c:
+        mates = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS ?", (ep["arc_id"],))]
+    ep.update(schedule.arc_numbers(mates, schedule.load_arcs()).get(eid, {"arc_id": None, "arc_title": "", "arc_number": None}))
     ep["status_name"] = db.STATUS_NAMES.get(ep["status"], ep["status"])
     ep["cast"] = episode_cast(eid)
     ep["marked"] = breakdown.has_markers(ep["script"])
@@ -724,14 +989,18 @@ class EpisodePatch(BaseModel):
     title: str | None = None
     script: str | None = None
     notes: str | None = None
+    synopsis: str | None = None
+    post_text: str | None = None
 
 
 @app.put("/api/episodes/{eid}", dependencies=[Depends(auth.writer)])
 def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = True):
     ep = load_episode_row(eid)
-    writer_may_edit(request, ep["status"])
+    changes = p.model_dump(exclude_unset=True)
+    if set(changes) - {"post_text"}:  # описание для поста сценарист правит на любом этапе
+        writer_may_edit(request, ep["status"])
     with db.connect() as c:
-        for k, v in p.model_dump(exclude_unset=True).items():
+        for k, v in changes.items():
             if v is not None:
                 c.execute(f"UPDATE episodes SET {k}=?, updated_at=? WHERE id=?", (v, db.now(), eid))
     if p.script is not None and p.script != ep["script"]:
@@ -1243,9 +1512,64 @@ def feedback_shot(path: str):
                     headers={"Cache-Control": "max-age=86400"})
 
 
+# ---------- «Тех. требования»: шаблоны ТТ ----------
+
+class TemplateIn(BaseModel):
+    name: str
+    kind: str = "video"
+    model: str = ""
+    specs: str = ""
+    prompt: str = ""
+    notes: str = ""
+    in_prompt: bool = False
+
+
+def _template_values(t: TemplateIn) -> tuple:
+    if not t.name.strip():
+        raise HTTPException(400, "Назовите шаблон")
+    if t.kind not in db.TEMPLATE_KINDS:
+        raise HTTPException(400, "Неизвестный вид шаблона")
+    return t.name.strip(), t.kind, t.model.strip(), t.specs.strip(), t.prompt.strip(), t.notes.strip(), int(t.in_prompt)
+
+
+@app.get("/api/templates")
+def list_templates():
+    with db.connect() as c:
+        return {"kinds": db.TEMPLATE_KINDS,
+                "templates": db.rows(c.execute("SELECT * FROM templates ORDER BY position, id"))}
+
+
+@app.post("/api/templates", dependencies=[Depends(auth.editor)])
+def create_template(t: TemplateIn):
+    with db.connect() as c:
+        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM templates").fetchone()[0]
+        c.execute("INSERT INTO templates(name, kind, model, specs, prompt, notes, in_prompt, position, created_at) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (*_template_values(t), pos, db.now()))
+    refresh_all_prompts()
+    return list_templates()
+
+
+@app.put("/api/templates/{tid}", dependencies=[Depends(auth.editor)])
+def update_template(tid: int, t: TemplateIn):
+    with db.connect() as c:
+        c.execute("UPDATE templates SET name=?, kind=?, model=?, specs=?, prompt=?, notes=?, in_prompt=? WHERE id=?",
+                  (*_template_values(t), tid))
+    refresh_all_prompts()
+    return list_templates()
+
+
+@app.delete("/api/templates/{tid}", dependencies=[Depends(auth.editor)])
+def delete_template(tid: int):
+    with db.connect() as c:
+        c.execute("DELETE FROM templates WHERE id=?", (tid,))
+    refresh_all_prompts()
+    return list_templates()
+
+
 # ---------- settings ----------
 
 SECRET_SETTINGS = ("veo_api_key", "github_token")
+PROMPT_SETTINGS = {"style", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
 @app.get("/api/settings")
@@ -1265,6 +1589,8 @@ def write_settings(values: dict):
             if k in SECRET_SETTINGS and str(v).startswith("••••"):
                 continue
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)", (k, str(v)))
+    if PROMPT_SETTINGS & values.keys():
+        refresh_all_prompts()
     return read_settings()
 
 

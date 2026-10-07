@@ -9,6 +9,17 @@ export async function renderTeam() {
   const admin = me.role === "admin";
   view().innerHTML = `
     <div class="row"><h1>Команда</h1><div class="spacer"></div>${admin ? `<button class="primary" id="add-user">+ Добавить человека</button>` : ""}</div>
+    <div class="role-grid">
+      ${["writer", "editor", "admin"].map((r) => {
+        const people = users.filter((u) => u.role === r);
+        return `<div class="card role-card">
+          <h2>${esc(state.meta.roles[r])}</h2>
+          <ul>${(state.meta.role_duties[r] || []).map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
+          <div class="role-people">${people.length ? people.map((u) => `<span class="badge">${esc(u.name)}</span>`).join("") : `<span class="muted small">пока никого — «+ Добавить человека»</span>`}</div>
+        </div>`;
+      }).join("")}
+    </div>
+    <h2>Люди</h2>
     <div class="card">
       <table class="atable users"><thead><tr><th>Имя</th><th>Роль</th><th>Задачи на проекте</th><th>Telegram</th><th>Логин</th><th></th></tr></thead><tbody>
       ${users.map((u) => `<tr>

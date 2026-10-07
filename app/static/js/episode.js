@@ -67,6 +67,24 @@ function draw() {
 const writerLocked = () => state.meta.user.role === "writer" && !["dev", "review"].includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
 
+const canPost = () => can.write(); // описание поста — сценарист и продюсер, на любом этапе
+
+export async function copyText(text) {
+  if (!text.trim()) return toast("Описание для поста пока пустое", true);
+  // Сначала через скрытое поле (работает сразу по клику, без разрешений), иначе — Clipboard API
+  const ta = Object.assign(document.createElement("textarea"), { value: text, readOnly: true });
+  ta.style.cssText = "position:fixed;opacity:0;top:0;left:0";
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  if (!ok) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch {}
+  }
+  toast(ok ? "Скопировано" : "Не удалось скопировать: выделите текст и нажмите ⌘C", !ok);
+}
+
 function drawHeader() {
   const ep = E.ep, max = state.meta.max_shot_seconds;
   const withVideo = ep.shots.filter((s) => s.selected_take_id).length;
@@ -75,11 +93,11 @@ function drawHeader() {
   $("#ep-header").innerHTML = `
     <div class="ep-head">
       <div class="row">
-        <a href="#/queue" class="btn ghost" title="К очереди">←</a>
-        <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `Серия ${ep.arc_number ?? ep.number}` : "бэклог"}</div>
+        <a href="#/series/${ep.arc_id ?? "none"}" class="btn ghost" title="К арке">←</a>
+        <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `Серия ${ep.arc_number ?? ep.number}` : "черновик"}</div>
         <div style="flex:1;min-width:220px">
           <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
-          <div class="muted small">${ep.arc_id ? `Арка «${esc(ep.arc_title)}» · ` : ""}${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Без даты — в бэклоге"}
+          <div class="muted small">${ep.arc_id ? `Арка «${esc(ep.arc_title)}» · ` : ""}${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Черновик — в очередь не идёт"}
             · <a href="#" id="move-ep">${ep.number != null ? "перенести" : "назначить дату"}</a></div>
         </div>
         ${statusSelect(ep.status, 'id="ep-status"')}
@@ -101,7 +119,19 @@ function drawHeader() {
       </div>
       <div class="timeline">${ep.shots.map((s) => `<span data-jump="${s.id}" title="Шот ${esc(s.label)}: ${s.duration} с, по тексту ${s.est_seconds} с"
         class="${s.over_limit ? "over" : ""} ${s.missing.length ? "incomplete" : ""} ${s.selected_take_id ? "has-video" : ""}" style="flex:${s.duration}">${esc(s.label)}</span>`).join("")}</div>
+      <details class="post-text" ${ep.post_text ? "" : "open"}>
+        <summary>Описание для поста ${ep.post_text ? `<span class="muted small">· ${ep.post_text.length} симв.</span>` : `<span class="muted small">· пока не написано</span>`}</summary>
+        <textarea id="post-text" rows="4" placeholder="Текст под роликом: подпись, хэштеги, призыв…" ${canPost() ? "" : "readonly"}>${esc(ep.post_text || "")}</textarea>
+        <div class="row"><button class="ghost small" id="copy-post">📋 Скопировать</button>
+          <span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span></div>
+      </details>
     </div>`;
+  $("#copy-post").onclick = () => copyText($("#post-text").value);
+  if (canPost()) $("#post-text").onchange = async (ev) => {
+    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { post_text: ev.target.value } });
+    ep.post_text = ev.target.value;
+    toast("Описание для поста сохранено");
+  };
   $("#ep-status").onchange = async (e) => {
     const status = e.target.value;
     try {
@@ -144,7 +174,7 @@ function moveDialog() {
   const m = modal(`<h1>Дата выхода</h1>
     <label>Дата выхода</label><input id="mv-date" type="date" value="${ep.date ?? ""}" style="width:200px">
     <label class="check"><input type="checkbox" id="mv-pin" ${ep.pinned ? "checked" : ""}> закрепить дату (серия не сдвинется при перестановках — для праздников и инфоповодов)</label>
-    <div class="row" style="margin-top:16px"><button class="ghost" id="backlog">Убрать в бэклог</button><div class="spacer"></div>
+    <div class="row" style="margin-top:16px"><button class="ghost" id="backlog">Убрать в черновики</button><div class="spacer"></div>
       <button class="ghost" id="cancel">Отмена</button><button class="primary" id="save">Сохранить</button></div>`);
   $("#cancel", m).onclick = closeModal;
   $("#backlog", m).onclick = async () => { await api(`/api/episodes/${E.id}/move`, { json: { number: null } }); closeModal(); renderEpisode(E.id); };
@@ -170,9 +200,13 @@ let analyzeTimer = null;
 function drawScript(el) {
   const ep = E.ep;
   el.innerHTML = `
+    <div class="card ep-synopsis">
+      <div class="row"><b>Синопсис</b><span class="muted small">— коротко о чём серия; из него пишется ТЗ ниже</span></div>
+      <textarea id="ep-synopsis" rows="3" placeholder="О чём серия…" ${canWrite() ? "" : "readonly"}>${esc(ep.synopsis || "")}</textarea>
+    </div>
     <div class="script-layout">
       <div class="card">
-        <div class="row"><b>Сценарий серии</b><div class="spacer"></div>
+        <div class="row"><b>Сценарий и ТЗ серии</b><div class="spacer"></div>
           ${canWrite() ? `<label class="btn ghost small" style="margin:0">Загрузить .txt<input type="file" id="load-file" accept=".txt,.md,.fountain,text/plain" hidden></label>
           <button class="primary" id="save-script">Сохранить и разбить на шоты</button>` : ""}</div>
         <div class="editor-wrap"><textarea id="script" spellcheck="true" ${canWrite() ? "" : "readonly"}
@@ -188,6 +222,11 @@ function drawScript(el) {
     </div>`;
   const ta = $("#script");
   attachMentions(ta);
+  $("#ep-synopsis").onchange = async (ev) => {
+    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { synopsis: ev.target.value } });
+    ep.synopsis = ev.target.value;
+    toast("Синопсис сохранён");
+  };
   let dirty = false;
   const save = async () => {
     const res = await api(`/api/episodes/${E.id}`, { method: "PUT", json: { script: ta.value } });
@@ -674,7 +713,7 @@ async function drawHistory(el) {
   $("#del-ep") && ($("#del-ep").onclick = async () => {
     if (!confirm("Удалить серию со всеми шотами, видео-дублями и комментариями?")) return;
     await api(`/api/episodes/${E.id}`, { method: "DELETE" });
-    location.hash = "#/queue";
+    location.hash = "#/series";
   });
 }
 
@@ -688,13 +727,15 @@ export function newEpisodeDialog(opts = {}) {
       <div style="flex:1"><label>Дата выхода</label><input id="ne-date" type="date" value="${opts.date || ""}"></div>
       <div style="flex:2;padding-top:22px" class="muted small">${opts.date ? "Дата будет закреплена." : "Пусто — ближайший свободный день в очереди."}</div>
     </div>
-    <label class="check"><input type="checkbox" id="ne-backlog"> пока без даты (в бэклог)</label>
+    <label>Арка</label><select id="ne-arc"><option value="">— без арки —</option></select>
+    <label class="check"><input type="checkbox" id="ne-backlog"> пока без даты (в черновики)</label>
     <label>Сценарий — вставьте текст или загрузите файл (можно и позже)</label>
     <div class="editor-wrap"><textarea id="ne-script" rows="12" placeholder="Шот 1&#10;..."></textarea></div>
     <input id="ne-file" type="file" accept=".txt,.md,.fountain,text/plain" style="margin-top:6px">
     <div class="row" style="margin-top:14px"><div class="spacer"></div>
       <button class="ghost" id="cancel">Отмена</button><button class="primary" id="create">Создать</button></div>`, true);
   attachMentions($("#ne-script", m));
+  api("/api/arcs").then((arcs) => { $("#ne-arc", m).innerHTML += arcs.map((a) => `<option value="${a.id}" ${a.id === opts.arcId ? "selected" : ""}>${esc(a.title)}</option>`).join(""); });
   $("#cancel", m).onclick = closeModal;
   $("#ne-file", m).onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -705,7 +746,7 @@ export function newEpisodeDialog(opts = {}) {
   };
   $("#create", m).onclick = async () => {
     const ep = await api("/api/episodes", { json: {
-      title: $("#ne-title", m).value.trim(), script: $("#ne-script", m).value,
+      title: $("#ne-title", m).value.trim(), script: $("#ne-script", m).value, arc_id: +$("#ne-arc", m).value || null,
       date: $("#ne-backlog", m).checked ? null : $("#ne-date", m).value || null, backlog: $("#ne-backlog", m).checked } });
     closeModal();
     location.hash = `#/episodes/${ep.id}/script`;

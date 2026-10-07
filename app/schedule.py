@@ -109,24 +109,77 @@ def next_free(settings=None) -> int:
     return n
 
 
-def load_arcs() -> list[dict]:
-    with db.connect() as c:
-        return db.rows(c.execute("SELECT * FROM arcs ORDER BY start_number, id"))
-
-
-def arc_for(number: int | None, arcs: list[dict]) -> dict | None:
-    """The arc a release slot belongs to: the last arc that starts at or before it."""
-    if number is None:
-        return None
-    found = None
+def load_arcs(c=None) -> list[dict]:
+    """Арки с вычисленными полями: start_number/end_number — первый и последний слот выхода её серий (None, если
+    все серии в черновиках), episodes/drafts — сколько серий в очереди и в черновиках."""
+    if c is None:
+        with db.connect() as conn:
+            return load_arcs(conn)
+    arcs = db.rows(c.execute("SELECT * FROM arcs ORDER BY id"))
+    eps = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS NOT NULL")]
     for a in arcs:
-        if a["start_number"] <= number:
-            found = a
-    return found
+        nums = sorted(e["number"] for e in eps if e["arc_id"] == a["id"] and e["number"] is not None)
+        a["start_number"] = nums[0] if nums else None
+        a["end_number"] = nums[-1] if nums else None
+        a["episodes"] = len(nums)
+        a["drafts"] = sum(1 for e in eps if e["arc_id"] == a["id"] and e["number"] is None)
+    # Сначала арки с сериями в очереди (по первому дню), потом арки только с черновиками (по созданию)
+    arcs.sort(key=lambda a: (a["start_number"] is None, a["start_number"] or 0, a["id"]))
+    return arcs
 
 
-def arc_info(number: int | None, arcs: list[dict]) -> dict:
-    a = arc_for(number, arcs)
-    if not a:
-        return {"arc_id": None, "arc_title": "", "arc_number": None}
-    return {"arc_id": a["id"], "arc_title": a["title"], "arc_number": number - a["start_number"] + 1}
+def arc_numbers(eps: list[dict], arcs: list[dict]) -> dict[int, dict]:
+    """{episode_id: {arc_id, arc_title, arc_number}}. Номер внутри арки — место серии среди серий этой арки,
+    стоящих в очереди (по дню выхода). У черновиков номера нет."""
+    titles = {a["id"]: a["title"] for a in arcs}
+    out: dict[int, dict] = {}
+    by_arc: dict[int, list] = {}
+    for e in eps:
+        if e.get("arc_id") in titles:
+            by_arc.setdefault(e["arc_id"], []).append(e)
+            out[e["id"]] = {"arc_id": e["arc_id"], "arc_title": titles[e["arc_id"]], "arc_number": None}
+        else:
+            out[e["id"]] = {"arc_id": None, "arc_title": "", "arc_number": None}
+    for items in by_arc.values():
+        for k, e in enumerate(sorted((x for x in items if x["number"] is not None), key=lambda x: x["number"]), 1):
+            out[e["id"]]["arc_number"] = k
+    return out
+
+
+def append_to_arc(eid: int, arc_id: int | None) -> int:
+    """Поставить серию в очередь в конец её арки (следующий день после последней серии арки); серию без арки —
+    в конец всей очереди. Если день занят, следующие серии сдвигаются вперёд (кроме закреплённых)."""
+    with db.connect() as c:
+        if arc_id is None:
+            last = c.execute("SELECT MAX(number) FROM episodes WHERE number IS NOT NULL AND id<>?", (eid,)).fetchone()[0]
+        else:
+            last = c.execute("SELECT MAX(number) FROM episodes WHERE arc_id=? AND number IS NOT NULL AND id<>?",
+                             (arc_id, eid)).fetchone()[0]
+    number = last + 1 if last else next_free()
+    move(eid, number)
+    return number
+
+
+def reorder_queue(ids: list[int]) -> None:
+    """Новый порядок в общей очереди выкладки (перетаскивание в «Сериях»): серии обмениваются своими днями.
+    Выложенные и закреплённые за датой серии не двигаются."""
+    with db.connect() as c:
+        eps = {r["id"]: dict(r) for r in c.execute("SELECT id, number, pinned, status FROM episodes WHERE number IS NOT NULL")}
+        movable = [eps[i] for i in ids if i in eps and not eps[i]["pinned"] and eps[i]["status"] != "posted"]
+        for e, n in zip(movable, sorted(e["number"] for e in movable)):
+            c.execute("UPDATE episodes SET number=? WHERE id=?", (n, e["id"]))
+
+
+def reorder_arc(arc_id: int | None, ids: list[int]) -> None:
+    """Новый порядок серий арки (перетаскивание). Серии в очереди обмениваются своими днями: набор дней остаётся
+    тем же, меняется только кто в какой день выходит. Выложенные и закреплённые за датой серии не двигаются."""
+    with db.connect() as c:
+        eps = {r["id"]: dict(r) for r in c.execute(
+            "SELECT id, number, pinned, status FROM episodes WHERE arc_id IS ?", (arc_id,))}
+        movable = [eps[i] for i in ids if i in eps and eps[i]["number"] is not None
+                   and not eps[i]["pinned"] and eps[i]["status"] != "posted"]
+        slots = sorted(e["number"] for e in movable)
+        for e, n in zip(movable, slots):
+            c.execute("UPDATE episodes SET number=? WHERE id=?", (n, e["id"]))
+        for pos, i in enumerate(ids):
+            c.execute("UPDATE episodes SET position=? WHERE id=?", (pos, i))

@@ -1,5 +1,5 @@
-// Story arcs: an arc starts at a release slot; inside it episodes are counted again from 1.
-// Shown as a divider in the queue and on «Статус», and as a banner on the start day in the calendar.
+// Story arcs: a group of episodes (episode.arc_id) with its own synopsis and members; inside an arc episodes are
+// counted again from 1. Shown as a divider on «Статус» and as a banner on its first day in the calendar.
 import { $, $$, api, can, closeModal, esc, fmtDate, loadAssets, modal, state, toast } from "./core.js";
 
 /** Divider row before the first slot of an arc. `extraCls` lets each page fit it into its own layout. */
@@ -35,10 +35,9 @@ export async function ensureAssets() {
   if (!state.assets.length) await loadAssets();
 }
 
-/** Create (no `arc`) or edit an arc. `date` pre-fills the start day. */
-export async function arcDialog({ arc = null, date = "", onChange, draft = null } = {}) {
+/** Create (no `arc`) or edit an arc. `onChange(arc)` gets the saved arc (or nothing after a delete). */
+export async function arcDialog({ arc = null, onChange, draft = null } = {}) {
   await loadAssets();
-  const start = draft?.date || arc?.start_date || date || state.meta.today;
   // draft — то, что уже введено в окне, когда оно перерисовывается после создания персонажа или локации
   const chosen = draft?.chosen || Object.fromEntries((arc?.members || []).map((m) => [m.asset_id, m.version_id ?? ""]));
   const pick = (kind, title) => {
@@ -59,8 +58,7 @@ export async function arcDialog({ arc = null, date = "", onChange, draft = null 
   };
   const m = modal(`<h1>${arc ? "Арка" : "Новая арка"}</h1>
     <label>Название арки</label><input id="arc-title" value="${esc(draft?.title ?? arc?.title ?? "")}" placeholder="Например: Первый косплей">
-    <label>Начинается с дня (с этой серии счёт серий начнётся заново)</label><input id="arc-date" type="date" value="${start}" style="width:180px">
-    <label>Ключевые детали: что меняется в персонаже, локации, сюжете</label>
+    <label>Синопсис арки и ключевые детали: что меняется в персонаже, локации, сюжете</label>
     <textarea id="arc-notes" rows="5" placeholder="Ксю шьёт костюм Кристал Мейден, в комнате появляется манекен; в конце — пабстомп Пари">${esc(draft?.notes ?? arc?.notes ?? "")}</textarea>
     ${pick("character", "Персонажи в арке")}
     ${pick("location", "Локации в арке")}
@@ -83,19 +81,19 @@ export async function arcDialog({ arc = null, date = "", onChange, draft = null 
       picked[created.id] = "";
       closeModal();
       toast(`«${name}» добавлен в библиотеку`);
-      arcDialog({ arc, date, onChange, draft: { title: $("#arc-title", m).value, date: $("#arc-date", m).value, notes: $("#arc-notes", m).value, chosen: picked } });
+      arcDialog({ arc, onChange, draft: { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked } });
     };
   });
   $("#arc-save", m).onclick = async () => {
     const members = membersOf();
-    const body = { title: $("#arc-title", m).value, start_date: $("#arc-date", m).value, notes: $("#arc-notes", m).value, members };
-    await api(arc ? `/api/arcs/${arc.id}` : "/api/arcs", { method: arc ? "PUT" : "POST", json: body });
+    const body = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, members };
+    const saved = await api(arc ? `/api/arcs/${arc.id}` : "/api/arcs", { method: arc ? "PUT" : "POST", json: body });
     closeModal();
     toast(arc ? "Арка сохранена" : "Арка создана");
-    onChange?.();
+    onChange?.(saved);
   };
   if (arc) $("#arc-del", m).onclick = async () => {
-    if (!confirm(`Удалить арку «${arc.title}»? Серии останутся на своих днях, счёт серий снова станет сквозным.`)) return;
+    if (!confirm(`Удалить арку «${arc.title}»? Серии не удалятся: они останутся на своих днях в разделе «Без арки».`)) return;
     await api(`/api/arcs/${arc.id}`, { method: "DELETE" });
     closeModal();
     onChange?.();
