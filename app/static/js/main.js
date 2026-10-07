@@ -55,8 +55,10 @@ function drawNav(section) {
   const active = section === "episodes" || section === "archive" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
+  $("#nav").classList.remove("open"); // на телефоне меню за «бургером» закрывается при каждом переходе
   $("#nav").innerHTML = `
     <div class="brand">🎬 Студия</div>
+    <button class="burger ghost" id="burger" aria-label="Меню" aria-expanded="false">☰</button>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/status" data-nav="status">Статус</a>
     <a href="#/series" data-nav="series">Серии</a>
@@ -72,6 +74,7 @@ function drawNav(section) {
       <button class="ghost small" id="logout">Выйти</button>
     </div>`;
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.nav === active));
+  $("#burger").onclick = () => $("#burger").setAttribute("aria-expanded", $("#nav").classList.toggle("open"));
   $("#logout").onclick = async () => {
     await api("/api/auth/logout", { json: {} });
     state.meta = null;
