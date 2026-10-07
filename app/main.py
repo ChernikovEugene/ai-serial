@@ -544,7 +544,8 @@ def list_arcs():
 def create_arc(a: ArcIn, request: Request):
     title, notes, members = _arc_values(a)
     with db.connect() as c:
-        arc_id = c.execute("INSERT INTO arcs(title, notes, members, created_by, created_at) VALUES (?,?,?,?,?)",
+        # start_number больше не используется (день начала считается по сериям арки), но в базах до v2 он NOT NULL
+        arc_id = c.execute("INSERT INTO arcs(title, start_number, notes, members, created_by, created_at) VALUES (?,0,?,?,?,?)",
                            (title, notes, members, uid(request), db.now())).lastrowid
     return next(x for x in list_arcs() if x["id"] == arc_id)
 
