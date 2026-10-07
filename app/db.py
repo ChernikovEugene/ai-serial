@@ -55,7 +55,11 @@ TABLES = {
         planned_date TEXT,
         title TEXT NOT NULL DEFAULT '',
         script TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'dev',
+        status TEXT NOT NULL DEFAULT 'synopsis',
+        arc_id INTEGER,
+        position INTEGER NOT NULL DEFAULT 0,
+        synopsis TEXT NOT NULL DEFAULT '',
+        post_text TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '',
         parse_notes TEXT NOT NULL DEFAULT '[]',
         posted_at TEXT,
@@ -135,8 +139,9 @@ TABLES = {
     "arcs": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
-        start_number INTEGER NOT NULL,
+        start_number INTEGER NOT NULL DEFAULT 0,
         notes TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'writing',
         members TEXT NOT NULL DEFAULT '[]',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
@@ -161,18 +166,29 @@ DEFAULT_SETTINGS = {
     "max_shot_seconds": "8",
     "anchor_number": "1",
     "anchor_date": "",               # empty -> today on first start
+    "series_title": "Сериал",       # название сериала (в PDF для клиента)
     "github_token": "",              # for «Правка»; not needed when GitHub CLI (gh) is logged in
 }
 
+# Порядок важен: по нему проверяется «переход через согласование ТЗ» (main.set_status).
+# Клиент согласует дважды: синопсисы арки (synopsis_review → synopsis_ok) и готовый ролик (client_review → ready).
 STATUSES = [
-    ("dev", "В разработке"),
-    ("review", "Сценарий на согласовании"),
-    ("approved", "Сценарий согласован"),
-    ("generating", "В процессе генерации"),
-    ("fixes", "На правках визуала"),
+    ("synopsis", "Синопсис"),
+    ("synopsis_review", "Синопсис у клиента"),
+    ("synopsis_ok", "Синопсис согласован"),
+    ("dev", "Пишется ТЗ"),
+    ("review", "ТЗ на проверке"),
+    ("approved", "ТЗ готово"),
+    ("generating", "Генерация"),
+    ("fixes", "Монтаж"),
+    ("client_review", "Ролик у клиента"),
     ("ready", "Готов к постингу"),
     ("posted", "Опубликовано"),
 ]
+# Статус арки = этап согласования синопсисов с клиентом; переносится на серии, которые ещё на этапе синопсиса.
+ARC_STATUSES = [("writing", "Синопсисы пишутся"), ("client", "Синопсисы у клиента"), ("approved", "Синопсисы согласованы")]
+ARC_TO_EPISODE = {"writing": "synopsis", "client": "synopsis_review", "approved": "synopsis_ok"}
+SYNOPSIS_STAGE = {"synopsis", "synopsis_review", "synopsis_ok"}
 STATUS_NAMES = dict(STATUSES)
 STATUS_ORDER = [k for k, _ in STATUSES]
 
@@ -219,6 +235,25 @@ def init():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
         c.execute("UPDATE settings SET value=? WHERE key='anchor_date' AND value=''",
                   (datetime.now().date().isoformat(),))
+        _migrate_arcs_v2(c)
+
+
+def _migrate_arcs_v2(c):
+    """v1: арка = «с какого дня начинается» (arcs.start_number). v2: серия принадлежит арке (episodes.arc_id).
+    Один раз раскладываем существующие серии по аркам по старому правилу."""
+    if c.execute("SELECT 1 FROM settings WHERE key='arcs_v2'").fetchone():
+        return
+    arcs = [dict(r) for r in c.execute("SELECT id, start_number FROM arcs WHERE start_number > 0 ORDER BY start_number")]
+    for e in c.execute("SELECT id, number FROM episodes WHERE arc_id IS NULL AND number IS NOT NULL").fetchall():
+        owner = None
+        for a in arcs:
+            if a["start_number"] <= e["number"]:
+                owner = a["id"]
+        if owner:
+            c.execute("UPDATE episodes SET arc_id=? WHERE id=?", (owner, e["id"]))
+    # Старые арки уже в производстве: их синопсисы считаем согласованными
+    c.execute("UPDATE arcs SET status='approved' WHERE id IN (SELECT DISTINCT arc_id FROM episodes WHERE arc_id IS NOT NULL)")
+    c.execute("INSERT INTO settings(key, value) VALUES ('arcs_v2', '1')")
 
 
 @contextmanager

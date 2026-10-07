@@ -11,6 +11,10 @@ export async function renderSettings() {
   view().innerHTML = `
     <h1>Настройки</h1>
     ${admin ? "" : `<p class="muted">Менять настройки может только администратор.</p>`}
+    <div class="card" style="margin-bottom:14px">
+      <h2 style="margin-top:0">Проект</h2>
+      ${field("series_title", "Название сериала (стоит в PDF для клиента)")}
+    </div>
     <div class="two-col">
       <div class="card">
         <h2 style="margin-top:0">Veo 3</h2>

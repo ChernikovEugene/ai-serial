@@ -21,7 +21,7 @@ export async function renderCalendar() {
 
   view().innerHTML = `
     <div class="row"><h1>Календарь постинга</h1><div class="spacer"></div>
-      <a class="btn" href="#/queue">Очередь</a>
+      <a class="btn" href="#/series">Серии</a>
       <button id="prev">←</button><b class="month-title">${MONTHS[first.getMonth()]} ${first.getFullYear()}</b><button id="next">→</button>
       <button class="ghost" id="today">Сегодня</button></div>
     <p class="muted small">1 серия в день. Перетащите серию на другой день — номера пересчитаются. Клик по числу — добавить своё событие (инфоповод, тренд, дата).</p>

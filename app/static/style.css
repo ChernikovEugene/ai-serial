@@ -324,6 +324,58 @@ a.sm-row:hover { border-color: var(--muted); border-left-color: var(--c); }
 .cal-arc { font-size: 11px; font-weight: 600; color: #111317; background: var(--accent2); border-radius: 6px; padding: 2px 6px; cursor: pointer; }
 .sm-cell.arc-start .sm-sq { box-shadow: -3px 0 0 var(--accent2); }
 
+/* ---------- «Серии»: арки и карточки серий ---------- */
+.arc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin: 16px 0; }
+.arc-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 14px; background: var(--panel);
+  border: 1px solid var(--line); color: var(--text); text-decoration: none; min-height: 190px; text-align: left; font: inherit; }
+a.arc-card:hover { border-color: var(--accent2); }
+.arc-card h2 { margin: 2px 0 0; font-size: 19px; }
+.arc-card-syn { margin: 0; color: var(--muted); font-size: 13px; flex: 1; display: -webkit-box; -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.arc-card-bar { display: flex; gap: 2px; height: 6px; border-radius: 99px; overflow: hidden; }
+.arc-card-add { align-items: center; justify-content: center; border-style: dashed; color: var(--muted); cursor: pointer; }
+.arc-card-add span { font-size: 36px; line-height: 1; }
+.arc-card-add:hover { color: var(--text); border-color: var(--muted); }
+.sched-bar summary { cursor: pointer; font-weight: 600; }
+.arc-head { margin-bottom: 14px; }
+.arc-syn-card textarea { width: 100%; }
+.arc-syn-card .arc-members { margin-top: 8px; }
+.series-tools { margin: 14px 0 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 6px 14px; background: transparent; }
+.seg button.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+.ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.ep-list { display: flex; flex-direction: column; gap: 6px; }
+.ep-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-top: 3px solid var(--c); }
+.ep-card[data-movable="1"] { cursor: grab; }
+.ep-card.dragging { opacity: .4; }
+.ep-card.drop-before { box-shadow: -3px 0 0 var(--accent2); }
+.ep-card.drop-after { box-shadow: 3px 0 0 var(--accent2); }
+.ep-list .ep-card.drop-before { box-shadow: 0 -3px 0 var(--accent2); }
+.ep-list .ep-card.drop-after { box-shadow: 0 3px 0 var(--accent2); }
+.ep-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ep-card-head .grip { font-size: 12px; }
+.ep-card .ep-title { font-weight: 600; font-size: 15px; background: transparent; border-color: transparent; padding: 4px 6px; }
+.ep-card .ep-syn { background: transparent; border-color: transparent; padding: 4px 6px; min-height: 0; resize: vertical; }
+.ep-card .ep-title:hover, .ep-card .ep-syn:hover, .ep-card .ep-title:focus, .ep-card .ep-syn:focus { border-color: var(--line); background: #0d0f12; }
+.ep-card-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.ep-list .ep-card { display: grid; grid-template-columns: 170px minmax(140px, 1fr) minmax(200px, 2fr) auto; align-items: start;
+  border-top-width: 1px; border-left: 4px solid var(--c); padding: 8px 12px; }
+.ep-list .ep-card .ep-syn { resize: none; overflow: hidden; }
+.ep-list .ep-card-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+.ep-list .ep-card-head .spacer { display: none; }
+.ep-add { border: 1px dashed var(--line); background: transparent; color: var(--muted); border-radius: 12px; min-height: 60px; font-size: 15px; }
+.ep-grid .ep-add { min-height: 150px; }
+.ep-add:hover { color: var(--text); border-color: var(--muted); }
+@media (max-width: 900px) {
+  .ep-list .ep-card { grid-template-columns: 1fr; }
+  .ep-list .ep-card-head { flex-direction: row; }
+}
+
+.ep-synopsis { margin-bottom: 12px; }
+.ep-synopsis textarea { width: 100%; margin-top: 6px; }
+
 /* «Правка» button and panel (bottom-right corner) */
 #fb { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 #fb .fb-btn { border-radius: 99px; padding: 7px 16px; background: var(--accent); border-color: var(--accent); color: #fff;

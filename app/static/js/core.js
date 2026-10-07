@@ -8,9 +8,11 @@ export const view = () => $("#view");
 export const state = { meta: null, assets: [] };
 
 export const STATUS_COLORS = {
-  dev: "#8b93a3", review: "#f5b642", approved: "#4d9fff", generating: "#b36bff",
-  fixes: "#ff8a3d", ready: "#3ccf7e", posted: "#25d0d6",
+  synopsis: "#8b93a3", synopsis_review: "#e0a3ff", synopsis_ok: "#c58cff",
+  dev: "#a8b0c0", review: "#f5b642", approved: "#4d9fff", generating: "#b36bff",
+  fixes: "#ff8a3d", client_review: "#ff6fa8", ready: "#3ccf7e", posted: "#25d0d6",
 };
+export const ARC_STATUS_COLORS = { writing: "#8b93a3", client: "#e0a3ff", approved: "#3ccf7e" };
 
 export async function api(path, opts = {}) {
   const init = { ...opts };

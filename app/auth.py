@@ -24,19 +24,22 @@ WRITE_ROLES = ("admin", "writer")   # script, shots content, library, schedule
 GEN_ROLES = ("admin", "editor")     # prompts, generation, takes, re-dos
 
 # Statuses a role may set. The editor can also send a script back to the writer ("review").
+# Сценарист ведёт серию от синопсиса до ТЗ (включая согласование синопсисов с клиентом).
+# Монтажёр берёт серию с готовым ТЗ: генерация, монтаж, показ ролика клиенту, выкладка.
+WRITER_STATUSES = {"synopsis", "synopsis_review", "synopsis_ok", "dev", "review"}
 STATUS_TARGETS = {
     "admin": None,  # any
-    "writer": {"dev", "review"},
-    "editor": {"review", "generating", "fixes", "ready"},
+    "writer": WRITER_STATUSES,
+    "editor": {"review", "generating", "fixes", "client_review", "ready", "posted"},
 }
 # Status a role may change an episode FROM (None = any).
 STATUS_SOURCES = {
     "admin": None,
-    "writer": {"dev", "review"},
-    "editor": {"approved", "generating", "fixes", "ready"},
+    "writer": WRITER_STATUSES,
+    "editor": {"approved", "generating", "fixes", "client_review", "ready"},
 }
-# The editor only sees episodes whose script is already approved.
-EDITOR_VISIBLE = {"approved", "generating", "fixes", "ready", "posted"}
+# The editor only sees episodes whose script (ТЗ) is ready.
+EDITOR_VISIBLE = {"approved", "generating", "fixes", "client_review", "ready", "posted"}
 
 
 def can_see(role: str, status: str) -> bool:

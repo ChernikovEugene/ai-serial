@@ -1,6 +1,6 @@
 // Router, navigation and login.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
-import { renderQueue } from "./queue.js";
+import { renderSeries, renderArc } from "./series.js";
 import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
 import { renderAssets, renderAsset } from "./assets.js";
@@ -29,9 +29,10 @@ async function route() {
   drawNav(section || "status");
   try {
     if (!section || section === "status") return await renderStatus();
-    if (section === "queue") return await renderQueue();
+    if (section === "queue") { location.replace("#/series"); return; }
+    if (section === "series") return id ? await renderArc(id) : await renderSeries();
     if (section === "calendar") return await renderCalendar();
-    if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderQueue();
+    if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderSeries();
     if (section === "library") return await renderAssets("character");
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
@@ -42,14 +43,14 @@ async function route() {
 }
 
 function drawNav(section) {
-  const active = section === "episodes" ? "queue" : ["characters", "locations", "library"].includes(section) ? "library" : section;
+  const active = section === "episodes" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
   $("#nav").innerHTML = `
     <div class="brand">🎬 Студия</div>
     <a href="#/status" data-nav="status">Статус</a>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
-    <a href="#/queue" data-nav="queue">Серии</a>
+    <a href="#/series" data-nav="series">Серии</a>
     <a href="#/publish" data-nav="publish">Публикация</a>
     <a href="#/characters" data-nav="library">Библиотека</a>
     <a href="#/team" data-nav="team">Команда</a>

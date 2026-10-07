@@ -8,13 +8,15 @@ const STAGES = [
   { name: "Не начато", color: "#8b93a3" },
   { name: "Сценарий", color: "#f5b642" },
   { name: "Генерация", color: "#b36bff" },
-  { name: "Правки и монтаж", color: "#ff8a3d" },
+  { name: "Монтаж", color: "#ff8a3d" },
   { name: "Готов к выкладке", color: "#3ccf7e" },
   { name: "Выложено", color: "#25d0d6" },
 ];
 // Какой статус серии в приложении к какому этапу относится
-const STAGE_BY_STATUS = { dev: 1, review: 1, approved: 1, generating: 2, fixes: 3, ready: 4, posted: 5 };
-const SCRIPT_SUB = { dev: "пишется", review: "на согласовании", approved: "согласован" };
+const STAGE_BY_STATUS = { synopsis: 1, synopsis_review: 1, synopsis_ok: 1, dev: 1, review: 1, approved: 1,
+  generating: 2, fixes: 3, client_review: 3, ready: 4, posted: 5 };
+const SCRIPT_SUB = { synopsis: "синопсис", synopsis_review: "синопсис у клиента", synopsis_ok: "синопсис согласован",
+  dev: "пишется ТЗ", review: "ТЗ на проверке", approved: "ТЗ готово" };
 const SEG_LABELS = ["Сценарий", "Генерация", "Монтаж", "К выкладке", "Выложено"];
 const WD_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
 const WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
@@ -46,7 +48,7 @@ const rng = (a) => {
 
 function stageOf(ep) {
   if (!ep) return 0;
-  if (ep.status === "dev" && !ep.has_script && !ep.shots) return 0; // серия заведена, но сценария нет
+  if (ep.status === "synopsis" && !ep.synopsis && !ep.has_script && !ep.shots) return 0; // карточка заведена, но пустая
   return STAGE_BY_STATUS[ep.status] ?? 1;
 }
 
@@ -63,7 +65,7 @@ function buildRows(data, today) {
     const todayBad = isToday && stage < 4;
     const risk = diff > 0 && diff <= 2 && stage < 4;
     const sub = stage === 1 ? SCRIPT_SUB[ep.status] : "";
-    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет сценария" : sub ? `Сценарий · ${sub}` : STAGES[stage].name;
+    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет сценария" : sub ? `Сценарий · ${sub}` : ep.status === "client_review" ? "Ролик у клиента" : STAGES[stage].name;
     let flag = "", flagCls = "";
     if (late) { flag = `Просрочено на ${-diff} ${plural(-diff)}`; flagCls = "bad"; }
     else if (todayBad) { flag = "Сегодня выход, а ролик не готов"; flagCls = "bad"; }
@@ -79,7 +81,7 @@ function buildRows(data, today) {
 }
 
 /** Как назвать серию в тексте: внутри арки «арка „Косплей“, серия 2», иначе сквозной номер. */
-const epName = (r) => (r.arcNumber ? `арка «${r.arcTitle}», серия ${r.arcNumber}` : `серия ${r.number}`); // вне арок — сквозной
+const epName = (r) => (!r.ep ? `день ${r.d} ${MONTHS_GEN[r.mon]}` : r.arcNumber ? `арка «${r.arcTitle}», серия ${r.arcNumber}` : `серия без арки`);
 
 function rowHtml(r) {
   const color = STAGES[r.stage].color;
@@ -93,7 +95,7 @@ function rowHtml(r) {
   const tag = link ? "a" : "div";
   const href = link ? ` href="#/episodes/${r.ep.id}"` : "";
   return `<${tag} class="${cls}" style="--c:${color}"${href}>
-    <div class="sm-num"><b>Серия ${r.arcNumber ?? r.number}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
+    <div class="sm-num"><b>${r.ep ? `Серия ${r.arcNumber ?? ""}`.trim() : "Свободный день"}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
     <div class="sm-info"><div class="sm-title ${r.ep ? "" : "muted"}">${title}</div><div class="sm-desc muted">${desc}</div></div>
     <div class="sm-segs">${segs}</div>
     <div class="sm-stat"><span class="status" style="--c:${color}">${esc(r.label)}</span>${r.flag ? `<span class="sm-flag ${r.flagCls}">${esc(r.flag)}</span>` : ""}</div>
@@ -124,11 +126,11 @@ function render() {
   const todayRow = rows.find((r) => r.isToday);
 
   const alerts = [];
-  lateRows.forEach((r) => alerts.push({ c: "var(--err)", h: "Опаздывает:", t: `${esc(epName(r))} — «${esc(r.ep?.title || "—")}» — ${r.isToday ? "выход сегодня" : `выход был ${-r.diff} ${plural(-r.diff)} назад`}, сейчас: ${esc(r.label.toLowerCase())}.` }));
-  riskRows.forEach((r) => alerts.push({ c: "var(--warn)", h: "Горит:", t: `${esc(epName(r))} — «${esc(r.ep?.title || "—")}» — выход через ${r.diff} ${plural(r.diff)}, сейчас: ${esc(r.label.toLowerCase())}.` }));
+  lateRows.forEach((r) => alerts.push({ c: "var(--err)", h: "Опаздывает:", t: `${esc(epName(r))}${r.ep ? ` — «${esc(r.ep.title || "без названия")}»` : ""} — ${r.isToday ? "выход сегодня" : `выход был ${-r.diff} ${plural(-r.diff)} назад`}, сейчас: ${esc(r.label.toLowerCase())}.` }));
+  riskRows.forEach((r) => alerts.push({ c: "var(--warn)", h: "Горит:", t: `${esc(epName(r))}${r.ep ? ` — «${esc(r.ep.title || "без названия")}»` : ""} — выход через ${r.diff} ${plural(r.diff)}, сейчас: ${esc(r.label.toLowerCase())}.` }));
   if (todayRow && todayRow.stage === 4) alerts.push({ c: "var(--accent)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» готова — осталось выложить.` });
   if (todayRow && todayRow.stage === 5) alerts.push({ c: "var(--ok)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» уже выложена.` });
-  if (data.backlog) alerts.push({ c: "var(--muted)", h: "Без даты:", t: `серий в бэклоге — ${data.backlog}. Назначьте им номер в разделе «Серии», и они появятся здесь.` });
+  if (data.backlog) alerts.push({ c: "var(--muted)", h: "Без даты:", t: `серий в черновиках — ${data.backlog}. Верните их в очередь в разделе «Серии», и они появятся здесь.` });
   if (!alerts.length) alerts.push({ c: "var(--ok)", h: "Всё по графику:", t: "опаздывающих серий нет." });
 
   let shown = rows;
@@ -177,7 +179,7 @@ function render() {
     <div class="card sm-strip-card">
       <div class="sm-label">Весь ${mname.toLowerCase()} одним взглядом: 1 клетка = 1 серия = 1 день</div>
       <div class="sm-strip">
-        ${mrows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/queue"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
+        ${mrows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/series"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
           <span class="sm-arrow"></span>
           <span class="sm-sq" style="${r.stage ? `background:${STAGES[r.stage].color};color:#111317` : ""}">${r.d}${r.late ? `<i></i>` : ""}</span></a>`).join("")}
       </div>
