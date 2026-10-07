@@ -354,3 +354,10 @@ a.sm-row:hover { border-color: var(--muted); border-left-color: var(--c); }
 .fb-comment div { white-space: pre-wrap; }
 .sm-month { align-items: center; gap: 10px; margin: 4px 0 10px; }
 .arc-new [hidden] { display: none !important; }
+.sm-tile[data-sm-stage] { cursor: pointer; transition: transform .12s, box-shadow .12s; }
+.sm-tile[data-sm-stage]:hover { transform: translateY(-1px); }
+.sm-tile.on { box-shadow: 0 0 0 2px var(--c); background: color-mix(in srgb, var(--c) 12%, var(--panel)); }
+.lib-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.lib-tabs a { padding: 8px 18px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 600; }
+.lib-tabs a:hover { color: var(--text); }
+.lib-tabs a.on { color: var(--text); border-bottom-color: var(--accent); }
