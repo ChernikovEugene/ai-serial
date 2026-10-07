@@ -13,7 +13,7 @@ export async function renderAssets(kind) {
   const assets = (await loadAssets()).filter((a) => a.kind === kind);
   const k = KIND[kind];
   view().innerHTML = `
-    <div class="row lib-tabs">${Object.entries(KIND).map(([key, v]) => `<a class="chip-btn ${key === kind ? "on" : ""}" href="#/${v.path}">${v.title}</a>`).join("")}</div>
+    <div class="lib-tabs">${Object.entries(KIND).map(([key, v]) => `<a class="${key === kind ? "on" : ""}" href="#/${v.path}">${v.title}</a>`).join("")}</div>
     <div class="row"><h1>${k.title}</h1><div class="spacer"></div>
       <input id="search" placeholder="Поиск" style="width:200px">
       ${can.edit() ? `<button class="primary" id="new">+ Добавить</button>` : ""}</div>

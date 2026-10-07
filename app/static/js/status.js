@@ -22,7 +22,7 @@ const MONTHS_GEN = ["января", "февраля", "марта", "апрел�
 
 const MONTHS_NOM = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 const MONTHS_IN = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
-const S = { filter: "all", hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
+const S = { stage: null, filter: "all", hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
 const shiftMonth = (ym, k) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + k, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 
 export function stopStatusPolling() { clearInterval(S.timer); S.timer = null; }
@@ -135,6 +135,7 @@ function render() {
   if (S.filter === "late") shown = rows.filter((r) => r.late);
   if (S.filter === "work") shown = rows.filter((r) => r.stage >= 1 && r.stage <= 3);
   if (S.hidePosted) shown = shown.filter((r) => r.stage < 5);
+  if (S.stage !== null) shown = shown.filter((r) => r.stage === S.stage); // нажата плитка этапа
 
   const todayLabel = `${WD_FULL[new Date(today + "T00:00:00").getDay()]}, ${+today.slice(8)} ${MONTHS_GEN[+today.slice(5, 7) - 1]}`;
   const span = `${rows[0].d} ${MONTHS_GEN[rows[0].mon].slice(0, 3)} — ${rows.at(-1).d} ${MONTHS_GEN[rows.at(-1).mon].slice(0, 3)}`;
@@ -170,7 +171,7 @@ function render() {
     </div>
 
     <div class="sm-tiles">
-      ${STAGES.map((s, k) => `<div class="sm-tile" style="--c:${s.color}"><div class="sm-tile-name"><i></i>${s.name}</div><div class="sm-tile-n">${by[k].length}</div><div class="muted small">${by[k].length ? dateRanges(by[k]) : "—"}</div></div>`).join("")}
+      ${STAGES.map((s, k) => `<div class="sm-tile ${S.stage === k ? "on" : ""}" data-sm-stage="${k}" role="button" tabindex="0" title="Показать серии этого этапа в списке ниже" style="--c:${s.color}"><div class="sm-tile-name"><i></i>${s.name}</div><div class="sm-tile-n">${by[k].length}</div><div class="muted small">${by[k].length ? dateRanges(by[k]) : "—"}</div></div>`).join("")}
     </div>
 
     <div class="card sm-strip-card">
@@ -184,6 +185,7 @@ function render() {
     </div>
 
     <div class="row sm-filters">
+      ${S.stage !== null ? `<button class="chip-btn on" id="sm-stage-reset" style="--c:${STAGES[S.stage].color}"><i></i>Этап: ${STAGES[S.stage].name} · показано ${shown.length} ✕</button>` : ""}
       ${chip("all", `Все · ${total}`)}${chip("late", `Опаздывают · ${lateRows.length}`)}${chip("work", `В работе · ${inWork}`)}
       <label class="check"><input type="checkbox" id="sm-hide" ${S.hidePosted ? "checked" : ""}> Скрыть выложенные</label>
     </div>
@@ -201,6 +203,17 @@ function render() {
   $("#sm-next").onclick = () => go(shiftMonth(S.month, 1));
   $("#sm-now") && ($("#sm-now").onclick = () => go(today.slice(0, 7)));
   $$("[data-sm-filter]").forEach((b) => b.onclick = () => { S.filter = b.dataset.smFilter; render(); });
+  $$("[data-sm-stage]").forEach((t) => {
+    const toggle = () => {
+      const k = +t.dataset.smStage;
+      S.stage = S.stage === k ? null : k;
+      render();
+      if (S.stage !== null) $(".sm-filters")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    t.onclick = toggle;
+    t.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle());
+  });
+  $("#sm-stage-reset") && ($("#sm-stage-reset").onclick = () => { S.stage = null; render(); });
   $("#sm-hide").onchange = (e) => { S.hidePosted = e.target.checked; render(); };
 }
 
@@ -219,6 +232,7 @@ async function load(force = false) {
 export async function renderStatus() {
   stopStatusPolling();
   S.month = ""; // при заходе на страницу — текущий месяц
+  S.stage = null;
   await ensureAssets();
   await load(true);
   // «Реальное время»: раз в 30 секунд подтягиваем свежие статусы, пока открыта эта страница
