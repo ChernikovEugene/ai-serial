@@ -427,6 +427,46 @@ def episode_summaries(role: str = "admin") -> list[dict]:
     return [e for e in eps if auth.can_see(role, e["status"])]
 
 
+def _blurb(script: str, limit: int = 170) -> str:
+    """Короткое описание серии из сценария: только действие и реплики, без «Шот N», локаций и камеры."""
+    out = []
+    for line in (script or "").splitlines():
+        t = line.strip()
+        if (not t or re.match(r"^(шот|кадр|серия)", t, re.I) or re.match(r"^(инт|нат)\.", t, re.I)
+                or t.upper().startswith("КАМЕРА")):
+            continue
+        out.append(t)
+    text = " / ".join(out)
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+@app.get("/api/month-status")
+def month_status(month: str, request: Request):
+    """Страница «Статус месяца»: серии, выходящие в месяце YYYY-MM, + короткое описание из сценария.
+    Серии, которые роль не видит (монтажёр до согласования сценария), показываются только этапом: без названия,
+    описания и ссылки (`locked`), чтобы картина месяца оставалась полной."""
+    try:
+        y, m = (int(x) for x in month.split("-"))
+        first = date(y, m, 1)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Нужен месяц в формате ГГГГ-ММ")
+    last = date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
+    role = request.state.user["role"]
+    all_eps = episode_summaries()
+    eps = [e for e in all_eps if e["date"] and first.isoformat() <= e["date"] <= last.isoformat()]
+    with db.connect() as c:
+        scripts = {r["id"]: r["script"] or "" for r in c.execute("SELECT id, script FROM episodes")}
+    for e in eps:
+        e["has_script"] = bool(scripts.get(e["id"], "").strip())
+        e["locked"] = not auth.can_see(role, e["status"])
+        e["blurb"] = "" if e["locked"] else _blurb(scripts.get(e["id"], ""))
+        if e["locked"]:
+            e["title"] = "Сценарий ещё не согласован"
+    return {"month": month, "first": first.isoformat(), "days": last.day,
+            "first_number": schedule.number_for(first.isoformat()),
+            "backlog": sum(1 for e in all_eps if not e["date"] and auth.can_see(role, e["status"])), "episodes": eps}
+
+
 @app.get("/api/episodes")
 def list_episodes(request: Request):
     return episode_summaries(request.state.user["role"])

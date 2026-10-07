@@ -5,6 +5,7 @@ import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
 import { renderAssets, renderAsset } from "./assets.js";
 import { renderSettings, renderPublish } from "./settings.js";
+import { renderStatus, stopStatusPolling } from "./status.js";
 import { initFeedback, stopFeedback } from "./feedback.js";
 
 let lastHash = location.hash;
@@ -18,6 +19,7 @@ async function route() {
   window.onbeforeunload = null;
   lastHash = location.hash;
   stopEpisodePolling();
+  stopStatusPolling();
   const [, section, id, sub] = location.hash.split("/");
   if (section === "login") return renderLogin();
   if (!state.meta?.user) {
@@ -30,6 +32,7 @@ async function route() {
     if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderQueue();
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
+    if (section === "status") return await renderStatus();
     if (section === "settings") return await renderSettings();
     if (section === "publish") return renderPublish();
   } catch (e) { console.error(e); }
@@ -45,6 +48,7 @@ function drawNav(section) {
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/characters" data-nav="characters">Персонажи</a>
     <a href="#/locations" data-nav="locations">Локации</a>
+    <a href="#/status" data-nav="status">Статус месяца</a>
     <a href="#/settings" data-nav="settings">Настройки и команда</a>
     <a href="#/publish" data-nav="publish">Публикация</a>
     <div class="nav-foot">
