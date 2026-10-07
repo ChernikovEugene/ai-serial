@@ -1,6 +1,13 @@
 // Settings (Veo, breakdown, GitHub) and the publish stub. The team lives in team.js.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
 
+/** День выхода серии № 1 по точке отсчёта (anchor_number выходит anchor_date). */
+function firstDay(m) {
+  const d = new Date(m.anchor_date + "T00:00:00");
+  d.setDate(d.getDate() + 1 - m.anchor_number);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export async function renderSettings() {
   const s = await api("/api/settings");
   const admin = can.admin();
@@ -14,6 +21,10 @@ export async function renderSettings() {
     <div class="card" style="margin-bottom:14px">
       <h2 style="margin-top:0">Проект</h2>
       ${field("series_title", "Название сериала (стоит в PDF для клиента)")}
+      <label>Первая серия сериала выходит</label>
+      <div class="row"><input id="anchor-d" type="date" value="${firstDay(state.meta)}" style="width:180px" ${can.write() ? "" : "disabled"}>
+        ${can.write() ? `<button id="anchor-save">Применить</button>` : ""}
+        <span class="muted small">дальше по одной серии в день; закреплённые за датой (📌) серии не сдвигаются</span></div>
     </div>
     <div class="two-col">
       <div class="card">
@@ -54,6 +65,11 @@ export async function renderSettings() {
       toast("Настройки сохранены"); renderSettings();
     };
   }
+  $("#anchor-save") && ($("#anchor-save").onclick = async () => {
+    await api("/api/schedule/anchor", { method: "PUT", json: { number: 1, date: $("#anchor-d").value } });
+    state.meta = await api("/api/meta");
+    toast("Дата старта обновлена: даты серий пересчитаны");
+  });
 }
 
 export function renderPublish() {

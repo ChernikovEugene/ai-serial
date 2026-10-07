@@ -617,6 +617,23 @@ def order_arc(arc_id: str, o: OrderIn, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/schedule/reorder", dependencies=[Depends(auth.writer)])
+def reorder_schedule(o: OrderIn):
+    schedule.reorder_queue(o.ids)
+    return {"ok": True}
+
+
+@app.get("/api/production")
+def production(request: Request):
+    """Доска «Продакшн»: все серии в очереди. Серии, которые роль ещё не видит (ТЗ не готово), приходят
+    с `locked` — только название, дата и арка, без открытия."""
+    role = request.state.user["role"]
+    eps = [e for e in episode_summaries() if e["number"] is not None]
+    for e in eps:
+        e["locked"] = not auth.can_see(role, e["status"])
+    return eps
+
+
 class EpisodeArcIn(BaseModel):
     arc_id: int | None = None
 

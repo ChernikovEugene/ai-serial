@@ -14,46 +14,140 @@ let listView = (() => { try { return localStorage.getItem(VIEW_KEY) === "list"; 
 const editable = (e) => can.admin() || (can.write() && WRITER_STATUSES.includes(e.status));
 const shortDate = (iso) => (iso ? fmtDate(iso) : "");
 
-// ---------------- список арок ----------------
+// ---------------- главный экран: арки сверху, очередь выкладки ниже ----------------
+
+const HISTORY_DAYS = 5; // выложенные серии без арки уходят в историю через столько дней
+let showHistory = false;
 
 export async function renderSeries() {
   const [arcs, eps] = await Promise.all([api("/api/arcs"), api("/api/episodes"), ensureAssets()]);
   const loose = eps.filter((e) => !e.arc_id);
   const cards = [...arcs, ...(loose.length ? [{ ...NO_ARC, episodes: loose.filter((e) => e.number != null).length, drafts: loose.filter((e) => e.number == null).length }] : [])];
-  const m = state.meta;
+  const today = state.meta.today;
+  const queued = eps.filter((e) => e.number != null).sort((x, y) => x.number - y.number);
+  // Арка закончилась, когда все её серии в очереди выложены — тогда они уходят в «Историю»
+  const finished = new Set(arcs.filter((a) => {
+    const own = queued.filter((e) => e.arc_id === a.id);
+    return own.length && own.every((e) => e.status === "posted");
+  }).map((a) => a.id));
+  const isHistory = (e) => e.status === "posted" && (e.arc_id ? finished.has(e.arc_id) : daysAgo(e.date, today) > HISTORY_DAYS);
+  const history = queued.filter(isHistory);
+  const active = queued.filter((e) => !isHistory(e));
+
   view().innerHTML = `
     <div class="row"><h1>Серии</h1><div class="spacer"></div>
-      ${can.edit() ? `<button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
-    <p class="muted">Арка — блок сюжета. Внутри арки быстро пишутся синопсисы серий карточками, потом по каждой серии — подробное ТЗ.
-      Серии выходят по одной в день в порядке очереди.</p>
-    <div class="arc-grid">
+      ${can.edit() ? `<button id="new-ep">+ Новая серия</button><button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
+    <div class="arc-grid compact">
       ${cards.map((a) => arcCard(a, eps.filter((e) => (a.id === "none" ? !e.arc_id : e.arc_id === a.id)))).join("")}
-      ${can.edit() ? `<button class="arc-card arc-card-add" id="new-arc-2"><span>+</span>Новая арка</button>` : ""}
     </div>
-    ${can.edit() ? `<details class="card sched-bar"><summary>Расписание выхода</summary>
-      <div class="row" style="margin-top:10px"><span>Первая серия сериала выходит</span>
-        <input id="anchor-d" type="date" value="${firstDay(m)}" style="width:170px">
-        <button id="anchor-save">Применить</button>
-        <button class="ghost" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые даты не трогаются)">Убрать пропуски</button></div>
-      <p class="muted small">Дальше по одной серии в день. Конкретную дату под событие можно закрепить в карточке серии (📌).</p></details>` : ""}`;
-  const create = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) });
-  $("#new-arc") && ($("#new-arc").onclick = create);
-  $("#new-arc-2") && ($("#new-arc-2").onclick = create);
-  if ($("#anchor-save")) {
-    $("#anchor-save").onclick = async () => {
-      await api("/api/schedule/anchor", { method: "PUT", json: { number: 1, date: $("#anchor-d").value } });
-      state.meta = await api("/api/meta");
-      toast("Дата старта обновлена");
-      renderSeries();
-    };
-    $("#compact").onclick = async () => { await api("/api/schedule/compact", { json: {} }); toast("Пропуски убраны"); renderSeries(); };
-  }
+    <div class="row queue-head"><h2>Очередь выкладки</h2>
+      <span class="muted small">1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте.</span>
+      <div class="spacer"></div>${can.edit() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
+    <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today)}</div>
+    ${history.length ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
+      ${showHistory ? `<div class="ep-list queue-list history">${history.map((e) => queueRow(e, today)).join("")}</div>` : ""}` : ""}`;
+
+  $("#new-ep") && ($("#new-ep").onclick = () => newEpisodeQuick(arcs, renderSeries));
+  $("#new-arc") && ($("#new-arc").onclick = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) }));
+  $("#compact") && ($("#compact").onclick = async () => { await api("/api/schedule/compact", { json: {} }); toast("Пропуски убраны"); renderSeries(); });
+  $("#history") && ($("#history").onclick = () => { showHistory = !showHistory; renderSeries(); });
+  $$(".queue-row[data-open]").forEach((r) => r.addEventListener("click", (ev) => {
+    if (!ev.target.closest("button,a,input")) location.hash = `#/episodes/${r.dataset.open}`;
+  }));
+  $$("[data-create]").forEach((b) => (b.onclick = () => newEpisodeQuick(arcs, renderSeries, b.dataset.create)));
+  if (can.edit()) bindQueueDrag(renderSeries);
 }
 
-function firstDay(m) {
-  const d = new Date(m.anchor_date + "T00:00:00");
-  d.setDate(d.getDate() + 1 - m.anchor_number);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const daysAgo = (iso, today) => Math.round((new Date(today + "T00:00:00") - new Date(iso + "T00:00:00")) / 86400000);
+const addDay = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
+/** Строки очереди: серии по дням, между ними — свободные дни (пропуски), с кнопкой «+ серия на этот день». */
+function queueRows(list, today) {
+  if (!list.length) return `<p class="muted">В очереди пока нет серий. Добавьте их в арке или кнопкой «+ Новая серия».</p>`;
+  const out = [];
+  list.forEach((e, i) => {
+    out.push(queueRow(e, today));
+    const next = list[i + 1];
+    if (next && next.number - e.number > 1) {
+      const gap = next.number - e.number - 1;
+      const first = addDay(e.date, 1);
+      out.push(`<div class="queue-gap"><span>${gap === 1 ? `Свободный день · ${fmtDate(first)}` : `Свободно ${gap} дн. · ${fmtDate(first)} — ${fmtDate(addDay(e.date, gap))}`}</span>
+        ${can.edit() && first >= today ? `<button class="ghost small" data-create="${first}">+ серия на ${fmtDate(first, false)}</button>` : ""}</div>`);
+    }
+  });
+  return out.join("");
+}
+
+function queueRow(e, today) {
+  const movable = can.edit() && e.status !== "posted" && !e.pinned;
+  const arc = e.arc_id ? `<span class="arc-chip">${esc(e.arc_title)} · ${e.arc_number}</span>` : `<span class="arc-chip none">Вне арки</span>`;
+  return `<div class="ep-card queue-row ${e.date === today ? "today" : ""} ${e.date < today ? "past" : ""}" data-ep="${e.id}" data-open="${e.id}" data-movable="${movable ? 1 : ""}" style="--c:${STATUS_COLORS[e.status]}">
+    <div class="q-when">${movable ? `<span class="grip">⋮⋮</span>` : ""}<b>${fmtDate(e.date)}</b>${e.date === today ? ` <span class="today-tag">сегодня</span>` : ""}${e.pinned ? " 📌" : ""}</div>
+    <div>${arc}</div>
+    <div class="q-text"><b>${esc(e.title || "Без названия")}</b><span class="muted small">${esc((e.synopsis || "").replace(/\s+/g, " ").slice(0, 160)) || "синопсиса нет"}</span></div>
+    <div>${statusPill(e.status, true)}</div>
+  </div>`;
+}
+
+function bindQueueDrag(rerender) {
+  let drag = null;
+  $$(".queue-row[data-movable='1']").forEach((row) => {
+    row.draggable = true;
+    row.addEventListener("dragstart", (ev) => { drag = row; row.classList.add("dragging"); ev.dataTransfer.effectAllowed = "move"; });
+    row.addEventListener("dragend", () => { row.classList.remove("dragging"); $$(".drop-before,.drop-after").forEach((x) => x.classList.remove("drop-before", "drop-after")); });
+  });
+  const box = $("[data-dnd='schedule']");
+  box?.addEventListener("dragover", (ev) => {
+    if (!drag) return;
+    ev.preventDefault();
+    const over = ev.target.closest(".queue-row");
+    $$(".drop-before,.drop-after", box).forEach((x) => x.classList.remove("drop-before", "drop-after"));
+    if (over && over !== drag) over.classList.add(lowerHalf(ev, over) ? "drop-after" : "drop-before");
+  });
+  box?.addEventListener("drop", async (ev) => {
+    if (!drag) return;
+    ev.preventDefault();
+    const over = ev.target.closest(".queue-row");
+    if (!over || over === drag) return;
+    over[lowerHalf(ev, over) ? "after" : "before"](drag);
+    const ids = $$(".queue-row", box).map((r) => +r.dataset.ep);
+    drag = null;
+    await api("/api/schedule/reorder", { json: { ids } });
+    rerender();
+  });
+}
+
+const lowerHalf = (ev, el) => { const r = el.getBoundingClientRect(); return ev.clientY > r.top + r.height / 2; };
+
+/** «+ Новая серия» — в том числе вне арки (праздник, событие). */
+function newEpisodeQuick(arcs, rerender, date = "") {
+  const m = modal(`<h1>Новая серия</h1>
+    <label>Название</label><input id="nq-title" placeholder="Например: Хэллоуин у Ксю">
+    <label>Синопсис</label><textarea id="nq-syn" rows="4" placeholder="О чём серия…"></textarea>
+    <label>Арка</label><select id="nq-arc"><option value="">Вне арки (праздник, событие, отдельный ролик)</option>
+      ${arcs.map((a) => `<option value="${a.id}">${esc(a.title)}</option>`).join("")}</select>
+    <label>Когда выходит</label>
+    <div class="nq-when">
+      <label class="check"><input type="radio" name="nq-when" value="date" ${date ? "checked" : ""}> В конкретный день (закрепить 📌)
+        <input id="nq-date" type="date" value="${date}" style="width:170px;margin-left:8px"></label>
+      <label class="check"><input type="radio" name="nq-when" value="queue" ${date ? "" : "checked"}> В конец очереди (арки или общей)</label>
+      <label class="check"><input type="radio" name="nq-when" value="draft"> В черновики</label>
+    </div>
+    <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="nq-cancel">Отмена</button><button class="primary" id="nq-save">Создать</button></div>`);
+  $("#nq-cancel", m).onclick = closeModal;
+  $("#nq-date", m).onfocus = () => ($("input[value=date]", m).checked = true);
+  $("#nq-save", m).onclick = async () => {
+    const when = $("input[name=nq-when]:checked", m).value;
+    const d = $("#nq-date", m).value;
+    if (when === "date" && !d) return toast("Выберите день", true);
+    await api("/api/episodes", { json: {
+      title: $("#nq-title", m).value.trim(), synopsis: $("#nq-syn", m).value, arc_id: +$("#nq-arc", m).value || null,
+      date: when === "date" ? d : null, backlog: when === "draft" } });
+    closeModal();
+    toast("Серия создана");
+    rerender();
+  };
+  setTimeout(() => $("#nq-title", m).focus(), 50);
 }
 
 function arcCard(a, eps) {
@@ -67,7 +161,7 @@ function arcCard(a, eps) {
   return `<a class="arc-card" href="#/series/${a.id}">
     <div class="row">${status}<div class="spacer"></div><span class="muted small">${esc(span)}</span></div>
     <h2>${esc(a.title)}</h2>
-    <p class="arc-card-syn">${esc(a.notes || (a.id === "none" ? "Серии, которые не относятся ни к одной арке." : "Синопсис арки пока не написан."))}</p>
+    <p class="arc-card-syn">${esc(a.notes || (a.id === "none" ? "Серии вне арок: праздники, события, отдельные ролики." : "Синопсис арки пока не написан."))}</p>
     <div class="arc-card-bar">${bar || `<i style="flex:1;background:var(--line)"></i>`}</div>
     <div class="muted small">${plural(a.episodes, "серия", "серии", "серий")} в очереди${a.drafts ? ` · ${plural(a.drafts, "черновик", "черновика", "черновиков")}` : ""}</div>
   </a>`;

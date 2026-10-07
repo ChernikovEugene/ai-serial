@@ -1,6 +1,7 @@
 // Router, navigation and login.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
 import { renderSeries, renderArc } from "./series.js";
+import { renderProduction } from "./production.js";
 import { renderCalendar } from "./calendar.js";
 import { renderEpisode, stopEpisodePolling } from "./episode.js";
 import { renderAssets, renderAsset } from "./assets.js";
@@ -10,6 +11,9 @@ import { renderTeam } from "./team.js";
 import { initFeedback, stopFeedback } from "./feedback.js";
 
 let lastHash = location.hash;
+
+/** Стартовая страница роли: сценарист — «Серии», монтажёр — «Продакшн», остальные — «Статус». */
+const homeFor = (role) => ({ writer: "#/series", editor: "#/production" }[role] || "#/status");
 
 async function route() {
   if (window.__scriptDirty?.() && !confirm("Сценарий не сохранён. Уйти без сохранения?")) {
@@ -28,7 +32,9 @@ async function route() {
   }
   drawNav(section || "status");
   try {
-    if (!section || section === "status") return await renderStatus();
+    if (!section) { location.replace(homeFor(state.meta.user.role)); return; }
+    if (section === "status") return await renderStatus();
+    if (section === "production") return await renderProduction();
     if (section === "queue") { location.replace("#/series"); return; }
     if (section === "series") return id ? await renderArc(id) : await renderSeries();
     if (section === "calendar") return await renderCalendar();
@@ -51,6 +57,7 @@ function drawNav(section) {
     <a href="#/status" data-nav="status">Статус</a>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/series" data-nav="series">Серии</a>
+    <a href="#/production" data-nav="production">Продакшн</a>
     <a href="#/publish" data-nav="publish">Публикация</a>
     <a href="#/characters" data-nav="library">Библиотека</a>
     <a href="#/team" data-nav="team">Команда</a>
@@ -73,7 +80,7 @@ function drawNav(section) {
 async function renderLogin() {
   $("#nav").hidden = true;
   const st = await api("/api/auth/state");
-  if (st.user) { state.meta = null; location.hash = "#/status"; return; }
+  if (st.user) { state.meta = null; location.hash = "#/"; return; }
   const setup = !st.has_users;
   view().innerHTML = `<div class="login card">
     <h1>🎬 Студия сериала</h1>
@@ -86,7 +93,7 @@ async function renderLogin() {
     const body = { login: $("#l-login").value, password: $("#l-pass").value, name: setup ? $("#l-name").value : "" };
     await api(setup ? "/api/auth/setup" : "/api/auth/login", { json: body });
     state.meta = null;
-    location.hash = "#/status";
+    location.hash = "#/";
   };
   $("#l-go").onclick = go;
   $("#l-pass").addEventListener("keydown", (e) => e.key === "Enter" && go());
@@ -95,4 +102,4 @@ async function renderLogin() {
 
 window.addEventListener("hashchange", route);
 window.addEventListener("unhandledrejection", (e) => { if (e.reason?.message !== "auth") console.error(e.reason); });
-if (!location.hash || location.hash === "#/") location.hash = "#/status"; else route();
+if (!location.hash) location.hash = "#/"; else route();

@@ -147,14 +147,27 @@ def arc_numbers(eps: list[dict], arcs: list[dict]) -> dict[int, dict]:
 
 
 def append_to_arc(eid: int, arc_id: int | None) -> int:
-    """Поставить серию в очередь в конец её арки (следующий день после последней серии арки).
-    Если день занят, следующие серии сдвигаются вперёд (кроме закреплённых)."""
+    """Поставить серию в очередь в конец её арки (следующий день после последней серии арки); серию без арки —
+    в конец всей очереди. Если день занят, следующие серии сдвигаются вперёд (кроме закреплённых)."""
     with db.connect() as c:
-        last = c.execute("SELECT MAX(number) FROM episodes WHERE arc_id IS ? AND number IS NOT NULL AND id<>?",
-                         (arc_id, eid)).fetchone()[0]
+        if arc_id is None:
+            last = c.execute("SELECT MAX(number) FROM episodes WHERE number IS NOT NULL AND id<>?", (eid,)).fetchone()[0]
+        else:
+            last = c.execute("SELECT MAX(number) FROM episodes WHERE arc_id=? AND number IS NOT NULL AND id<>?",
+                             (arc_id, eid)).fetchone()[0]
     number = last + 1 if last else next_free()
     move(eid, number)
     return number
+
+
+def reorder_queue(ids: list[int]) -> None:
+    """Новый порядок в общей очереди выкладки (перетаскивание в «Сериях»): серии обмениваются своими днями.
+    Выложенные и закреплённые за датой серии не двигаются."""
+    with db.connect() as c:
+        eps = {r["id"]: dict(r) for r in c.execute("SELECT id, number, pinned, status FROM episodes WHERE number IS NOT NULL")}
+        movable = [eps[i] for i in ids if i in eps and not eps[i]["pinned"] and eps[i]["status"] != "posted"]
+        for e, n in zip(movable, sorted(e["number"] for e in movable)):
+            c.execute("UPDATE episodes SET number=? WHERE id=?", (n, e["id"]))
 
 
 def reorder_arc(arc_id: int | None, ids: list[int]) -> None:
