@@ -712,6 +712,8 @@ def arc_pdf(arc_id: int):
   .bar {{ position: sticky; top: 0; z-index: 2; display: flex; gap: 12px; align-items: center; padding: 12px 20px;
          background: #111; color: #ddd; font-size: 14px; }}
   .bar button {{ background: var(--teal); color: #04110e; border: 0; border-radius: 8px; padding: 9px 16px; font-weight: 600; cursor: pointer; }}
+  .bar button.ghost {{ background: transparent; color: #ddd; border: 1px solid #555; }}
+  .bar button:disabled {{ opacity: .6; cursor: default; }}
   .sheet {{ width: 297mm; height: 210mm; margin: 16px auto; padding: 16mm 18mm; position: relative; overflow: hidden;
            background: radial-gradient(120% 90% at 85% 10%, #0f6f62 0%, #06302a 38%, var(--ink) 75%); page-break-after: always; }}
   .sheet::after {{ content: ""; position: absolute; right: -40mm; top: -30mm; width: 140mm; height: 140mm;
@@ -732,14 +734,40 @@ def arc_pdf(arc_id: int):
           color: var(--muted); font-size: 11px; z-index: 1; }}
   @media print {{ body {{ background: none; }} .bar {{ display: none; }} .sheet {{ margin: 0; }} }}
 </style></head><body>
-<div class="bar"><button onclick="print()">Сохранить PDF</button>
-  <span>В окне печати выберите «Сохранить как PDF». Серий в выгрузке: {len(eps)}{' (черновики не входят)' if arc['drafts'] else ''}.</span></div>
+<div class="bar"><button id="dl" onclick="downloadPdf()">Скачать PDF</button>
+  <button class="ghost" onclick="print()">Печать</button>
+  <span id="msg">Файл сохранится в «Загрузки». Серий в выгрузке: {len(eps)}{' (черновики не входят)' if arc['drafts'] else ''}.</span></div>
 <section class="sheet"><div class="kicker">{h(series)} · синопсисы на согласование</div>
   <h1>{h(arc['title'])}</h1><div class="span">{n} {n_word} · {span}</div>
   {f'<div class="syn">{h(arc["notes"])}</div>' if arc["notes"] else ''}
   {('<div class="chips">' + ''.join(f'<span>{h(m)}</span>' for m in members) + '</div>') if members else ''}
   <div class="foot"><span>{h(series)}</span><span>{_ru_date(date.today().isoformat())}</span></div></section>
 {pages}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+// «Скачать PDF»: каждый лист (A4, альбомный) снимается картинкой и складывается в файл — без окна печати
+async function downloadPdf() {{
+  const btn = document.getElementById("dl"), msg = document.getElementById("msg");
+  if (!window.html2canvas || !window.jspdf) {{ msg.textContent = "Нет интернета для сборки PDF — нажмите «Печать» и выберите «Сохранить как PDF»."; return; }}
+  btn.disabled = true; btn.textContent = "Готовлю PDF…";
+  try {{
+    await document.fonts.ready;
+    const pdf = new window.jspdf.jsPDF({{ orientation: "landscape", unit: "mm", format: "a4" }});
+    const sheets = [...document.querySelectorAll(".sheet")];
+    for (let i = 0; i < sheets.length; i++) {{
+      msg.textContent = `Лист ${{i + 1}} из ${{sheets.length}}…`;
+      const canvas = await html2canvas(sheets[i], {{ scale: 2, backgroundColor: "#050807", useCORS: true, logging: false }});
+      if (i) pdf.addPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 297, 210);
+    }}
+    pdf.save({json.dumps(arc["title"] + " — синопсисы.pdf", ensure_ascii=False)});
+    msg.textContent = "Готово: файл в «Загрузках».";
+  }} catch (e) {{
+    msg.textContent = "Не получилось собрать PDF — нажмите «Печать» и выберите «Сохранить как PDF».";
+  }} finally {{ btn.disabled = false; btn.textContent = "Скачать PDF"; }}
+}}
+</script>
 </body></html>"""
     return Response(page, media_type="text/html")
 
