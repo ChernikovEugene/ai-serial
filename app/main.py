@@ -384,10 +384,15 @@ def update_asset(asset_id: int, p: AssetPatch):
     return get_asset(asset_id)
 
 
-@app.delete("/api/assets/{asset_id}", dependencies=[Depends(auth.admin)])
+@app.delete("/api/assets/{asset_id}", dependencies=[Depends(auth.writer)])
 def delete_asset(asset_id: int):
     with db.connect() as c:
         c.execute("DELETE FROM assets WHERE id=?", (asset_id,))
+        # убрать удалённого из участников арок, чтобы не висели ссылки в пустоту
+        for arc in db.rows(c.execute("SELECT id, members FROM arcs")):
+            kept = [m for m in arc["members"] if m.get("asset_id") != asset_id]
+            if len(kept) != len(arc["members"]):
+                c.execute("UPDATE arcs SET members=? WHERE id=?", (db.dumps(kept), arc["id"]))
     return {"ok": True}
 
 

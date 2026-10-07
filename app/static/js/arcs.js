@@ -54,7 +54,8 @@ export async function arcDialog({ arc = null, onChange, draft = null } = {}) {
           <option value="none">не участвует</option>
           <option value="" ${a.id in chosen && chosen[a.id] === "" ? "selected" : ""}>участвует (активная версия)</option>
           ${a.versions.map((v) => `<option value="${v.id}" ${chosen[a.id] === v.id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}
-        </select></div>`).join("")}</div>${add}`;
+        </select>
+        <button class="ghost small danger" data-del-asset="${a.id}" title="Удалить из библиотеки" aria-label="Удалить ${esc(a.name)} из библиотеки">✕</button></div>`).join("")}</div>${add}`;
   };
   const m = modal(`<h1>${arc ? "Арка" : "Новая арка"}</h1>
     <label>Название арки</label><input id="arc-title" value="${esc(draft?.title ?? arc?.title ?? "")}" placeholder="Например: Первый косплей">
@@ -84,6 +85,17 @@ export async function arcDialog({ arc = null, onChange, draft = null } = {}) {
       arcDialog({ arc, onChange, draft: { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked } });
     };
   });
+  // «✕» у персонажа или локации: удаляем из библиотеки совсем (с подтверждением), окно перерисовывается с введённым
+  $$("[data-del-asset]", m).forEach((b) => (b.onclick = async () => {
+    const a = state.assets.find((x) => x.id === +b.dataset.delAsset);
+    if (!a || !confirm(`Удалить «${a.name}» из библиотеки? Исчезнут все его версии и фото, он пропадёт из арок и серий. Это нельзя отменить.`)) return;
+    const picked = Object.fromEntries(membersOf().filter((x) => x.asset_id !== a.id).map((x) => [x.asset_id, x.version_id ?? ""]));
+    await api(`/api/assets/${a.id}`, { method: "DELETE" });
+    const draft = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked };
+    closeModal();
+    toast(`«${a.name}» удалён из библиотеки`);
+    arcDialog({ arc, onChange, draft });
+  }));
   $("#arc-save", m).onclick = async () => {
     const members = membersOf();
     const body = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, members };
