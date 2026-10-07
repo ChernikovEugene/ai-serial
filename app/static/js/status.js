@@ -24,7 +24,7 @@ const MONTHS_GEN = ["января", "февраля", "марта", "апрел�
 
 const MONTHS_NOM = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 const MONTHS_IN = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
-const S = { stage: null, filter: "all", hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
+const S = { stage: null, hidePosted: false, data: null, mdata: null, month: "", json: "", timer: null };
 const shiftMonth = (ym, k) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + k, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 
 export function stopStatusPolling() { clearInterval(S.timer); S.timer = null; }
@@ -119,7 +119,6 @@ function render() {
   const mname = MONTHS_NOM[+S.month.slice(5) - 1], minn = MONTHS_IN[+S.month.slice(5) - 1];
   const lateRows = rows.filter((r) => r.late);
   const riskRows = rows.filter((r) => r.risk && !r.late);
-  const inWork = by[1].length + by[2].length + by[3].length;
   // Сколько серий окна по графику должно быть выложено к концу сегодняшнего дня
   const plan = mrows.filter((r) => r.iso <= today).length;
   const gap = Math.max(0, plan - posted);
@@ -134,19 +133,14 @@ function render() {
   if (!alerts.length) alerts.push({ c: "var(--ok)", h: "Всё по графику:", t: "опаздывающих серий нет." });
 
   let shown = rows;
-  if (S.filter === "late") shown = rows.filter((r) => r.late);
-  if (S.filter === "work") shown = rows.filter((r) => r.stage >= 1 && r.stage <= 3);
   if (S.hidePosted) shown = shown.filter((r) => r.stage < 5);
   if (S.stage !== null) shown = shown.filter((r) => r.stage === S.stage); // нажата плитка этапа
 
   const todayLabel = `${WD_FULL[new Date(today + "T00:00:00").getDay()]}, ${+today.slice(8)} ${MONTHS_GEN[+today.slice(5, 7) - 1]}`;
-  const span = `${rows[0].d} ${MONTHS_GEN[rows[0].mon].slice(0, 3)} — ${rows.at(-1).d} ${MONTHS_GEN[rows.at(-1).mon].slice(0, 3)}`;
-  const chip = (key, text) => `<button class="chip-btn ${S.filter === key ? "on" : ""}" data-sm-filter="${key}">${text}</button>`;
 
   view().innerHTML = `
     <div class="row sm-head">
       <h1>Статус</h1>
-      <span class="muted">${span} · 5 прошедших дней, сегодня и вперёд, всего ${total} серий. Сдвигается само каждый день.</span>
       <div class="spacer"></div>
       <div class="sm-today">Сегодня: ${todayLabel}</div>
     </div>
@@ -188,7 +182,6 @@ function render() {
 
     <div class="row sm-filters">
       ${S.stage !== null ? `<button class="chip-btn on" id="sm-stage-reset" style="--c:${STAGES[S.stage].color}"><i></i>Этап: ${STAGES[S.stage].name} · показано ${shown.length} ✕</button>` : ""}
-      ${chip("all", `Все · ${total}`)}${chip("late", `Опаздывают · ${lateRows.length}`)}${chip("work", `В работе · ${inWork}`)}
       <label class="check"><input type="checkbox" id="sm-hide" ${S.hidePosted ? "checked" : ""}> Скрыть выложенные</label>
     </div>
 
@@ -196,7 +189,7 @@ function render() {
       <div class="sm-num">Серия</div><div class="sm-info">О чём ролик</div>
       <div class="sm-segs">${SEG_LABELS.map((l) => `<span>${l}</span>`).join("")}</div><div class="sm-stat">Статус</div>
     </div>
-    <div class="sm-rows">${shown.map((r) => (S.filter === "all" && arcAt[r.number] ? arcDivider(arcAt[r.number]) : "") + rowHtml(r)).join("")
+    <div class="sm-rows">${shown.map((r) => (arcAt[r.number] ? arcDivider(arcAt[r.number]) : "") + rowHtml(r)).join("")
       || `<div class="help">В этом фильтре серий нет.</div>`}</div>`;
 
   bindArcDividers(() => load(true));
@@ -204,7 +197,6 @@ function render() {
   $("#sm-prev").onclick = () => go(shiftMonth(S.month, -1));
   $("#sm-next").onclick = () => go(shiftMonth(S.month, 1));
   $("#sm-now") && ($("#sm-now").onclick = () => go(today.slice(0, 7)));
-  $$("[data-sm-filter]").forEach((b) => b.onclick = () => { S.filter = b.dataset.smFilter; render(); });
   $$("[data-sm-stage]").forEach((t) => {
     const toggle = () => {
       const k = +t.dataset.smStage;

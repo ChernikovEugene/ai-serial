@@ -5,6 +5,14 @@ import { arcDialog, bindArcDividers, ensureAssets } from "./arcs.js";
 
 let cursor = null; // first day of shown month
 
+// Что показывать в календаре (галочки над сеткой); выбор запоминается в браузере
+const LAYERS = [["eps", "Публикации"], ["holidays", "Праздники"], ["own", "Свои события"], ["arcs", "Арки"]];
+const SHOW_KEY = "calendarShow";
+const show = (() => {
+  const all = Object.fromEntries(LAYERS.map(([k]) => [k, true]));
+  try { return { ...all, ...JSON.parse(localStorage.getItem(SHOW_KEY) || "{}") }; } catch { return all; }
+})();
+
 export async function renderCalendar() {
   if (!cursor) { const t = new Date(state.meta.today + "T00:00:00"); cursor = new Date(t.getFullYear(), t.getMonth(), 1); }
   const first = new Date(cursor);
@@ -24,7 +32,10 @@ export async function renderCalendar() {
       <a class="btn" href="#/series">Серии</a>
       <button id="prev">←</button><b class="month-title">${MONTHS[first.getMonth()]} ${first.getFullYear()}</b><button id="next">→</button>
       <button class="ghost" id="today">Сегодня</button></div>
-    <p class="muted small">1 серия в день. Перетащите серию на другой день — номера пересчитаются. Клик по числу — добавить своё событие (инфоповод, тренд, дата).</p>
+    <div class="row cal-filters">
+      ${LAYERS.map(([k, name]) => `<label class="check"><input type="checkbox" data-layer="${k}" ${show[k] ? "checked" : ""}> ${name}</label>`).join("")}
+      <span class="muted small">1 серия в день. Перетащите серию на другой день; клик по числу — своё событие или новая арка.</span>
+    </div>
     <div class="cal">
       ${["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => `<div class="cal-h">${d}</div>`).join("")}
       ${days.map((d) => {
@@ -33,15 +44,20 @@ export async function renderCalendar() {
         const other = d.getMonth() !== first.getMonth();
         return `<div class="cal-day ${other ? "other" : ""} ${iso === today ? "today" : ""} ${iso < today ? "past" : ""}" data-date="${iso}">
           <div class="cal-num" data-addev="${iso}" title="Добавить событие">${d.getDate()}</div>
-          ${arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
-          ${(evs[iso] || []).map((ev) => `<div class="cal-ev ${ev.builtin ? "" : "own"}">🎉 ${esc(ev.title)}${!ev.builtin && can.edit() ? ` <span data-delev="${ev.id}" title="Удалить">✕</span>` : ""}</div>`).join("")}
-          ${eps.map((e) => `<div class="cal-ep" draggable="${can.edit()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
+          ${show.arcs && arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
+          ${(evs[iso] || []).filter((ev) => (ev.builtin ? show.holidays : show.own)).map((ev) => `<div class="cal-ev ${ev.builtin ? "" : "own"}">🎉 ${esc(ev.title)}${!ev.builtin && can.edit() ? ` <span data-delev="${ev.id}" title="Удалить">✕</span>` : ""}</div>`).join("")}
+          ${(show.eps ? eps : []).map((e) => `<div class="cal-ep" draggable="${can.edit()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
               <b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
-          ${!eps.length && iso >= today && can.edit() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
+          ${show.eps && !eps.length && iso >= today && can.edit() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
         </div>`;
       }).join("")}
     </div>`;
 
+  $$("[data-layer]").forEach((cb) => (cb.onchange = () => {
+    show[cb.dataset.layer] = cb.checked;
+    try { localStorage.setItem(SHOW_KEY, JSON.stringify(show)); } catch {}
+    renderCalendar();
+  }));
   $("#prev").onclick = () => { cursor.setMonth(cursor.getMonth() - 1); renderCalendar(); };
   $("#next").onclick = () => { cursor.setMonth(cursor.getMonth() + 1); renderCalendar(); };
   $("#today").onclick = () => { cursor = null; renderCalendar(); };
