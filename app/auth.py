@@ -117,5 +117,9 @@ def editor(request: Request) -> dict:
     return require(request, *GEN_ROLES)
 
 
+def writer_or_editor(request: Request) -> dict:
+    return require(request, "admin", "writer", "editor")
+
+
 def admin(request: Request) -> dict:
     return require(request, "admin")

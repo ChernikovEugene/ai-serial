@@ -9,7 +9,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, breakdown, db, schedule, veo
+from . import auth, breakdown, db, feedback, schedule, veo
+from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
@@ -1036,12 +1037,79 @@ def delete_comment(cid: int, request: Request):
     return comments_for(cm["episode_id"])
 
 
+# ---------- «Правка»: notes about the studio itself, stored as GitHub issues ----------
+
+class NoteComment(BaseModel):
+    text: str
+
+
+def _gh(fn, *args):
+    try:
+        return fn(*args)
+    except GitHubError as e:
+        raise HTTPException(502 if e.code >= 500 else 400, str(e))
+
+
+@app.get("/api/feedback")
+def feedback_list():
+    return _gh(feedback.list_notes)
+
+
+@app.post("/api/feedback", dependencies=[Depends(auth.writer_or_editor)])
+async def feedback_create(request: Request, text: str = Form(""), page: str = Form(""), viewport: str = Form(""),
+                          images: list[UploadFile] = File(default=[])):
+    shots = []
+    for f in images:
+        ext = Path(f.filename or "").suffix.lower()
+        if ext not in IMAGE_EXT:
+            ext = "." + (f.content_type or "image/png").split("/")[-1].replace("jpeg", "jpg")
+        if ext not in IMAGE_EXT:
+            continue
+        data = await f.read()
+        if data:
+            shots.append((data, ext[1:]))
+    if not text.strip() and not shots:
+        raise HTTPException(400, "Напишите, что не так, или вставьте скриншот")
+    return _gh(feedback.create, text, page, viewport, request.state.user["name"], shots)
+
+
+@app.get("/api/feedback/{number}/comments")
+def feedback_comments(number: int):
+    return _gh(feedback.comments, number)
+
+
+@app.post("/api/feedback/{number}/comments", dependencies=[Depends(auth.writer_or_editor)])
+def feedback_comment(number: int, body: NoteComment, request: Request):
+    if not body.text.strip():
+        raise HTTPException(400, "Пустой ответ")
+    _gh(feedback.add_comment, number, body.text.strip(), request.state.user["name"])
+    return {"ok": True}
+
+
+@app.post("/api/feedback/{number}/withdraw", dependencies=[Depends(auth.writer_or_editor)])
+def feedback_withdraw(number: int):
+    _gh(feedback.withdraw, number)
+    return {"ok": True}
+
+
+@app.get("/api/feedback-shot")
+def feedback_shot(path: str):
+    data = _gh(feedback.shot, path)
+    ext = path.rsplit(".", 1)[-1]
+    return Response(data, media_type=f"image/{'jpeg' if ext == 'jpg' else ext}",
+                    headers={"Cache-Control": "max-age=86400"})
+
+
 # ---------- settings ----------
+
+SECRET_SETTINGS = ("veo_api_key", "github_token")
+
 
 @app.get("/api/settings")
 def read_settings():
     s = db.get_settings()
-    s["veo_api_key"] = ("••••" + s["veo_api_key"][-4:]) if s.get("veo_api_key") else ""
+    for k in SECRET_SETTINGS:
+        s[k] = ("••••" + s[k][-4:]) if s.get(k) else ""
     return s
 
 
@@ -1051,7 +1119,7 @@ def write_settings(values: dict):
         for k, v in values.items():
             if k not in db.DEFAULT_SETTINGS or k.startswith("anchor_"):
                 continue
-            if k == "veo_api_key" and str(v).startswith("••••"):
+            if k in SECRET_SETTINGS and str(v).startswith("••••"):
                 continue
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)", (k, str(v)))
     return read_settings()

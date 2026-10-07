@@ -151,6 +151,7 @@ DEFAULT_SETTINGS = {
     "max_shot_seconds": "8",
     "anchor_number": "1",
     "anchor_date": "",               # empty -> today on first start
+    "github_token": "",              # for «Правка»; not needed when GitHub CLI (gh) is logged in
 }
 
 STATUSES = [
