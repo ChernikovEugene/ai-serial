@@ -1,0 +1,122 @@
+/* Темы «Графит» (тёмная и светлая) поверх старого дизайна из style.css. Включаются классом .grafit на <html>
+   и data-theme="dark" | "light"; без класса студия выглядит по-старому. Переключатель — внизу меню (main.js). */
+
+/* ---------- палитры ---------- */
+:root.grafit[data-theme="dark"] {
+  --bg: #111112; --panel: #18181a; --panel2: #1f1f22; --col: #151517; --line: #26262a; --text: #f1f1f2; --muted: #8b8b92;
+  --accent: #00c7b2; --accent2: #00c7b2; --accent-text: #2fd9c5; --btn: #00c7b2; --btn-fg: #04221e; --input: #141416;
+  --nav-bg: #111112; --nav-line: #1f1f22; --nav-text: #e9e9ec; --nav-muted: #7c7c84; --nav-hover: #1b1b1e;
+  --nav-active-bg: #1f1f22; --nav-active-fg: #ffffff; --soft: rgba(0,199,178,.07); --tag-bg: 18%; --tag-fg: 85%;
+  --shadow: rgba(0,0,0,.5); --backdrop: rgba(0,0,0,.6);
+}
+:root.grafit[data-theme="light"] {
+  --bg: #f5f5f6; --panel: #ffffff; --panel2: #f7f7f8; --col: #efeff1; --line: #e3e3e6; --text: #151517; --muted: #74747c;
+  --accent: #00c7b2; --accent2: #00a896; --accent-text: #00897b; --btn: #00c7b2; --btn-fg: #04221e; --input: #ffffff;
+  --nav-bg: #ffffff; --nav-line: #e7e7ea; --nav-text: #1b1b1e; --nav-muted: #85858d; --nav-hover: #f3f3f5;
+  --nav-active-bg: #f0f0f2; --nav-active-fg: #111113; --soft: #edf9f7; --tag-bg: 14%; --tag-fg: 62%;
+  --warn: #d99413; --ok: #1fa56f; --err: #e5483a;
+  --shadow: rgba(20,20,30,.12); --backdrop: rgba(20,20,30,.35);
+}
+:root.grafit { color-scheme: dark; }
+:root.grafit[data-theme="light"] { color-scheme: light; }
+
+/* ---------- основа ---------- */
+.grafit body { font: 14px/1.5 Onest, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+.grafit h1 { font-size: 32px; font-weight: 500; letter-spacing: -.025em; margin-bottom: 18px; }
+.grafit h2 { font-size: 19px; font-weight: 500; letter-spacing: -.01em; }
+.grafit main { padding: 28px 36px 80px; }
+.grafit a { color: var(--accent-text); }
+.grafit code { color: var(--accent-text); }
+
+/* меню: активный пункт — тонкая бирюзовая полоска слева */
+.grafit .nav { background: var(--nav-bg); border-right: 1px solid var(--nav-line); padding: 22px 14px; gap: 4px; }
+.grafit .nav a { color: var(--nav-text); font-weight: 500; padding: 9px 12px; border-radius: 6px; }
+.grafit .nav a:hover { background: var(--nav-hover); }
+.grafit .nav a.active { position: relative; background: var(--nav-active-bg); color: var(--nav-active-fg); }
+.grafit .nav a.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: #00c7b2; }
+.grafit .nav-foot { color: var(--nav-muted); }
+@media (min-width: 801px) { .grafit .nav { width: 224px; } }
+.grafit .nav-foot .me { color: var(--nav-text); }
+.grafit .nav-foot .badge { align-self: flex-start; }
+
+/* логотип: в старом дизайне — «🎬 Студия», в «Графите» — бирюзовый значок со стрелкой */
+.brand-new { display: none; }
+.grafit .brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px 22px; }
+.grafit .brand-old { display: none; }
+.grafit .brand-new { display: contents; }
+.logo-mark { width: 34px; height: 34px; border-radius: 7px; background: #00c7b2; display: grid; place-items: center; flex: none; }
+.logo-mark svg { width: 18px; height: 18px; }
+.logo-text { display: flex; flex-direction: column; line-height: 1.15; }
+.logo-text b { font-size: 16px; font-weight: 600; letter-spacing: -.01em; color: var(--nav-text); }
+.logo-text small { font-size: 11px; font-weight: 400; color: var(--nav-muted); letter-spacing: .02em; }
+
+/* кнопки и поля */
+.grafit button, .grafit .btn { border-radius: 6px; padding: 8px 16px; background: var(--panel); border-color: var(--line); color: var(--text); font-weight: 500; }
+.grafit button.ghost, .grafit .btn.ghost { background: transparent; }
+.grafit button.small, .grafit .btn.small { padding: 4px 11px; }
+.grafit button.primary, .grafit .btn.primary { background: var(--btn); border-color: var(--btn); color: var(--btn-fg); }
+.grafit button.danger, .grafit .danger { color: var(--err); }
+.grafit input, .grafit textarea, .grafit select { background: var(--input); border-color: var(--line); border-radius: 6px; }
+.grafit pre.code, .grafit .tt-prompt code { background: var(--input); }
+.grafit .ep-card .ep-title:hover, .grafit .ep-card .ep-syn:hover,
+.grafit .ep-card .ep-title:focus, .grafit .ep-card .ep-syn:focus { background: var(--input); }
+
+/* карточки */
+.grafit .card, .grafit .arc-card, .grafit .prod-col, .grafit .tt-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.grafit .arc-grid.compact .arc-card { padding: 16px 18px; border-radius: 8px; }
+.grafit .arc-card h2 { font-size: 18px; font-weight: 500; }
+.grafit .arc-card-bar { height: 4px; border-radius: 2px; }
+.grafit .ep-card, .grafit .prod-card { border-radius: 6px; background: var(--panel); border: 1px solid var(--line); }
+.grafit .ep-card { border-left: 3px solid var(--c); }
+.grafit .prod-card { background: var(--panel2); border-left: 3px solid var(--c); }
+.grafit .prod-col { background: var(--col); }
+.grafit .prod-col header b { font-size: 16px; font-weight: 500; }
+.grafit dialog { border-radius: 10px; }
+.grafit dialog::backdrop { background: var(--backdrop); }
+.grafit #toast div { border-radius: 6px; box-shadow: 0 6px 20px var(--shadow); }
+.grafit .mention-box { box-shadow: 0 10px 30px var(--shadow); }
+
+/* метки: мягкий цветной фон, цветной текст, без рамки */
+.grafit .status { border: 0; border-radius: 5px; background: color-mix(in srgb, var(--c) var(--tag-bg), transparent);
+  color: color-mix(in srgb, var(--c) var(--tag-fg), var(--text)); font-weight: 500; }
+.grafit .status.small { padding: 2px 9px; }
+.grafit .badge { border-radius: 6px; background: var(--panel2); }
+.grafit .badge.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.grafit .badge.ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.grafit .badge.err { border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+.grafit .badge.run { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent2) 45%, transparent); }
+.grafit .warn-card { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.grafit .chip-btn { border-radius: 6px; }
+
+/* очередь, арки, календарь */
+.grafit .q-arc { border: 0; border-radius: 6px; background: var(--soft); padding: 12px 16px; }
+.grafit .q-arc.none { background: color-mix(in srgb, #f5b642 10%, transparent); }
+.grafit .arc-tag { background: #00c7b2; color: #04221e; border-radius: 6px; padding: 2px 9px; }
+.grafit .q-arc.none .arc-tag { background: #f5b642; }
+.grafit .arc-chip { border-radius: 6px; border-color: var(--line); color: var(--muted); background: var(--panel2); }
+.grafit .arc-chip.none { color: #c98a10; }
+.grafit .queue-row.today { border-color: #00c7b2; }
+.grafit .queue-gap { border-radius: 6px; border-color: var(--line); }
+.grafit .arc-div { border-radius: 6px; }
+.grafit .arc-label { color: var(--accent-text); }
+.grafit .cal-arc { color: #04221e; background: #00c7b2; }
+.grafit .cal-day.past { background: var(--col); }
+
+/* «Статус» */
+.grafit .sm-today { color: var(--accent-text); }
+.grafit .sm-row.late { background: color-mix(in srgb, var(--err) 7%, transparent); border-color: color-mix(in srgb, var(--err) 40%, transparent); border-left-color: var(--err); }
+.grafit .sm-row.today { background: var(--soft); border-color: #00c7b2; border-left-color: #00c7b2; box-shadow: 0 0 0 3px color-mix(in srgb, #00c7b2 18%, transparent); }
+.grafit .sm-tag { background: #00c7b2; color: #04221e; }
+.grafit .sm-flag.bad { color: #ef5a4c; } .grafit .sm-flag.risk { color: #e0a21b; } .grafit .sm-flag.good { color: #22b07d; }
+
+/* кнопка «Правка» */
+.grafit #fb .fb-btn { border-radius: 6px; background: var(--btn); border-color: var(--btn); color: var(--btn-fg); box-shadow: 0 4px 16px var(--shadow); }
+.grafit #fb .fb-panel, .grafit .fb-panel { border-radius: 8px; box-shadow: 0 12px 40px var(--shadow); }
+
+/* ---------- переключатель темы (во всех дизайнах) ---------- */
+.theme-switch { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.theme-switch button { flex: 1; min-width: 0; padding: 4px 2px; font-size: 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-weight: 500; }
+.theme-switch button:hover { color: var(--text); }
+.theme-switch button.on { background: var(--panel2); color: var(--text); }
+.grafit .theme-switch button { padding: 4px 2px; border-radius: 6px; }
+.grafit .theme-switch button.on { background: var(--btn); color: var(--btn-fg); }

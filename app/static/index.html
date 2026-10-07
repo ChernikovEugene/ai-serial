@@ -4,7 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Студия сериала</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/themes.css">
+<script>
+  // тема ставится до отрисовки, чтобы страница не мигала старым дизайном (выбор хранится в этом браузере)
+  try { const t = localStorage.getItem("theme"); if (t === "dark" || t === "light") { document.documentElement.classList.add("grafit"); document.documentElement.dataset.theme = t; } } catch {}
+</script>
 </head>
 <body>
 <aside class="nav" id="nav" hidden></aside>
