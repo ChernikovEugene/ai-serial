@@ -353,3 +353,4 @@ a.sm-row:hover { border-color: var(--muted); border-left-color: var(--c); }
 .fb-thread { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
 .fb-comment div { white-space: pre-wrap; }
 .sm-month { align-items: center; gap: 10px; margin: 4px 0 10px; }
+.arc-new [hidden] { display: none !important; }
