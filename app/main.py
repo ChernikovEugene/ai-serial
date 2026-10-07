@@ -674,9 +674,21 @@ def _ru_date(iso: str | None) -> str:
     return f"{d.day} {MONTHS_GEN[d.month - 1]}"
 
 
+def _streaks() -> str:
+    """Вертикальные «шторки» тёмного слайда PARI: полосы разной ширины и плотности поверх бирюзового свечения."""
+    import random
+    rnd, x, out = random.Random(7), 0, []
+    while x < 1280:
+        w = rnd.randint(14, 46)
+        out.append(f'<i style="left:{x}px;width:{w}px;--a:{rnd.uniform(.25, .7):.2f}"></i>')
+        x += w - rnd.randint(2, 8)
+    return '<div class="streaks">' + "".join(out) + "</div>"
+
+
 @app.get("/api/arcs/{arc_id}/pdf")
 def arc_pdf(arc_id: int):
-    """Синопсисы арки для клиента: страница для печати в бренде PARIVISION (в окне печати — «Сохранить как PDF»).
+    """Синопсисы арки для клиента в стиле презентации PARI (16:9): «Скачать PDF» собирает файл в браузере,
+    «Печать» — запасной путь.
     В выгрузку идут серии арки, стоящие в очереди (черновики — нет)."""
     from html import escape as h
     arc = next((a for a in list_arcs() if a["id"] == arc_id), None)
@@ -695,53 +707,76 @@ def arc_pdf(arc_id: int):
     span = (f"{_ru_date(arc['start_date'])} — {_ru_date(arc['end_date'])}" if arc["start_date"] else "даты не назначены")
     n = len(eps)
     n_word = "серия" if n % 10 == 1 and n % 100 != 11 else "серии" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "серий"
-    cards = [f"""<article class="card"><div class="no">{e['arc_number']}</div>
-        <h2>{h(e['title'] or 'Без названия')}</h2><div class="date">{_ru_date(e['date'])}</div>
-        <p>{h(e['synopsis'] or '—')}</p></article>""" for e in eps]
-    pages = "".join(f"""<section class="sheet"><div class="grid">{"".join(cards[k:k + 6])}</div>
-  <div class="foot"><span>{h(arc['title'])}</span><span>{k // 6 + 2}</span></div></section>""" for k in range(0, len(cards), 6))
+    # Слайды 16:9 в стиле презентации PARI (Figma): тёмная обложка с бирюзовым свечением, бирюзовые листы с карточками
+    def card(e):
+        return f"""<article class="ep"><h3>{e['arc_number']}. «{h((e['title'] or 'Без названия').upper())}»</h3>
+          <div class="card"><div class="date">{_ru_date(e['date'])}</div><p>{h(e['synopsis'] or 'Синопсис пока не написан.')}</p></div></article>"""
+    per = 6
+    pages = "".join(f"""<section class="sheet teal"><div class="shape s1"></div><div class="shape s2"></div>
+  <div class="grid">{"".join(card(e) for e in eps[k:k + per])}</div>
+  <div class="pno dark">{k // per + 2}</div></section>""" for k in range(0, len(eps), per))
+    toc = "".join(f"<li><b>{e['arc_number']}.</b> «{h(e['title'] or 'Без названия')}» <span>{_ru_date(e['date'])}</span></li>" for e in eps)
     page = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <title>{h(arc['title'])} — синопсисы</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Sans+Extra+Condensed:wght@800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  @page {{ size: A4 landscape; margin: 0; }}
-  :root {{ --teal: #1de9c8; --teal2: #0b8f7c; --ink: #050807; --card: #0c1513; --text: #e9fffb; --muted: #8fb5ae; }}
+  @page {{ size: 338.67mm 190.5mm; margin: 0; }}
+  :root {{ --teal: #00c7b2; --teal-light: #77f6e8; --card: #0a3833; --ink: #161616; --text: #ffffff; --muted: #b9c9c6; }}
   * {{ box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
-  body {{ margin: 0; background: #2a2f2e; font: 13px/1.5 Inter, system-ui, sans-serif; color: var(--text); }}
-  .bar {{ position: sticky; top: 0; z-index: 2; display: flex; gap: 12px; align-items: center; padding: 12px 20px;
+  body {{ margin: 0; background: #2b2b2b; font: 15px/1.45 Inter, system-ui, sans-serif; color: var(--text); }}
+  .bar {{ position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 12px 20px;
          background: #111; color: #ddd; font-size: 14px; }}
   .bar button {{ background: var(--teal); color: #04110e; border: 0; border-radius: 8px; padding: 9px 16px; font-weight: 600; cursor: pointer; }}
   .bar button.ghost {{ background: transparent; color: #ddd; border: 1px solid #555; }}
   .bar button:disabled {{ opacity: .6; cursor: default; }}
-  .sheet {{ width: 297mm; height: 210mm; margin: 16px auto; padding: 16mm 18mm; position: relative; overflow: hidden;
-           background: radial-gradient(120% 90% at 85% 10%, #0f6f62 0%, #06302a 38%, var(--ink) 75%); page-break-after: always; }}
-  .sheet::after {{ content: ""; position: absolute; right: -40mm; top: -30mm; width: 140mm; height: 140mm;
-                  border: 18mm solid rgba(29,233,200,.10); transform: rotate(45deg); }}
-  .kicker {{ color: var(--teal); font: 600 14px Oswald, sans-serif; letter-spacing: .14em; text-transform: uppercase; }}
-  h1 {{ font: 700 64px/1 Oswald, Impact, sans-serif; text-transform: uppercase; margin: 10mm 0 6mm; max-width: 200mm; }}
-  .span {{ font-size: 16px; color: var(--muted); }}
-  .syn {{ margin-top: 10mm; max-width: 170mm; font-size: 15px; white-space: pre-wrap; }}
-  .chips {{ margin-top: 8mm; display: flex; flex-wrap: wrap; gap: 8px; }}
-  .chips span {{ border: 1px solid var(--teal2); color: var(--teal); border-radius: 99px; padding: 4px 12px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 7mm; position: relative; z-index: 1; }}
-  .card {{ background: rgba(8,22,19,.92); border: 1px solid rgba(29,233,200,.25); border-radius: 4mm; padding: 6mm; min-height: 70mm; break-inside: avoid; }}
-  .card .no {{ font: 700 30px Oswald, sans-serif; color: var(--teal); line-height: 1; }}
-  .card h2 {{ font: 700 20px/1.15 Oswald, sans-serif; text-transform: uppercase; margin: 3mm 0 1mm; }}
-  .card .date {{ color: var(--muted); font-size: 12px; margin-bottom: 3mm; }}
+  .sheet {{ width: 1280px; height: 720px; margin: 20px auto; padding: 56px 64px; position: relative; overflow: hidden; page-break-after: always; }}
+  .head {{ font: 900 108px/.92 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; letter-spacing: -.5px; margin: 0; }}
+  .pno {{ position: absolute; right: 40px; bottom: 26px; font-size: 22px; color: var(--teal); }}
+  .pno.dark {{ color: #111; }}
+  /* обложка: тёмный слайд */
+  .sheet.cover {{ background:
+      radial-gradient(ellipse 36% 90% at 50% 80%, rgba(0,199,178,.8), rgba(0,199,178,.22) 55%, rgba(0,199,178,0) 78%),
+      radial-gradient(ellipse 24% 70% at 80% 10%, rgba(0,199,178,.32), rgba(0,199,178,0) 72%),
+      var(--ink); }}
+  .streaks {{ position: absolute; inset: 0; pointer-events: none; }}
+  .streaks i {{ position: absolute; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(22,22,22,0), rgba(22,22,22,var(--a)), rgba(22,22,22,0)); }}
+  .cover > *:not(.streaks):not(.pno) {{ position: relative; }}
+  .cover .kicker {{ color: var(--teal); font: 800 20px "Fira Sans Extra Condensed", sans-serif; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 22px; }}
+  .cover .cols {{ display: grid; grid-template-columns: 1fr 480px; gap: 48px; margin-top: 34px; }}
+  .cover .lead {{ font-size: 17px; white-space: pre-wrap; max-width: 640px; }}
+  .cover .meta {{ margin-top: 18px; color: var(--muted); font-size: 15px; }}
+  .glass {{ background: rgba(18,24,23,.55); border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 22px 26px; }}
+  .glass h4 {{ margin: 0 0 10px; font: 800 18px "Fira Sans Extra Condensed", sans-serif; letter-spacing: .06em; text-transform: uppercase; color: var(--teal); }}
+  .glass ul {{ margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }}
+  .glass li span {{ color: var(--muted); font-size: 13px; margin-left: 6px; }}
+  .chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }}
+  .chips span {{ border: 1px solid rgba(0,199,178,.6); color: var(--teal-light); border-radius: 99px; padding: 4px 14px; font-size: 14px; }}
+  /* листы с сериями: бирюзовый слайд */
+  .sheet.teal {{ background: linear-gradient(180deg, var(--teal) 0%, #10d9c3 70%, var(--teal-light) 100%); }}
+  .shape {{ position: absolute; background: rgba(255,255,255,.10); }}
+  .shape.s1 {{ width: 520px; height: 520px; left: -200px; top: -260px; transform: rotate(32deg); }}
+  .shape.s2 {{ width: 640px; height: 640px; right: -260px; bottom: -380px; transform: rotate(-28deg); background: rgba(255,255,255,.14); }}
+  .grid {{ position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 18px; }}
+  .ep h3 {{ margin: 0 0 12px; text-align: center; color: #111; font: 900 28px/1 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; }}
+  .card {{ background: var(--card); border-radius: 6px; padding: 22px 28px; min-height: 214px; }}
+  .card .date {{ color: var(--teal-light); font-size: 13px; margin-bottom: 10px; }}
   .card p {{ margin: 0; white-space: pre-wrap; }}
-  .foot {{ position: absolute; left: 18mm; right: 18mm; bottom: 8mm; display: flex; justify-content: space-between;
-          color: var(--muted); font-size: 11px; z-index: 1; }}
-  @media print {{ body {{ background: none; }} .bar {{ display: none; }} .sheet {{ margin: 0; }} }}
+  @media print {{ body {{ background: none; }} .bar {{ display: none; }} .sheet {{ margin: 0; zoom: 1; }} }}
 </style></head><body>
 <div class="bar"><button id="dl" onclick="downloadPdf()">Скачать PDF</button>
   <button class="ghost" onclick="print()">Печать</button>
-  <span id="msg">Файл сохранится в «Загрузки». Серий в выгрузке: {len(eps)}{' (черновики не входят)' if arc['drafts'] else ''}.</span></div>
-<section class="sheet"><div class="kicker">{h(series)} · синопсисы на согласование</div>
-  <h1>{h(arc['title'])}</h1><div class="span">{n} {n_word} · {span}</div>
-  {f'<div class="syn">{h(arc["notes"])}</div>' if arc["notes"] else ''}
-  {('<div class="chips">' + ''.join(f'<span>{h(m)}</span>' for m in members) + '</div>') if members else ''}
-  <div class="foot"><span>{h(series)}</span><span>{_ru_date(date.today().isoformat())}</span></div></section>
+  <span id="msg">Файл сохранится в «Загрузки». Серий в выгрузке: {n}{' (черновики не входят)' if arc['drafts'] else ''}.</span></div>
+<section class="sheet cover">{_streaks()}
+  <div class="kicker">{h(series)} · синопсисы на согласование</div>
+  <h1 class="head">{h(arc['title'])}</h1>
+  <div class="cols">
+    <div><div class="lead">{h(arc['notes']) if arc['notes'] else 'Синопсис арки пока не написан.'}</div>
+      <div class="meta">{n} {n_word} · {span}</div>
+      {('<div class="chips">' + ''.join(f'<span>{h(m)}</span>' for m in members) + '</div>') if members else ''}</div>
+    <div class="glass"><h4>Серии арки</h4><ul>{toc or '<li>Серий пока нет</li>'}</ul></div>
+  </div>
+  <div class="pno">1</div></section>
 {pages}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -753,13 +788,13 @@ async function downloadPdf() {{
   btn.disabled = true; btn.textContent = "Готовлю PDF…";
   try {{
     await document.fonts.ready;
-    const pdf = new window.jspdf.jsPDF({{ orientation: "landscape", unit: "mm", format: "a4" }});
+    const pdf = new window.jspdf.jsPDF({{ orientation: "landscape", unit: "px", format: [1280, 720], hotfixes: ["px_scaling"] }});
     const sheets = [...document.querySelectorAll(".sheet")];
     for (let i = 0; i < sheets.length; i++) {{
       msg.textContent = `Лист ${{i + 1}} из ${{sheets.length}}…`;
-      const canvas = await html2canvas(sheets[i], {{ scale: 2, backgroundColor: "#050807", useCORS: true, logging: false }});
-      if (i) pdf.addPage();
-      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 297, 210);
+      const canvas = await html2canvas(sheets[i], {{ scale: 2, backgroundColor: "#161616", useCORS: true, logging: false }});
+      if (i) pdf.addPage([1280, 720], "landscape");
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 1280, 720);
     }}
     pdf.save({json.dumps(arc["title"] + " — синопсисы.pdf", ensure_ascii=False)});
     msg.textContent = "Готово: файл в «Загрузках».";
