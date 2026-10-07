@@ -1,6 +1,6 @@
 // Router, navigation and login.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
-import { renderSeries, renderArc } from "./series.js";
+import { renderSeries, renderArc, renderArchive } from "./series.js";
 import { renderProduction } from "./production.js";
 import { renderTech } from "./tech.js";
 import { renderCalendar } from "./calendar.js";
@@ -38,6 +38,7 @@ async function route() {
     if (section === "production") return await renderProduction();
     if (section === "queue") { location.replace("#/series"); return; }
     if (section === "series") return id ? await renderArc(id) : await renderSeries();
+    if (section === "archive") return await renderArchive();
     if (section === "calendar") return await renderCalendar();
     if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderSeries();
     if (section === "library") return await renderAssets("character");
@@ -63,7 +64,7 @@ function setTheme(t) {
 }
 
 function drawNav(section) {
-  const active = section === "episodes" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
+  const active = section === "episodes" || section === "archive" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
   $("#nav").innerHTML = `

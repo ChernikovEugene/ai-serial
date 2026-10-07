@@ -472,6 +472,11 @@ function bindShot(s) {
   const el = $(`#shot-${s.id}`);
   if (!el) return;
   const save = async (patch) => replaceShot(await api(`/api/shots/${s.id}`, { method: "PUT", json: patch }));
+  // «@» в текстовых полях шота подсказывает персонажей и локации из библиотеки (как в сценарии); выбор сразу сохраняется
+  if (canWrite()) {
+    $$("[data-f=scene], [data-f=action], [data-f=camera], [data-d=text], [data-d=parenthetical]", el)
+      .forEach((inp) => attachMentions(inp, () => inp.dispatchEvent(new Event("change"))));
+  }
   $$("[data-f]", el).forEach((inp) => (inp.onchange = () => {
     const f = inp.dataset.f;
     let v = inp.value;
