@@ -583,9 +583,9 @@ select option { background: var(--panel); color: var(--text); }
 }
 
 /* служебный текст (подсказки, пояснения) тише и мельче, чтобы не отвлекал */
-:root { --hint: #7a8295; }
+:root { --hint: #565d6e; }
 .muted.small, .small.muted, .help, .sm-label, .sm-colhead { font-size: 11.5px; color: var(--hint); }
-p.muted, .muted.sm-desc { color: var(--hint); }
+p.muted, .muted.sm-desc, .queue-head .muted, .cal-filters .muted, .arc-card-syn { color: var(--hint); }
 .sm-label { letter-spacing: .05em; }
 .script-help code, .help code { opacity: .85; }
 .sm-strip-card > .muted.small { font-size: 11px; }
