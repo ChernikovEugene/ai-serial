@@ -578,10 +578,61 @@ def _sent(text: str) -> str:
     return text if text.endswith((".", "!", "?", "…")) else text + "."
 
 
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
 def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tuple[str, list[dict], list[str]]:
-    """Returns (prompt, references, warnings). references: [{"path", "kind": composition|character|location}]."""
+    """Returns (prompt, references, warnings). references: [{"path", "kind": composition|character|location, ...}].
+
+    Герои и локации, у которых есть картинка, в тексте идут не по имени, а как «персонаж с референса N»: имя из сценария
+    видеомодели ничего не говорит, а картинка говорит всё. Нумерация совпадает с порядком картинок в `references`
+    (так же они уходят в Veo и показываются на карточке шота), поэтому промпт можно целиком использовать и в другой нейросети."""
     lang = settings.get("dialogue_language") or "Russian"
     model = settings.get("veo_model", "")
+    engine = shot.get("engine") or "veo"
+    comp = shot.get("composition_image")
+    mode = shot.get("composition_mode") or "reference"
+    loc_v = versions.get(shot.get("location_version_id"))
+    char_vs = [(c, versions.get(c.get("version_id"))) for c in shot.get("characters", [])]
+
+    # --- референсы: какие картинки прикладываются и в каком порядке
+    refs, warns = [], []
+    if comp:
+        refs.append({"path": comp, "kind": "composition"})
+    for c, v in char_vs:
+        if v and v["images"]:
+            refs.append({"path": v["images"][0], "kind": "character", "name": c["name"], "asset_id": c["asset_id"]})
+        elif v:
+            warns.append(f"У персонажа «{c['name']}» нет фото — модель нарисует его по описанию")
+    if loc_v and loc_v["images"]:
+        refs.append({"path": loc_v["images"][0], "kind": "location", "name": assets[loc_v["asset_id"]]["name"],
+                     "asset_id": loc_v["asset_id"]})
+    if comp and mode == "first_frame":
+        if len(refs) > 1:
+            warns.append("В режиме «первый кадр» фото персонажей и локации не отправляются — Veo берёт всё из кадра")
+        refs = refs[:1]
+    elif refs and engine == "veo" and "3.1" not in model:
+        warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
+    if len(refs) > MAX_REFERENCE_IMAGES:
+        dropped = ", ".join(r.get("name") or "композиция" for r in refs[MAX_REFERENCE_IMAGES:])
+        warns.append(f"Veo принимает до {MAX_REFERENCE_IMAGES} референсов — не отправятся: {dropped}")
+        refs = refs[:MAX_REFERENCE_IMAGES]
+
+    # номера картинок, на которые можно ссылаться в тексте (Veo без 3.1 картинки не получает: там остаются имена)
+    attached = refs if (engine != "veo" or "3.1" in model) else []
+    num = {(r["kind"], r.get("asset_id")): i for i, r in enumerate(attached, 1) if r["kind"] != "composition"}
+    comp_n = next((i for i, r in enumerate(attached, 1) if r["kind"] == "composition"), None)
+    label = {a_id: f"the character from reference image {n}" for (kind, a_id), n in num.items() if kind == "character"}
+    swaps = [(rx, label[a["id"]]) for rx, a in AssetIndex(list(assets.values())).patterns
+             if a["kind"] == "character" and a["id"] in label]
+
+    def text(t: str) -> str:
+        t = MENTION_RE.sub(lambda m: m.group(1).replace("_", " "), t)
+        for rx, lab in swaps:
+            t = rx.sub(lab, t)
+        return t
+
     parts = []
     if settings.get("style"):
         parts.append(_sent(settings["style"]))
@@ -589,35 +640,45 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
         parts.append(_sent(settings["tt_prompt"]))
     parts.append(f"Vertical {settings.get('aspect_ratio', '9:16')} video, {shot['duration']} seconds, one continuous shot.")
 
-    comp = shot.get("composition_image")
-    mode = shot.get("composition_mode") or "reference"
     if comp:
+        where = f" (reference image {comp_n})" if comp_n else ""
         if mode == "first_frame":
-            parts.append("The video starts exactly from the provided first-frame image; keep its composition, framing and camera angle.")
+            parts.append(f"The video starts exactly from the provided first-frame image{where}; keep its composition, framing and camera angle.")
         else:
-            parts.append("Composition: match the framing, camera angle, blocking and layout of the composition reference image.")
+            parts.append(f"Composition: match the framing, camera angle, blocking and layout of the composition reference image{where}.")
     if shot.get("composition_note"):
-        parts.append(_sent("Composition notes: " + shot["composition_note"]))
+        parts.append(_sent("Composition notes: " + text(shot["composition_note"])))
 
-    loc_v = versions.get(shot.get("location_version_id"))
+    loc_n = num.get(("location", loc_v["asset_id"])) if loc_v else None
     if loc_v:
         desc = loc_v["description"].strip()
-        parts.append(_sent(f"Location: {assets[loc_v['asset_id']]['name']}" + (f" — {desc}" if desc else "")))
+        name = assets[loc_v["asset_id"]]["name"]
+        if loc_n:
+            parts.append(_sent(f"Location: {name}, shown in reference image {loc_n}" + (f". Details: {desc}" if desc else "")))
+        else:
+            parts.append(_sent(f"Location: {name}" + (f" — {desc}" if desc else "")))
     elif shot.get("scene"):
         parts.append(_sent(f"Location: {shot['scene']}"))
 
-    char_vs = []
-    for c in shot.get("characters", []):
-        v = versions.get(c.get("version_id"))
-        char_vs.append((c, v))
+    for c, v in char_vs:
         desc = v["description"].strip() if v else ""
         outfit = f" (look: {v['label']})" if v and v["label"] else ""
-        parts.append(_sent(f"Character {c['name']}{outfit}" + (f": {desc}" if desc else "")))
+        if c["asset_id"] in label:
+            n = num[("character", c["asset_id"])]
+            parts.append(_sent(f"Character in reference image {n}{outfit}" + (f". Details: {desc}" if desc else "")))
+        else:
+            parts.append(_sent(f"Character {c['name']}{outfit}" + (f": {desc}" if desc else "")))
+
+    # правила «ничего не меняется от серии к серии»: работают, когда у героя или локации есть картинка-образец
+    if label and settings.get("consistency_character", "").strip():
+        parts.append(_sent(settings["consistency_character"]))
+    if loc_n and settings.get("consistency_location", "").strip():
+        parts.append(_sent(settings["consistency_location"]))
 
     if shot.get("action"):
-        parts.append(_sent("Action: " + MENTION_RE.sub(lambda m: m.group(1).replace("_", " "), shot["action"])))
+        parts.append(_sent("Action: " + text(shot["action"])))
     if shot.get("camera"):
-        parts.append(_sent(f"Camera: {shot['camera']}"))
+        parts.append(_sent(f"Camera: {text(shot['camera'])}"))
 
     on_screen = [d for d in shot.get("dialogue", []) if d.get("voice") != VOICE_OVER]
     if on_screen:
@@ -625,35 +686,14 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
             v = next((v for c, v in char_vs if c["asset_id"] == d.get("asset_id")), None)
             how = f", {d['parenthetical']}" if d.get("parenthetical") else ""
             voice = " " + _sent(f"Voice: {v['voice']}") if v and v.get("voice") else ""
-            parts.append(f'{d["speaker"] or "A character"} says in {lang}{how}: "{d["text"].strip()}"{voice}')
+            who = _cap(label[d["asset_id"]]) if d.get("asset_id") in label else (d["speaker"] or "A character")
+            parts.append(f'{who} says in {lang}{how}: "{d["text"].strip()}"{voice}')
         parts.append("Lip-sync the spoken lines. No background music.")
     elif shot.get("dialogue"):
         # voice-over only: the voice is recorded separately, so nobody on screen speaks
         parts.append("Nobody on screen speaks, lips closed, natural ambient sound only. No background music.")
     else:
         parts.append("No dialogue, natural ambient sound only.")
-
-    refs, warns = [], []
-    if comp:
-        refs.append({"path": comp, "kind": "composition"})
-    for c, v in char_vs:
-        if v and v["images"]:
-            refs.append({"path": v["images"][0], "kind": "character", "name": c["name"]})
-        elif v:
-            warns.append(f"У персонажа «{c['name']}» нет фото — Veo нарисует его по описанию")
-    if loc_v and loc_v["images"]:
-        refs.append({"path": loc_v["images"][0], "kind": "location", "name": assets[loc_v["asset_id"]]["name"]})
-
-    if comp and mode == "first_frame":
-        if len(refs) > 1:
-            warns.append("В режиме «первый кадр» фото персонажей и локации не отправляются — Veo берёт всё из кадра")
-        refs = refs[:1]
-    elif refs and "3.1" not in model:
-        warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
-    if len(refs) > MAX_REFERENCE_IMAGES:
-        dropped = ", ".join(r.get("name") or "композиция" for r in refs[MAX_REFERENCE_IMAGES:])
-        warns.append(f"Veo принимает до {MAX_REFERENCE_IMAGES} референсов — не отправятся: {dropped}")
-        refs = refs[:MAX_REFERENCE_IMAGES]
     return " ".join(parts), refs, warns
 
 
