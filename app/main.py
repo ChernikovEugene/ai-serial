@@ -15,6 +15,10 @@ from .github import GitHubError
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
+# В какой нейросети делается шот: выбирает монтажёр. Через API уходит только Veo, остальные приходят готовым файлом.
+ENGINES = [("veo", "Veo 3"), ("kling", "Kling"), ("sora", "Sora"), ("runway", "Runway"), ("seedance", "Seedance"),
+           ("other", "Другая")]
+ENGINE_NAMES = dict(ENGINES)
 
 HOLIDAYS = {
     "01-01": "Новый год", "01-07": "Рождество", "01-25": "Татьянин день", "02-14": "День святого Валентина",
@@ -194,6 +198,8 @@ def meta(request: Request):
         "max_shot_seconds": int(s["max_shot_seconds"]), "words_per_second": float(s["words_per_second"]),
         "anchor_number": int(s["anchor_number"]), "anchor_date": s["anchor_date"],
         "today": date.today().isoformat(),
+        "engines": [{"key": k, "name": n} for k, n in ENGINES],
+        "series_title": s.get("series_title") or "Сериал",
     }
 
 
@@ -279,7 +285,7 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
 
 SHOT_COLS = ["idx", "label", "scene", "duration", "est_seconds", "speech_seconds", "words", "camera", "action",
              "dialogue", "characters", "location_version_id", "composition_image", "composition_mode",
-             "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo"]
+             "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine"]
 
 
 def save_shot(c, s: dict):
@@ -423,6 +429,41 @@ def activate_version(asset_id: int, version_id: int):
         if not c.execute("SELECT 1 FROM asset_versions WHERE id=? AND asset_id=?", (version_id, asset_id)).fetchone():
             raise HTTPException(404, "Версия не найдена")
         c.execute("UPDATE assets SET active_version_id=? WHERE id=?", (version_id, asset_id))
+    return get_asset(asset_id)
+
+
+def load_version(asset_id: int, version_id: int) -> tuple[dict, dict]:
+    a = get_asset(asset_id)
+    v = next((v for v in a["versions"] if v["id"] == version_id), None)
+    if not v:
+        raise HTTPException(404, "Версия не найдена")
+    return a, v
+
+
+@app.post("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.writer)])
+def add_version_images(asset_id: int, version_id: int, images: list[UploadFile] = File(default=[])):
+    """Догрузить фото в версию (ракурсы со всех сторон). Первое фото версии остаётся главным референсом."""
+    a, v = load_version(asset_id, version_id)
+    paths = v["images"] + [save_upload(f, f"{a['kind']}s/{asset_id}") for f in images if f.filename]
+    with db.connect() as c:
+        c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(paths), version_id))
+    refresh_all_prompts()
+    return get_asset(asset_id)
+
+
+class ImagesIn(BaseModel):
+    images: list[str]
+
+
+@app.put("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.writer)])
+def set_version_images(asset_id: int, version_id: int, body: ImagesIn):
+    """Порядок фото (первое — главный референс) и удаление лишних. Новые пути сюда не принимаются."""
+    _, v = load_version(asset_id, version_id)
+    if not set(body.images) <= set(v["images"]):
+        raise HTTPException(400, "Можно только переставить или убрать фото этой версии")
+    with db.connect() as c:
+        c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(list(dict.fromkeys(body.images))), version_id))
+    refresh_all_prompts()
     return get_asset(asset_id)
 
 
@@ -1210,7 +1251,7 @@ def apply_breakdown(eid: int):
             s = dict(match) if match else {"episode_id": eid, "composition_image": "", "composition_mode": "reference",
                                            "composition_note": "", "prompt": "", "prompt_locked": 0,
                                            "negative_prompt": ctx.settings.get("negative_prompt", ""),
-                                           "selected_take_id": None, "needs_redo": 0}
+                                           "selected_take_id": None, "needs_redo": 0, "engine": "veo"}
             s.update({k: n[k] for k in ("idx", "label", "scene", "duration", "camera", "action", "dialogue",
                                         "characters", "location_version_id")})
             refresh_shot(s, ctx)
@@ -1258,10 +1299,14 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
     if not ep["shots"]:
         raise HTTPException(400, "В серии нет шотов")
     settings = db.get_settings()
-    started = 0
+    started = skipped = 0
     for s in ep["shots"]:
         busy = s["gen_status"] in ("queued", "running")
         if busy:
+            continue
+        if s["engine"] != "veo":  # этот шот монтажёр делает в другой нейросети и пришлёт файлом
+            if not s["selected_take_id"] or s["needs_redo"]:
+                skipped += 1
             continue
         if g.mode == "missing" and s["selected_take_id"] and not s["needs_redo"]:
             continue
@@ -1273,7 +1318,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
         with db.connect() as c:
             c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=?", (db.now(), eid))
         db.log(eid, uid(request), f"Отправлено в Veo шотов: {started}")
-    return {"started": started}
+    return {"started": started, "skipped": skipped}
 
 
 @app.get("/api/episodes/{eid}/export")
@@ -1301,6 +1346,7 @@ class ShotPatch(BaseModel):
     negative_prompt: str | None = None
     prompt_locked: bool | None = None
     needs_redo: bool | None = None
+    engine: str | None = None
 
 
 def load_shot(sid: int) -> dict:
@@ -1323,12 +1369,13 @@ def shot_response(sid: int) -> dict:
 # Content belongs to the writer, generation settings to the editor (the producer may touch both).
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location"}
 EDITOR_SHOT_FIELDS = {"duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
-                      "prompt_locked", "needs_redo"}
+                      "prompt_locked", "needs_redo", "engine"}
 
 
 @app.put("/api/shots/{sid}")
 def update_shot(sid: int, p: ShotPatch, request: Request):
     s = load_shot(sid)
+    before = dict(s)
     data = p.model_dump(exclude_unset=True)
     role = request.state.user["role"]
     if role != "admin":
@@ -1343,6 +1390,8 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         s["location_version_id"] = None
     if "duration" in data and data["duration"] not in breakdown.ALLOWED_DURATIONS:
         raise HTTPException(400, "Veo поддерживает длительность 4, 6 или 8 секунд")
+    if data.get("engine") not in (None, *ENGINE_NAMES):
+        raise HTTPException(400, "Неизвестная нейросеть")
     if data.get("composition_mode") not in (None, "reference", "first_frame"):
         raise HTTPException(400, "Неизвестный режим композиции")
     for k, v in data.items():
@@ -1351,10 +1400,38 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
     if "prompt" in data:
         s["prompt_locked"] = True if p.prompt_locked is None else p.prompt_locked
     ctx = Ctx()
+    if {"action", "scene", "camera", "dialogue"} & set(data):
+        add_named_characters(s, before, ctx)
     refresh_shot(s, ctx)
     with db.connect() as c:
         save_shot(c, s)
     return shot_response(sid)
+
+
+def shot_texts(s: dict) -> str:
+    return " \n".join([s.get("scene") or "", s.get("action") or "", s.get("camera") or "",
+                      *[d.get("text") or "" for d in s.get("dialogue") or []]])
+
+
+def add_named_characters(s: dict, before: dict, ctx: Ctx):
+    """Герой, которого автор только что вписал в текст шота (по имени или через @), попадает в «Персонажи в кадре».
+    Убранных вручную не возвращаем: добавляем только тех, кого в прошлом тексте не было."""
+    idx = breakdown.AssetIndex(ctx.assets, episode_cast(s["episode_id"]))
+    was = {a["id"] for a in idx.find_all(shot_texts(before), "character")}
+    have = {c["asset_id"] for c in s["characters"]}
+    for a in idx.find_all(shot_texts(s), "character"):
+        if a["id"] not in was and a["id"] not in have:
+            s["characters"] = [*s["characters"], {"asset_id": a["id"], "name": a["name"],
+                                                  "version_id": idx.version(a, None)["id"] if a["versions"] else None}]
+    have = {c["asset_id"] for c in s["characters"]}
+    was_speakers = {d.get("asset_id") for d in before.get("dialogue") or []}
+    for d in s["dialogue"]:  # выбранный говорящий тоже появляется в кадре
+        aid = d.get("asset_id")
+        if aid and aid not in have and aid not in was_speakers and aid in ctx.a_map:
+            a = ctx.a_map[aid]
+            s["characters"] = [*s["characters"], {"asset_id": aid, "name": a["name"],
+                                                  "version_id": idx.version(a, None)["id"] if a["versions"] else None}]
+            have.add(aid)
 
 
 @app.post("/api/shots/{sid}/composition", dependencies=[Depends(auth.editor)])
@@ -1403,6 +1480,9 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     s = shot_response(sid)
     if s["gen_status"] in ("queued", "running"):
         raise HTTPException(400, "Этот шот уже генерируется")
+    if s["engine"] != "veo":
+        raise HTTPException(400, f"Этот шот делается в «{ENGINE_NAMES.get(s['engine'], s['engine'])}»: через API уходит только Veo. "
+                                 "Сделайте видео там и загрузите готовый файл.")
     g = g or RegenerateIn()
     if g.prompt is not None and g.prompt.strip() and g.prompt.strip() != s["prompt"].strip():
         raw = load_shot(sid)
@@ -1644,7 +1724,7 @@ def delete_template(tid: int):
 # ---------- settings ----------
 
 SECRET_SETTINGS = ("veo_api_key", "github_token")
-PROMPT_SETTINGS = {"style", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
+PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
 @app.get("/api/settings")
@@ -1667,6 +1747,13 @@ def write_settings(values: dict):
     if PROMPT_SETTINGS & values.keys():
         refresh_all_prompts()
     return read_settings()
+
+
+# Промпты шотов пересобираются при запуске: подхватывают новые правила сборки и изменения в библиотеке (закреплённые вручную не трогаем)
+try:
+    refresh_all_prompts()
+except Exception as e:  # noqa: BLE001 - запуск студии важнее
+    print("Не удалось пересобрать промпты:", e)
 
 
 # ---------- static ----------

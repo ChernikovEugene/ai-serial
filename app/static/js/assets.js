@@ -53,7 +53,15 @@ export async function renderAsset(id) {
         ${can.edit() ? `<div class="row" style="margin-top:10px"><div class="spacer"></div><button id="save-meta">Сохранить</button></div>` : ""}
         <h2>Активная версия: v${active.version_no} ${esc(active.label)}</h2>
         <p class="muted small">Активная версия используется по умолчанию. В конкретной серии можно выбрать другую (вкладка «Сценарий» → «Версии для этой серии»).</p>
-        <div class="gallery">${active.images.map((p, i) => `<a href="${media(p)}" target="_blank"><img src="${media(p)}">${i === 0 ? `<span class="main-ref">главный реф</span>` : ""}</a>`).join("") || `<span class="muted">Нет фото — Veo нарисует по описанию.</span>`}</div>
+        <div class="gallery">${active.images.map((p, i) => `<figure class="ph" data-img="${esc(p)}">
+          <a href="${media(p)}" target="_blank"><img src="${media(p)}" draggable="true"></a>${i === 0 ? `<span class="main-ref">главный реф</span>` : ""}
+          <figcaption><button class="ghost small" data-copy title="Скопировать фото, чтобы вставить в видеогенератор (Ctrl+V)">Копировать</button>
+            <a class="btn ghost small" href="${media(p)}" download title="Скачать файл">Скачать</a>
+            ${can.edit() && i > 0 ? `<button class="ghost small" data-main title="Сделать главным референсом (уходит в видеогенератор первым)">★</button>` : ""}
+            ${can.edit() ? `<button class="ghost small danger" data-rm title="Убрать фото из версии">✕</button>` : ""}</figcaption></figure>`).join("")
+          || `<span class="muted">Нет фото — нейросеть нарисует по описанию.</span>`}</div>
+        ${can.edit() ? `<div class="dropzone" id="add-photos" style="margin-top:10px"></div>
+          <div class="muted small" style="margin-top:4px">Добавляйте сколько угодно фото: ракурсы со всех сторон, крупно лицо, в полный рост${a.kind === "location" ? ", разные углы помещения" : ""}. Первое фото — главный референс для видеогенератора, звёздочка ★ делает главным другое.</div>` : ""}
         <label>Описание для промпта</label><div class="pre">${esc(active.description) || `<span class="muted">—</span>`}</div>
         ${a.kind === "character" ? `<label>Голос</label><div>${esc(active.voice) || `<span class="muted">—</span>`}</div>` : ""}
         ${active.notes ? `<label>Заметки</label><div class="pre">${esc(active.notes)}</div>` : ""}
@@ -74,7 +82,30 @@ export async function renderAsset(id) {
       </div>
     </div>`;
   $("#copy").onclick = () => { navigator.clipboard.writeText(handle(a.name)); toast("Скопировано"); };
+  $$("[data-copy]").forEach((b) => (b.onclick = () => copyImage(media(b.closest("[data-img]").dataset.img))));
   if (!can.edit()) return;
+  const setImages = async (images) => {
+    await api(`/api/assets/${id}/versions/${active.id}/images`, { method: "PUT", json: { images } });
+    renderAsset(id);
+  };
+  $$("[data-main]").forEach((b) => (b.onclick = () => {
+    const p = b.closest("[data-img]").dataset.img;
+    setImages([p, ...active.images.filter((x) => x !== p)]).then(() => toast("Главный референс изменён"));
+  }));
+  $$("[data-rm]").forEach((b) => (b.onclick = () => {
+    if (!confirm("Убрать это фото из версии?")) return;
+    const p = b.closest("[data-img]").dataset.img;
+    setImages(active.images.filter((x) => x !== p));
+  }));
+  dropzone($("#add-photos"), async (files) => {
+    if (!files.length) return;
+    const fd = new FormData();
+    files.forEach((f) => fd.append("images", f));
+    toast(`Загружаю фото: ${files.length}…`);
+    await api(`/api/assets/${id}/versions/${active.id}/images`, { method: "POST", body: fd });
+    toast(`Добавлено фото: ${files.length}`);
+    renderAsset(id);
+  });
   $("#save-meta").onclick = async () => {
     await api(`/api/assets/${id}`, { method: "PUT", json: { name: $("#a-name").value, aliases: $("#a-aliases").value.split(",") } });
     toast("Сохранено"); renderAsset(id);
@@ -106,18 +137,25 @@ function versionDialog({ kind, asset, base }) {
     <label>Заметки для команды (в промпт не идут)</label><textarea id="v-notes" rows="2">${esc(base?.notes || "")}</textarea>
     ${base?.images?.length ? `<label>Фото из v${base.version_no} — снимите галочку, чтобы не переносить</label>
       <div class="img-pick">${base.images.map((p) => `<label><input type="checkbox" checked value="${esc(p)}"><img src="${media(p)}"></label>`).join("")}</div>` : ""}
-    <label>Добавить фото (PNG / JPG / WEBP). Первое фото — главный референс для Veo.</label>
-    <input id="v-files" type="file" multiple accept="image/png,image/jpeg,image/webp">
+    <label>Фото (PNG / JPG / WEBP): сколько угодно, лучше со всех сторон. Первое фото — главный референс для видеогенератора.</label>
+    <div class="dropzone" id="v-drop"></div>
+    <div class="img-new" id="v-new"></div>
     <div class="row" style="margin-top:16px"><div class="spacer"></div>
       <button class="ghost" id="cancel">Отмена</button><button class="primary" id="save">Сохранить</button></div>`);
   $("#cancel", m).onclick = closeModal;
+  const picked = [];
+  const drawPicked = () => {
+    $("#v-new", m).innerHTML = picked.map((f, i) => `<figure><img src="${URL.createObjectURL(f)}"><button class="ghost small" data-unpick="${i}" title="Убрать">✕</button></figure>`).join("");
+    $$("[data-unpick]", m).forEach((b) => (b.onclick = () => { picked.splice(+b.dataset.unpick, 1); drawPicked(); }));
+  };
+  dropzone($("#v-drop", m), (files) => { picked.push(...files); drawPicked(); });
   $("#save", m).onclick = async () => {
     const fd = new FormData();
     fd.append("label", $("#v-label", m).value);
     fd.append("description", $("#v-desc", m).value);
     fd.append("voice", isChar ? $("#v-voice", m).value : "");
     fd.append("notes", $("#v-notes", m).value);
-    for (const f of $("#v-files", m).files) fd.append("images", f);
+    for (const f of picked) fd.append("images", f);
     let res;
     if (isNew) {
       const name = $("#v-name", m).value.trim();
@@ -135,4 +173,44 @@ function versionDialog({ kind, asset, base }) {
     if (location.hash === target) renderAsset(res.id); else location.hash = target;
   };
   setTimeout(() => ($("#v-name", m) || $("#v-label", m)).focus(), 50);
+}
+
+/** Поле для фото: клик — выбор в проводнике (можно сразу несколько), перетаскивание файлов, вставка из буфера (Ctrl+V). */
+function dropzone(el, onFiles) {
+  if (!el) return;
+  el.innerHTML = `<input type="file" multiple accept="image/png,image/jpeg,image/webp" hidden>
+    <div>📷 Перетащите фото сюда или нажмите, чтобы выбрать <span class="muted small">(можно несколько сразу; Ctrl+V вставит из буфера)</span></div>`;
+  el.tabIndex = 0;
+  const input = $("input", el);
+  const images = (list) => [...list].filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type));
+  el.onclick = () => input.click();
+  input.onclick = (e) => e.stopPropagation();
+  input.onchange = () => { onFiles(images(input.files)); input.value = ""; };
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drop-over"); });
+  el.addEventListener("dragleave", () => el.classList.remove("drop-over"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault(); el.classList.remove("drop-over");
+    const files = images(e.dataTransfer.files);
+    if (!files.length) return toast("Перетащите файлы PNG, JPG или WEBP", true);
+    onFiles(files);
+  });
+  el.addEventListener("paste", (e) => { const files = images(e.clipboardData.files); if (files.length) { e.preventDefault(); onFiles(files); } });
+}
+
+/** Копирует фото в буфер как картинку (для вставки в видеогенератор). Браузер принимает только PNG, поэтому JPG/WEBP перекодируются. */
+async function copyImage(url) {
+  try {
+    const blob = await (await fetch(url)).blob();
+    let png = blob;
+    if (blob.type !== "image/png") {
+      const bmp = await createImageBitmap(blob);
+      const c = Object.assign(document.createElement("canvas"), { width: bmp.width, height: bmp.height });
+      c.getContext("2d").drawImage(bmp, 0, 0);
+      png = await new Promise((r) => c.toBlob(r, "image/png"));
+    }
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    toast("Фото скопировано: вставьте его в генератор (Ctrl+V)");
+  } catch {
+    toast("Не удалось скопировать: нажмите «Скачать» или перетащите фото мышкой", true);
+  }
 }

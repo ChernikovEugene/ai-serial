@@ -97,6 +97,7 @@ TABLES = {
         warnings TEXT NOT NULL DEFAULT '[]',
         selected_take_id INTEGER,
         needs_redo INTEGER NOT NULL DEFAULT 0,
+        engine TEXT NOT NULL DEFAULT 'veo',
         updated_at TEXT NOT NULL DEFAULT ''""",
     "takes": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,6 +177,11 @@ DEFAULT_SETTINGS = {
     "resolution": "720p",
     "style": "Cinematic vertical TikTok series, realistic, natural lighting, shallow depth of field",
     "negative_prompt": "subtitles, captions, text overlay, watermark, logo, distorted faces, extra fingers",
+    # правила для героев и локаций с картинкой-образцом: подставляются в промпт каждого шота
+    "consistency_character": "Strictly preserve every character's identity from their reference image: the same face and facial features, "
+                             "hair, skin tone, age, body proportions and outfit, with no redesign, no restyling and no face drift.",
+    "consistency_location": "Recreate the location exactly as in its reference image: the same layout, architecture, furniture, props, "
+                            "colors, materials and lighting; do not add, remove or change anything in it.",
     "dialogue_language": "Russian",
     "words_per_second": "2.5",
     "max_shot_seconds": "8",

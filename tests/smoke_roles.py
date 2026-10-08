@@ -25,8 +25,14 @@ class Client:
         data, headers = None, {}
         if form is not None:
             boundary = uuid.uuid4().hex
-            parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n' for k, v in form.items()]
-            data = ("".join(parts) + f"--{boundary}--\r\n").encode()
+            data = b""
+            for k, v in form.items():
+                if isinstance(v, tuple):  # (имя файла, байты)
+                    data += (f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"; filename="{v[0]}"\r\n'
+                             f"Content-Type: image/png\r\n\r\n").encode() + v[1] + b"\r\n"
+                else:
+                    data += f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+            data += f"--{boundary}--\r\n".encode()
             headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
         elif body is not None:
             data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
@@ -125,6 +131,22 @@ check("takes keep prompt and reason", [t["reason"] for t in sh["takes"]] == ["л
       and sh["takes"][0]["prompt"] == "Better prompt v2", sh["takes"])
 check("revisions counted", sh["revisions"] == 1, sh["revisions"])
 
+# нейросеть на шот: выбирает монтажёр, через API идёт только Veo
+st, shot = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "kling"})
+check("editor picks another engine for a shot", st == 200 and shot["engine"] == "kling", f"{st} {shot if st != 200 else ''}")
+st, _ = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "nope"})
+check("unknown engine rejected", st == 400, st)
+st, _ = writer.call("PUT", f"/api/shots/{s1['id']}", {"engine": "veo"})
+check("writer cannot pick the engine", st == 403, st)
+st, _ = editor.call("POST", f"/api/shots/{s1['id']}/generate", {})
+check("non-Veo shot is not sent to the API", st == 400, st)
+s2 = ep["shots"][1]
+editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "kling"})
+st, r = editor.call("POST", f"/api/episodes/{eid}/generate", {"mode": "all"})
+check("episode generate skips non-Veo shots", st == 200 and r["skipped"] >= 1, r)
+editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "veo"})
+editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "veo"})
+
 # comments
 st, _ = writer.call("POST", f"/api/episodes/{eid}/comments", {"text": "кадр тёмный", "shot_id": s1["id"], "is_fix": True})
 st, cs = writer.call("GET", f"/api/episodes/{eid}/comments")
@@ -137,6 +159,58 @@ st, _ = editor.call("POST", f"/api/episodes/{eid}/status", {"status": "review"})
 check("editor can return script to writer", st == 200, st)
 st, eps = editor.call("GET", "/api/episodes")
 check("returned episode disappears for editor", all(e["id"] != eid for e in eps))
+
+# реплики из кавычек в тексте действия
+st, ep3 = writer.call("POST", "/api/episodes", {"title": "Кавычки", "script": (
+    "Шот 1\nМаша входит в кафе и тихо говорит: «Привет, Костя!»\n\n"
+    "Шот 2\n«Ты опоздал», — сказала Маша.\nКостя пожимает плечами.\n\n"
+    "Шот 3\nНа вывеске «Кафе» горит свет. Кто-то шепчет: «Не уходи».\n")})
+check("quotes episode created", st == 200 and len(ep3["shots"]) == 3, st)
+q1, q2, q3 = ep3["shots"]
+check("quote becomes a dialogue line with speaker and manner",
+      [(d["speaker"], d["parenthetical"], d["text"]) for d in q1["dialogue"]] == [("Маша", "тихо", "Привет, Костя!")], q1["dialogue"])
+check("quote removed from the action", "«" not in q1["action"] and "Привет" not in q1["action"] and "говорит" not in q1["action"], q1["action"])
+check("dash attribution removed", [d["speaker"] for d in q2["dialogue"]] == ["Маша"] and "сказала" not in q2["action"], (q2["dialogue"], q2["action"]))
+check("title in quotes stays in the action", "«Кафе»" in q3["action"], q3["action"])
+check("on-screen message in quotes is not speech", "«Встретимся?»" in shot3["action"] and all(d["text"] != "Встретимся?" for d in shot3["dialogue"]), shot3["action"])
+check("unknown speaker stays empty and blocks completeness",
+      q3["dialogue"][0]["speaker"] == "" and q3["dialogue"][0].get("auto") and any("не выбран говорящий" in m for m in q3["missing"]), q3)
+check("empty speaker does not break the prompt", '"Не уходи"' in q3["prompt"], q3["prompt"])
+# выбранный говорящий появляется в кадре, имя в действии тоже
+maria = next(a for a in assets if a["name"] == "Маша")
+st, upd = writer.call("PUT", f"/api/shots/{q3['id']}", {"dialogue": [{**q3["dialogue"][0], "speaker": "Маша", "asset_id": maria["id"]}]})
+check("chosen speaker joins the characters in frame", any(c["asset_id"] == maria["id"] for c in upd["characters"]), upd["characters"])
+st, upd = writer.call("PUT", f"/api/shots/{q3['id']}", {"action": upd["action"] + " Костя смотрит на неё."})
+check("name typed into the action joins the characters", any(c["name"] == "Костя" for c in upd["characters"]), upd["characters"])
+
+# герой и локация с картинкой в промпте идут как «reference image N», а не по имени
+PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082")
+st, alt = writer.call("POST", "/api/assets", form={"kind": "character", "name": "Альтушка", "description": "девушка в чёрной куртке", "images": ("a.png", PNG)})
+check("character with image created", st == 200 and alt["versions"][0]["images"], st)
+st, loc = writer.call("POST", "/api/assets", form={"kind": "location", "name": "Лофт", "description": "светлый лофт", "images": ("l.png", PNG)})
+st, ep4 = writer.call("POST", "/api/episodes", {"title": "Референсы", "script": "Шот 1\nЛОКАЦИЯ: @Лофт\nАльтушка смотрит в камеру, не улыбаясь.\n"})
+p4 = ep4["shots"][0]["prompt"]
+check("character with image is a reference in the prompt", "the character from reference image 1" in p4 and "Альтушка" not in p4.split("Action:")[1], p4)
+check("preserve-identity rules in the prompt", "Strictly preserve" in p4 and "Recreate the location exactly" in p4, p4)
+check("location reference numbered", "shown in reference image 2" in p4, p4)
+check("reference order matches the references list", [r["kind"] for r in ep4["shots"][0]["references"]] == ["character", "location"], ep4["shots"][0]["references"])
+# много фото в одной версии: догрузка, порядок, удаление
+av = alt["versions"][0]
+st, _ = editor.call("POST", f"/api/assets/{alt['id']}/versions/{av['id']}/images", form={"images": ("b.png", PNG)})
+check("editor cannot add photos", st == 403, st)
+st, a2 = writer.call("POST", f"/api/assets/{alt['id']}/versions/{av['id']}/images", form={"images": ("b.png", PNG)})
+imgs = next(v for v in a2["versions"] if v["id"] == av["id"])["images"] if st == 200 else []
+check("photos appended to the version", len(imgs) == 2, (st, imgs))
+st, a3 = writer.call("PUT", f"/api/assets/{alt['id']}/versions/{av['id']}/images", {"images": imgs[::-1]})
+check("photos reordered", st == 200 and next(v for v in a3["versions"] if v["id"] == av["id"])["images"] == imgs[::-1], st)
+st, _ = writer.call("PUT", f"/api/assets/{alt['id']}/versions/{av['id']}/images", {"images": ["/etc/passwd"]})
+check("foreign photo path rejected", st == 400, st)
+st, a4 = writer.call("PUT", f"/api/assets/{alt['id']}/versions/{av['id']}/images", {"images": imgs[:1]})
+check("photo removed", st == 200 and len(next(v for v in a4["versions"] if v["id"] == av["id"])["images"]) == 1, st)
+st, meta = writer.call("GET", "/api/meta")
+check("meta has series title", st == 200 and "series_title" in meta, st)
+
+check("character without image keeps the name", "Character Костя" in ep3["shots"][1]["prompt"] or "Костя" in ep3["shots"][1]["prompt"], ep3["shots"][1]["prompt"])
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

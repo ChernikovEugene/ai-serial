@@ -40,6 +40,8 @@ export async function renderTech() {
       <div class="card">
         <h3 style="margin-top:0">Промпт</h3>
         ${field("style", "Общий стиль сериала (в начале каждого промпта)", "textarea")}
+        ${field("consistency_character", "Герой с картинкой-образцом: что сохранять без изменений от серии к серии (уходит в промпт)", "textarea")}
+        ${field("consistency_location", "Локация с картинкой-образцом: что сохранять без изменений от серии к серии (уходит в промпт)", "textarea")}
         ${field("negative_prompt", "Негативный промпт по умолчанию (чего не должно быть в кадре)", "textarea")}
       </div>
     </div>

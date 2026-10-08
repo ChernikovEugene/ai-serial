@@ -38,6 +38,27 @@ SENTENCE_SPLIT_RE =re.compile(r"(?<=[.!?…])\s+")
 VOICEOVER_RE = re.compile(r"^(?:за\s*кадр\w*|з\s*[./]?\s*к\.?|закадр\w*|v\.?\s?o\.?|o\.?\s?s\.?|voice[\s-]*over|голос)$", re.I)
 VOICE_DIRECT, VOICE_OVER = "direct", "voiceover"
 
+# Реплики в кавычках прямо в тексте действия: «Привет!», — сказала Маша.
+QUOTE_RE = re.compile(r"«([^«»]+)»|“([^“”]+)”|„([^“”„]+)[“”]|\"([^\"]+)\"")
+SPEECH_STEMS = (r"сказ|говор|отвеч|ответ|спрос|шепт|шепч|прошеп|прошип|крикн|крич|закрич|воскл|бормо|пробормо|буркн|произн|добав|"
+                r"заяв|рявкн|пропел|продолж|спрашива|отозва|вставил|перебил|подтвердил|согласил|возрази|предложил|попросил|приказал")
+SPEECH_VERB_RE = re.compile(r"\b(?:" + SPEECH_STEMS + ")", re.I)
+TAIL_VERB_RE = re.compile(r"[,]?\s*(?:и\s+)?(?:\S+\s+)?\S*(?:" + SPEECH_STEMS + r")\S*(?:\s+\S+)?\s*[:—–-]\s*$", re.I)
+DASH_ATTR_RE = re.compile(r"\s*[,.]?\s*[—–-]\s*[^.!?…\x00]*[.!?…]?")
+# Кавычки не про речь: сообщение на экране, надпись, название
+NON_SPEECH_RE = re.compile(r"сообщени|смс|sms|надпис|экран|вывеск|табличк|заголов|написан|пишет|напечата|чат|письм|записк|мессендж|"
+                           r"уведомлен|титр|субтитр|песн|названи|постер|плакат|ярлык|этикетк", re.I)
+# Манера произношения: слова из контекста -> ремарка
+MANNER = [
+    (r"прошеп|шепот|шёпот|шепч|шепнул", "шёпотом"), (r"крикн|кричит|кричал|закрич|крича|воскл|рявкн", "громко, криком"),
+    (r"тихо|тихим|вполголоса", "тихо"), (r"громко", "громко"), (r"бормо|буркн", "бормоча"),
+    (r"сквозь зубы", "сквозь зубы"), (r"спокойно", "спокойно"), (r"сердито|зло|злобно|раздражённо|раздраженно", "сердито"),
+    (r"радостно|весело|с улыбкой|улыбаясь|улыбнувшись", "с улыбкой"), (r"грустно|печально", "грустно"),
+    (r"устало", "устало"), (r"нервно|взволнованно|тревожно", "нервно"), (r"испуганно|со страхом", "испуганно"),
+    (r"холодно|сухо", "холодно"), (r"ласково|нежно", "ласково"), (r"ирони", "с иронией"),
+    (r"вздохн", "со вздохом"), (r"шутя|шутливо", "шутя"), (r"твёрдо|твердо|уверенно", "уверенно"),
+]
+
 
 def split_voice(paren: str | None) -> tuple[str, str]:
     """Pulls the voice-over marker out of a parenthetical. Returns (voice, remaining parenthetical)."""
@@ -164,6 +185,70 @@ def _split_to_fit(text: str, max_seconds: float, cost) -> list[str]:
     return ws
 
 
+def _is_speech(quote: str, before: str, after: str) -> bool:
+    """Отличает реплику от названия или надписи в кавычках («вывеска «Кафе»»): у реплики есть знак в конце, несколько слов
+    или рядом глагол речи / двоеточие / тире."""
+    q = quote.strip()
+    if not re.search(r"[A-Za-zА-Яа-яЁё]", q):
+        return False
+    if not (SPEECH_VERB_RE.search(before) or SPEECH_VERB_RE.search(after)) and NON_SPEECH_RE.search(before + " " + after):
+        return False
+    cue = bool(re.search(r"[:—–-]\s*$", before)) or bool(re.match(r"\s*[,.]?\s*[—–-]", after)) \
+        or bool(SPEECH_VERB_RE.search(before) or SPEECH_VERB_RE.search(after))
+    return cue or q[-1] in ".!?…," or words(q) >= 3
+
+
+def extract_quotes(text: str, idx: "AssetIndex") -> tuple[str, list[dict]]:
+    """Вынимает реплики в кавычках из текста действия. Возвращает (текст без реплик, [{speaker, paren, text}]).
+    Говорящий и манера определяются по контексту рядом с кавычками; не нашли — поле остаётся пустым."""
+    spans = []
+    for m in QUOTE_RE.finditer(text):
+        quote = next(g for g in m.groups() if g)
+        spans.append((m.start(), m.end(), quote.strip()))
+    if not spans:
+        return text, []
+    masked = list(text)
+    for a, b, _ in spans:
+        masked[a:b] = ["\x00"] * (b - a)
+    masked = "".join(masked)
+    out, keep, last = [], [], 0
+    for a, b, quote in spans:
+        bs = max((masked.rfind(c, 0, a) for c in ".!?…"), default=-1) + 1
+        before = masked[bs:a].replace("\x00", " ")
+        ends = [i for i in (masked.find(c, b) for c in ".!?…") if i >= 0]
+        after = masked[b:min(ends) if ends else len(masked)].replace("\x00", " ")
+        if not _is_speech(quote, before, after):
+            continue
+        b_chars, a_chars = idx.find_all(before, "character"), idx.find_all(after, "character")
+        if a_chars and SPEECH_VERB_RE.search(after):
+            who = a_chars[0]
+        elif b_chars:
+            who = b_chars[-1]
+        else:
+            who = a_chars[0] if a_chars else None
+        ctx = (before + " " + after).lower()
+        paren = next((label for rx, label in MANNER if re.search(rx, ctx)), "")
+        out.append({"speaker": who["name"] if who else "", "paren": paren, "text": quote})
+        keep.append((a, b))
+    if not keep:
+        return text, []
+    rest, pos = [], 0
+    for a, b in keep:
+        piece = text[pos:a]
+        if re.search(r"[:—–-]\s*$", piece):  # «Маша тихо говорит: «…»» -> «Маша»: оборот «говорит:» уходит вместе с репликой
+            piece = TAIL_VERB_RE.sub("", piece)
+        rest.append(piece)
+        tail = DASH_ATTR_RE.match(masked, b)  # «…», — сказала Маша.
+        pos = tail.end() if tail else b
+    rest.append(text[pos:])
+    action = re.sub(r"\s+", " ", "".join(rest)).strip()
+    action = re.sub(r"^[\s,;:—–-]+|[\s,;:—–-]+$", "", action)
+    action = re.sub(r"\s+([,.!?…])", r"\1", action)
+    action = re.sub(r"(?<![.…])\.{2,}(?!\.)", ".", action)
+    action = re.sub(r"([,.])\s*[—–-]\s*(?=[а-яёa-z])", r"\1 ", action)
+    return action, out
+
+
 def has_markers(text: str) -> bool:
     return any(SHOT_MARK_RE.match(l.strip()) for l in text.splitlines())
 
@@ -212,6 +297,13 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
         return st["shot"]
 
     def add_action(text):
+        text, quotes = extract_quotes(text, idx)
+        if text:
+            add_action_text(text)
+        for q in quotes:
+            add_dialogue(q["speaker"], q["text"], q["paren"], auto=True)
+
+    def add_action_text(text):
         if marked:
             cur = current_or_outside(text)
             if cur is not None:
@@ -230,7 +322,7 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
             mentions(s, chunk)
         st["in_para"] = True
 
-    def add_dialogue(speaker_name, text, paren=None, label=None):
+    def add_dialogue(speaker_name, text, paren=None, label=None, auto=False):
         st["in_para"] = False
         speaker = idx.exact(speaker_name, "character") if speaker_name else None
         name = speaker["name"] if speaker else (speaker_name or "").strip().title()
@@ -238,8 +330,11 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
         voice, paren = split_voice(paren)
 
         def line(chunk):
-            return {"speaker": name, "asset_id": speaker["id"] if speaker else None, "text": chunk,
-                    "parenthetical": paren, "voice": voice}
+            d = {"speaker": name, "asset_id": speaker["id"] if speaker else None, "text": chunk,
+                 "parenthetical": paren, "voice": voice}
+            if auto:  # вынута из кавычек в тексте: пока не проверена автором, пустые поля подсвечиваются
+                d["auto"] = True
+            return d
 
         if marked:
             cur = current_or_outside(text)
@@ -400,8 +495,8 @@ def shot_warnings(shot: dict, max_s: int) -> list[str]:
     if len(shot["characters"]) > 3:
         w.append("Больше 3 персонажей в кадре — Veo может путать внешность")
     for d in on_screen:
-        if not d.get("asset_id"):
-            w.append(f"Персонаж «{d['speaker'] or '?'}» не найден в библиотеке")
+        if d.get("speaker") and not d.get("asset_id"):
+            w.append(f"Персонаж «{d['speaker']}» не найден в библиотеке")
     return w
 
 
@@ -418,6 +513,8 @@ def shot_missing(shot: dict, max_s: int) -> list[str]:
         who = d.get("speaker") or "?"
         if not (d.get("text") or "").strip():
             miss.append(f"у реплики «{who}» нет текста")
+        elif d.get("voice") != VOICE_OVER and not (d.get("speaker") or "").strip():
+            miss.append("у реплики не выбран говорящий")
         elif d.get("voice") != VOICE_OVER and not d.get("asset_id"):
             miss.append(f"«{who}» говорит в кадре, но его нет в библиотеке персонажей")
     return miss
@@ -445,7 +542,7 @@ def _finalize(s: dict, i: int, idx: AssetIndex, max_s: int, wps: float, marked: 
 
     camera = s["camera"]
     if not camera:
-        speakers = list(dict.fromkeys(d["speaker"] for d in s["dialogue"]))
+        speakers = list(dict.fromkeys(d["speaker"] for d in s["dialogue"] if d["speaker"]))
         if len(speakers) == 1:
             camera = f"Medium close-up on {speakers[0]}, eye level, slight handheld"
         elif len(speakers) >= 2:
@@ -481,10 +578,61 @@ def _sent(text: str) -> str:
     return text if text.endswith((".", "!", "?", "…")) else text + "."
 
 
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
 def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tuple[str, list[dict], list[str]]:
-    """Returns (prompt, references, warnings). references: [{"path", "kind": composition|character|location}]."""
+    """Returns (prompt, references, warnings). references: [{"path", "kind": composition|character|location, ...}].
+
+    Герои и локации, у которых есть картинка, в тексте идут не по имени, а как «персонаж с референса N»: имя из сценария
+    видеомодели ничего не говорит, а картинка говорит всё. Нумерация совпадает с порядком картинок в `references`
+    (так же они уходят в Veo и показываются на карточке шота), поэтому промпт можно целиком использовать и в другой нейросети."""
     lang = settings.get("dialogue_language") or "Russian"
     model = settings.get("veo_model", "")
+    engine = shot.get("engine") or "veo"
+    comp = shot.get("composition_image")
+    mode = shot.get("composition_mode") or "reference"
+    loc_v = versions.get(shot.get("location_version_id"))
+    char_vs = [(c, versions.get(c.get("version_id"))) for c in shot.get("characters", [])]
+
+    # --- референсы: какие картинки прикладываются и в каком порядке
+    refs, warns = [], []
+    if comp:
+        refs.append({"path": comp, "kind": "composition"})
+    for c, v in char_vs:
+        if v and v["images"]:
+            refs.append({"path": v["images"][0], "kind": "character", "name": c["name"], "asset_id": c["asset_id"]})
+        elif v:
+            warns.append(f"У персонажа «{c['name']}» нет фото — модель нарисует его по описанию")
+    if loc_v and loc_v["images"]:
+        refs.append({"path": loc_v["images"][0], "kind": "location", "name": assets[loc_v["asset_id"]]["name"],
+                     "asset_id": loc_v["asset_id"]})
+    if comp and mode == "first_frame":
+        if len(refs) > 1:
+            warns.append("В режиме «первый кадр» фото персонажей и локации не отправляются — Veo берёт всё из кадра")
+        refs = refs[:1]
+    elif refs and engine == "veo" and "3.1" not in model:
+        warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
+    if len(refs) > MAX_REFERENCE_IMAGES:
+        dropped = ", ".join(r.get("name") or "композиция" for r in refs[MAX_REFERENCE_IMAGES:])
+        warns.append(f"Veo принимает до {MAX_REFERENCE_IMAGES} референсов — не отправятся: {dropped}")
+        refs = refs[:MAX_REFERENCE_IMAGES]
+
+    # номера картинок, на которые можно ссылаться в тексте (Veo без 3.1 картинки не получает: там остаются имена)
+    attached = refs if (engine != "veo" or "3.1" in model) else []
+    num = {(r["kind"], r.get("asset_id")): i for i, r in enumerate(attached, 1) if r["kind"] != "composition"}
+    comp_n = next((i for i, r in enumerate(attached, 1) if r["kind"] == "composition"), None)
+    label = {a_id: f"the character from reference image {n}" for (kind, a_id), n in num.items() if kind == "character"}
+    swaps = [(rx, label[a["id"]]) for rx, a in AssetIndex(list(assets.values())).patterns
+             if a["kind"] == "character" and a["id"] in label]
+
+    def text(t: str) -> str:
+        t = MENTION_RE.sub(lambda m: m.group(1).replace("_", " "), t)
+        for rx, lab in swaps:
+            t = rx.sub(lab, t)
+        return t
+
     parts = []
     if settings.get("style"):
         parts.append(_sent(settings["style"]))
@@ -492,35 +640,45 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
         parts.append(_sent(settings["tt_prompt"]))
     parts.append(f"Vertical {settings.get('aspect_ratio', '9:16')} video, {shot['duration']} seconds, one continuous shot.")
 
-    comp = shot.get("composition_image")
-    mode = shot.get("composition_mode") or "reference"
     if comp:
+        where = f" (reference image {comp_n})" if comp_n else ""
         if mode == "first_frame":
-            parts.append("The video starts exactly from the provided first-frame image; keep its composition, framing and camera angle.")
+            parts.append(f"The video starts exactly from the provided first-frame image{where}; keep its composition, framing and camera angle.")
         else:
-            parts.append("Composition: match the framing, camera angle, blocking and layout of the composition reference image.")
+            parts.append(f"Composition: match the framing, camera angle, blocking and layout of the composition reference image{where}.")
     if shot.get("composition_note"):
-        parts.append(_sent("Composition notes: " + shot["composition_note"]))
+        parts.append(_sent("Composition notes: " + text(shot["composition_note"])))
 
-    loc_v = versions.get(shot.get("location_version_id"))
+    loc_n = num.get(("location", loc_v["asset_id"])) if loc_v else None
     if loc_v:
         desc = loc_v["description"].strip()
-        parts.append(_sent(f"Location: {assets[loc_v['asset_id']]['name']}" + (f" — {desc}" if desc else "")))
+        name = assets[loc_v["asset_id"]]["name"]
+        if loc_n:
+            parts.append(_sent(f"Location: {name}, shown in reference image {loc_n}" + (f". Details: {desc}" if desc else "")))
+        else:
+            parts.append(_sent(f"Location: {name}" + (f" — {desc}" if desc else "")))
     elif shot.get("scene"):
         parts.append(_sent(f"Location: {shot['scene']}"))
 
-    char_vs = []
-    for c in shot.get("characters", []):
-        v = versions.get(c.get("version_id"))
-        char_vs.append((c, v))
+    for c, v in char_vs:
         desc = v["description"].strip() if v else ""
         outfit = f" (look: {v['label']})" if v and v["label"] else ""
-        parts.append(_sent(f"Character {c['name']}{outfit}" + (f": {desc}" if desc else "")))
+        if c["asset_id"] in label:
+            n = num[("character", c["asset_id"])]
+            parts.append(_sent(f"Character in reference image {n}{outfit}" + (f". Details: {desc}" if desc else "")))
+        else:
+            parts.append(_sent(f"Character {c['name']}{outfit}" + (f": {desc}" if desc else "")))
+
+    # правила «ничего не меняется от серии к серии»: работают, когда у героя или локации есть картинка-образец
+    if label and settings.get("consistency_character", "").strip():
+        parts.append(_sent(settings["consistency_character"]))
+    if loc_n and settings.get("consistency_location", "").strip():
+        parts.append(_sent(settings["consistency_location"]))
 
     if shot.get("action"):
-        parts.append(_sent("Action: " + MENTION_RE.sub(lambda m: m.group(1).replace("_", " "), shot["action"])))
+        parts.append(_sent("Action: " + text(shot["action"])))
     if shot.get("camera"):
-        parts.append(_sent(f"Camera: {shot['camera']}"))
+        parts.append(_sent(f"Camera: {text(shot['camera'])}"))
 
     on_screen = [d for d in shot.get("dialogue", []) if d.get("voice") != VOICE_OVER]
     if on_screen:
@@ -528,35 +686,14 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
             v = next((v for c, v in char_vs if c["asset_id"] == d.get("asset_id")), None)
             how = f", {d['parenthetical']}" if d.get("parenthetical") else ""
             voice = " " + _sent(f"Voice: {v['voice']}") if v and v.get("voice") else ""
-            parts.append(f'{d["speaker"]} says in {lang}{how}: "{d["text"].strip()}"{voice}')
+            who = _cap(label[d["asset_id"]]) if d.get("asset_id") in label else (d["speaker"] or "A character")
+            parts.append(f'{who} says in {lang}{how}: "{d["text"].strip()}"{voice}')
         parts.append("Lip-sync the spoken lines. No background music.")
     elif shot.get("dialogue"):
         # voice-over only: the voice is recorded separately, so nobody on screen speaks
         parts.append("Nobody on screen speaks, lips closed, natural ambient sound only. No background music.")
     else:
         parts.append("No dialogue, natural ambient sound only.")
-
-    refs, warns = [], []
-    if comp:
-        refs.append({"path": comp, "kind": "composition"})
-    for c, v in char_vs:
-        if v and v["images"]:
-            refs.append({"path": v["images"][0], "kind": "character", "name": c["name"]})
-        elif v:
-            warns.append(f"У персонажа «{c['name']}» нет фото — Veo нарисует его по описанию")
-    if loc_v and loc_v["images"]:
-        refs.append({"path": loc_v["images"][0], "kind": "location", "name": assets[loc_v["asset_id"]]["name"]})
-
-    if comp and mode == "first_frame":
-        if len(refs) > 1:
-            warns.append("В режиме «первый кадр» фото персонажей и локации не отправляются — Veo берёт всё из кадра")
-        refs = refs[:1]
-    elif refs and "3.1" not in model:
-        warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
-    if len(refs) > MAX_REFERENCE_IMAGES:
-        dropped = ", ".join(r.get("name") or "композиция" for r in refs[MAX_REFERENCE_IMAGES:])
-        warns.append(f"Veo принимает до {MAX_REFERENCE_IMAGES} референсов — не отправятся: {dropped}")
-        refs = refs[:MAX_REFERENCE_IMAGES]
     return " ".join(parts), refs, warns
 
 
