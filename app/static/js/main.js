@@ -51,13 +51,25 @@ async function route() {
   } catch (e) { console.error(e); }
 }
 
+// Оформление: «Старый» — исходный дизайн, «Тёмный» и «Светлый» — «Графит» (static/themes.css).
+const THEMES = [["old", "Старый"], ["dark", "Тёмный"], ["light", "Светлый"]];
+function currentTheme() { return document.documentElement.classList.contains("grafit") ? document.documentElement.dataset.theme : "old"; }
+function markTheme() { $$("[data-theme-set]").forEach((b) => b.classList.toggle("on", b.dataset.themeSet === currentTheme())); }
+function setTheme(t) {
+  const html = document.documentElement;
+  html.classList.toggle("grafit", t !== "old");
+  if (t === "old") delete html.dataset.theme; else html.dataset.theme = t;
+  try { localStorage.setItem("theme", t); } catch {}
+  markTheme();
+}
+
 function drawNav(section) {
   const active = section === "episodes" || section === "archive" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
   $("#nav").classList.remove("open"); // на телефоне меню за «бургером» закрывается при каждом переходе
   $("#nav").innerHTML = `
-    <div class="brand">🎬 Студия</div>
+    <div class="brand"><span class="brand-old">🎬 Студия</span><span class="brand-new"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04221e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="logo-text"><b>Студия</b><small>PARI · сериал</small></span></span></div>
     <button class="burger ghost" id="burger" aria-label="Меню" aria-expanded="false">☰</button>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/status" data-nav="status">Статус</a>
@@ -68,12 +80,17 @@ function drawNav(section) {
     <a href="#/tech" data-nav="tech">Тех. требования</a>
     <a href="#/team" data-nav="team">Команда</a>
     <a href="#/settings" data-nav="settings">Настройки</a>
+    <div class="theme-switch mob">${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
     <div class="nav-foot">
+      <div class="theme-switch" title="Оформление студии (запоминается в этом браузере)">
+        ${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
       Veo: ${state.meta.veo_provider === "gemini" ? `<span class="badge ok">API</span>` : `<span class="badge warn">заглушка</span>`}
       <div class="me"><b>${esc(u.name)}</b><br><span class="muted small">${esc(state.meta.roles[u.role])}</span></div>
       <button class="ghost small" id="logout">Выйти</button>
     </div>`;
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.nav === active));
+  markTheme();
+  $$("[data-theme-set]").forEach((b) => (b.onclick = () => setTheme(b.dataset.themeSet)));
   $("#burger").onclick = () => $("#burger").setAttribute("aria-expanded", $("#nav").classList.toggle("open"));
   $("#logout").onclick = async () => {
     await api("/api/auth/logout", { json: {} });
