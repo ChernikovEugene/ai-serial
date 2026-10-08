@@ -55,7 +55,7 @@ function schedulePoll() {
 function draw() {
   view().innerHTML = `<div id="ep-header"></div>
     <div class="tabs">
-      ${[["script", "Сценарий"], ["shots", "Шоты"], ["review", "Просмотр и правки"], ["main", "Основное"], ["history", "История"]]
+      ${[["script", "Сценарий"], ["shots", "Шоты"], ["review", "Просмотр и правки"], ["main", "Информация"], ["history", "История"]]
         .map(([k, n]) => `<button class="tab ${E.tab === k ? "on" : ""}" data-tab="${k}">${n}</button>`).join("")}
     </div>
     <div id="ep-tab"></div>`;
@@ -249,7 +249,7 @@ function drawTab() {
   if (E.tab === "history") return drawHistory(el);
 }
 
-/** Вкладка «Основное»: описание для поста, итог и готовый ролик. */
+/** Вкладка «Информация»: описание для поста, итог и готовый ролик. */
 function drawMain(el) {
   const ep = E.ep;
   el.innerHTML = `<div class="ep-main">
