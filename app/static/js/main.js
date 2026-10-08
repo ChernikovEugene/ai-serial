@@ -67,8 +67,10 @@ function drawNav(section) {
   const active = section === "episodes" || section === "archive" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
+  $("#nav").classList.remove("open"); // на телефоне меню за «бургером» закрывается при каждом переходе
   $("#nav").innerHTML = `
     <div class="brand"><span class="brand-old">🎬 Студия</span><span class="brand-new"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04221e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="logo-text"><b>Студия</b><small>PARI · сериал</small></span></span></div>
+    <button class="burger ghost" id="burger" aria-label="Меню" aria-expanded="false">☰</button>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/status" data-nav="status">Статус</a>
     <a href="#/series" data-nav="series">Серии</a>
@@ -88,6 +90,7 @@ function drawNav(section) {
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.nav === active));
   markTheme();
   $$("[data-theme-set]").forEach((b) => (b.onclick = () => setTheme(b.dataset.themeSet)));
+  $("#burger").onclick = () => $("#burger").setAttribute("aria-expanded", $("#nav").classList.toggle("open"));
   $("#logout").onclick = async () => {
     await api("/api/auth/logout", { json: {} });
     state.meta = null;
