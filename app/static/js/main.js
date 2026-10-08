@@ -80,6 +80,7 @@ function drawNav(section) {
     <a href="#/tech" data-nav="tech">Тех. требования</a>
     <a href="#/team" data-nav="team">Команда</a>
     <a href="#/settings" data-nav="settings">Настройки</a>
+    <div class="theme-switch mob">${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
     <div class="nav-foot">
       <div class="theme-switch" title="Оформление студии (запоминается в этом браузере)">
         ${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>

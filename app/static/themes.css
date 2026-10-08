@@ -22,7 +22,7 @@
 
 /* ---------- основа ---------- */
 .grafit body { font: 14px/1.5 Onest, system-ui, sans-serif; background: var(--bg); color: var(--text); }
-.grafit h1 { font-size: clamp(24px, 6vw, 32px); font-weight: 500; letter-spacing: -.025em; margin-bottom: 18px; }
+.grafit h1 { font-weight: 500; letter-spacing: -.025em; }
 .grafit h2 { font-size: 19px; font-weight: 500; letter-spacing: -.01em; }
 .grafit a { color: var(--accent-text); }
 .grafit code { color: var(--accent-text); }
@@ -36,19 +36,23 @@
 .grafit .nav-foot { color: var(--nav-muted); }
 @media (min-width: 801px) {
   .grafit main { padding: 28px 36px 80px; }
+  .grafit h1 { font-size: 32px; }
   .grafit .nav { width: 224px; padding: 22px 14px; gap: 4px; }
   .grafit .nav a { padding: 9px 12px; }
   .grafit .brand { padding: 2px 8px 22px; }
 }
-/* телефон: меню — полоса сверху (style.css), активный пункт отмечен полоской снизу */
+/* телефон: меню свёрнуто в «бургер» (style.css); переключатель темы — внутри раскрытого меню */
 @media (max-width: 800px) {
   .grafit .nav { border-right: 0; border-bottom: 1px solid var(--nav-line); }
-  .grafit .brand { padding: 0 8px; gap: 8px; }
+  .grafit .brand { padding: 0 4px; gap: 8px; }
   .grafit .logo-mark { width: 28px; height: 28px; }
   .grafit .logo-text small { display: none; }
-  .grafit .nav a.active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 2px; }
-  .theme-switch { margin-right: 6px; }
-  .theme-switch button { flex: none; padding: 4px 8px; }
+  .grafit .burger { padding: 0; }
+  .nav-foot .theme-switch { display: none; }
+  .theme-switch.mob { order: 4; flex: 1 0 100%; margin: 8px 0 6px; }
+  .nav:not(.open) .theme-switch.mob { display: none; }
+}
+@media (min-width: 801px) { .theme-switch.mob { display: none; } }
 }
 .grafit .nav-foot .me { color: var(--nav-text); }
 .grafit .nav-foot .badge { align-self: flex-start; }
