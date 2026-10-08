@@ -38,6 +38,27 @@ SENTENCE_SPLIT_RE =re.compile(r"(?<=[.!?…])\s+")
 VOICEOVER_RE = re.compile(r"^(?:за\s*кадр\w*|з\s*[./]?\s*к\.?|закадр\w*|v\.?\s?o\.?|o\.?\s?s\.?|voice[\s-]*over|голос)$", re.I)
 VOICE_DIRECT, VOICE_OVER = "direct", "voiceover"
 
+# Реплики в кавычках прямо в тексте действия: «Привет!», — сказала Маша.
+QUOTE_RE = re.compile(r"«([^«»]+)»|“([^“”]+)”|„([^“”„]+)[“”]|\"([^\"]+)\"")
+SPEECH_STEMS = (r"сказ|говор|отвеч|ответ|спрос|шепт|шепч|прошеп|прошип|крикн|крич|закрич|воскл|бормо|пробормо|буркн|произн|добав|"
+                r"заяв|рявкн|пропел|продолж|спрашива|отозва|вставил|перебил|подтвердил|согласил|возрази|предложил|попросил|приказал")
+SPEECH_VERB_RE = re.compile(r"\b(?:" + SPEECH_STEMS + ")", re.I)
+TAIL_VERB_RE = re.compile(r"[,]?\s*(?:и\s+)?(?:\S+\s+)?\S*(?:" + SPEECH_STEMS + r")\S*(?:\s+\S+)?\s*[:—–-]\s*$", re.I)
+DASH_ATTR_RE = re.compile(r"\s*[,.]?\s*[—–-]\s*[^.!?…\x00]*[.!?…]?")
+# Кавычки не про речь: сообщение на экране, надпись, название
+NON_SPEECH_RE = re.compile(r"сообщени|смс|sms|надпис|экран|вывеск|табличк|заголов|написан|пишет|напечата|чат|письм|записк|мессендж|"
+                           r"уведомлен|титр|субтитр|песн|названи|постер|плакат|ярлык|этикетк", re.I)
+# Манера произношения: слова из контекста -> ремарка
+MANNER = [
+    (r"прошеп|шепот|шёпот|шепч|шепнул", "шёпотом"), (r"крикн|кричит|кричал|закрич|крича|воскл|рявкн", "громко, криком"),
+    (r"тихо|тихим|вполголоса", "тихо"), (r"громко", "громко"), (r"бормо|буркн", "бормоча"),
+    (r"сквозь зубы", "сквозь зубы"), (r"спокойно", "спокойно"), (r"сердито|зло|злобно|раздражённо|раздраженно", "сердито"),
+    (r"радостно|весело|с улыбкой|улыбаясь|улыбнувшись", "с улыбкой"), (r"грустно|печально", "грустно"),
+    (r"устало", "устало"), (r"нервно|взволнованно|тревожно", "нервно"), (r"испуганно|со страхом", "испуганно"),
+    (r"холодно|сухо", "холодно"), (r"ласково|нежно", "ласково"), (r"ирони", "с иронией"),
+    (r"вздохн", "со вздохом"), (r"шутя|шутливо", "шутя"), (r"твёрдо|твердо|уверенно", "уверенно"),
+]
+
 
 def split_voice(paren: str | None) -> tuple[str, str]:
     """Pulls the voice-over marker out of a parenthetical. Returns (voice, remaining parenthetical)."""
@@ -164,6 +185,70 @@ def _split_to_fit(text: str, max_seconds: float, cost) -> list[str]:
     return ws
 
 
+def _is_speech(quote: str, before: str, after: str) -> bool:
+    """Отличает реплику от названия или надписи в кавычках («вывеска «Кафе»»): у реплики есть знак в конце, несколько слов
+    или рядом глагол речи / двоеточие / тире."""
+    q = quote.strip()
+    if not re.search(r"[A-Za-zА-Яа-яЁё]", q):
+        return False
+    if not (SPEECH_VERB_RE.search(before) or SPEECH_VERB_RE.search(after)) and NON_SPEECH_RE.search(before + " " + after):
+        return False
+    cue = bool(re.search(r"[:—–-]\s*$", before)) or bool(re.match(r"\s*[,.]?\s*[—–-]", after)) \
+        or bool(SPEECH_VERB_RE.search(before) or SPEECH_VERB_RE.search(after))
+    return cue or q[-1] in ".!?…," or words(q) >= 3
+
+
+def extract_quotes(text: str, idx: "AssetIndex") -> tuple[str, list[dict]]:
+    """Вынимает реплики в кавычках из текста действия. Возвращает (текст без реплик, [{speaker, paren, text}]).
+    Говорящий и манера определяются по контексту рядом с кавычками; не нашли — поле остаётся пустым."""
+    spans = []
+    for m in QUOTE_RE.finditer(text):
+        quote = next(g for g in m.groups() if g)
+        spans.append((m.start(), m.end(), quote.strip()))
+    if not spans:
+        return text, []
+    masked = list(text)
+    for a, b, _ in spans:
+        masked[a:b] = ["\x00"] * (b - a)
+    masked = "".join(masked)
+    out, keep, last = [], [], 0
+    for a, b, quote in spans:
+        bs = max((masked.rfind(c, 0, a) for c in ".!?…"), default=-1) + 1
+        before = masked[bs:a].replace("\x00", " ")
+        ends = [i for i in (masked.find(c, b) for c in ".!?…") if i >= 0]
+        after = masked[b:min(ends) if ends else len(masked)].replace("\x00", " ")
+        if not _is_speech(quote, before, after):
+            continue
+        b_chars, a_chars = idx.find_all(before, "character"), idx.find_all(after, "character")
+        if a_chars and SPEECH_VERB_RE.search(after):
+            who = a_chars[0]
+        elif b_chars:
+            who = b_chars[-1]
+        else:
+            who = a_chars[0] if a_chars else None
+        ctx = (before + " " + after).lower()
+        paren = next((label for rx, label in MANNER if re.search(rx, ctx)), "")
+        out.append({"speaker": who["name"] if who else "", "paren": paren, "text": quote})
+        keep.append((a, b))
+    if not keep:
+        return text, []
+    rest, pos = [], 0
+    for a, b in keep:
+        piece = text[pos:a]
+        if re.search(r"[:—–-]\s*$", piece):  # «Маша тихо говорит: «…»» -> «Маша»: оборот «говорит:» уходит вместе с репликой
+            piece = TAIL_VERB_RE.sub("", piece)
+        rest.append(piece)
+        tail = DASH_ATTR_RE.match(masked, b)  # «…», — сказала Маша.
+        pos = tail.end() if tail else b
+    rest.append(text[pos:])
+    action = re.sub(r"\s+", " ", "".join(rest)).strip()
+    action = re.sub(r"^[\s,;:—–-]+|[\s,;:—–-]+$", "", action)
+    action = re.sub(r"\s+([,.!?…])", r"\1", action)
+    action = re.sub(r"(?<![.…])\.{2,}(?!\.)", ".", action)
+    action = re.sub(r"([,.])\s*[—–-]\s*(?=[а-яёa-z])", r"\1 ", action)
+    return action, out
+
+
 def has_markers(text: str) -> bool:
     return any(SHOT_MARK_RE.match(l.strip()) for l in text.splitlines())
 
@@ -212,6 +297,13 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
         return st["shot"]
 
     def add_action(text):
+        text, quotes = extract_quotes(text, idx)
+        if text:
+            add_action_text(text)
+        for q in quotes:
+            add_dialogue(q["speaker"], q["text"], q["paren"], auto=True)
+
+    def add_action_text(text):
         if marked:
             cur = current_or_outside(text)
             if cur is not None:
@@ -230,7 +322,7 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
             mentions(s, chunk)
         st["in_para"] = True
 
-    def add_dialogue(speaker_name, text, paren=None, label=None):
+    def add_dialogue(speaker_name, text, paren=None, label=None, auto=False):
         st["in_para"] = False
         speaker = idx.exact(speaker_name, "character") if speaker_name else None
         name = speaker["name"] if speaker else (speaker_name or "").strip().title()
@@ -238,8 +330,11 @@ def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | Non
         voice, paren = split_voice(paren)
 
         def line(chunk):
-            return {"speaker": name, "asset_id": speaker["id"] if speaker else None, "text": chunk,
-                    "parenthetical": paren, "voice": voice}
+            d = {"speaker": name, "asset_id": speaker["id"] if speaker else None, "text": chunk,
+                 "parenthetical": paren, "voice": voice}
+            if auto:  # вынута из кавычек в тексте: пока не проверена автором, пустые поля подсвечиваются
+                d["auto"] = True
+            return d
 
         if marked:
             cur = current_or_outside(text)
@@ -400,8 +495,8 @@ def shot_warnings(shot: dict, max_s: int) -> list[str]:
     if len(shot["characters"]) > 3:
         w.append("Больше 3 персонажей в кадре — Veo может путать внешность")
     for d in on_screen:
-        if not d.get("asset_id"):
-            w.append(f"Персонаж «{d['speaker'] or '?'}» не найден в библиотеке")
+        if d.get("speaker") and not d.get("asset_id"):
+            w.append(f"Персонаж «{d['speaker']}» не найден в библиотеке")
     return w
 
 
@@ -418,6 +513,8 @@ def shot_missing(shot: dict, max_s: int) -> list[str]:
         who = d.get("speaker") or "?"
         if not (d.get("text") or "").strip():
             miss.append(f"у реплики «{who}» нет текста")
+        elif d.get("voice") != VOICE_OVER and not (d.get("speaker") or "").strip():
+            miss.append("у реплики не выбран говорящий")
         elif d.get("voice") != VOICE_OVER and not d.get("asset_id"):
             miss.append(f"«{who}» говорит в кадре, но его нет в библиотеке персонажей")
     return miss
@@ -445,7 +542,7 @@ def _finalize(s: dict, i: int, idx: AssetIndex, max_s: int, wps: float, marked: 
 
     camera = s["camera"]
     if not camera:
-        speakers = list(dict.fromkeys(d["speaker"] for d in s["dialogue"]))
+        speakers = list(dict.fromkeys(d["speaker"] for d in s["dialogue"] if d["speaker"]))
         if len(speakers) == 1:
             camera = f"Medium close-up on {speakers[0]}, eye level, slight handheld"
         elif len(speakers) >= 2:
@@ -528,7 +625,7 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
             v = next((v for c, v in char_vs if c["asset_id"] == d.get("asset_id")), None)
             how = f", {d['parenthetical']}" if d.get("parenthetical") else ""
             voice = " " + _sent(f"Voice: {v['voice']}") if v and v.get("voice") else ""
-            parts.append(f'{d["speaker"]} says in {lang}{how}: "{d["text"].strip()}"{voice}')
+            parts.append(f'{d["speaker"] or "A character"} says in {lang}{how}: "{d["text"].strip()}"{voice}')
         parts.append("Lip-sync the spoken lines. No background music.")
     elif shot.get("dialogue"):
         # voice-over only: the voice is recorded separately, so nobody on screen speaks
