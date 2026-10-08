@@ -125,6 +125,22 @@ check("takes keep prompt and reason", [t["reason"] for t in sh["takes"]] == ["л
       and sh["takes"][0]["prompt"] == "Better prompt v2", sh["takes"])
 check("revisions counted", sh["revisions"] == 1, sh["revisions"])
 
+# нейросеть на шот: выбирает монтажёр, через API идёт только Veo
+st, shot = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "kling"})
+check("editor picks another engine for a shot", st == 200 and shot["engine"] == "kling", f"{st} {shot if st != 200 else ''}")
+st, _ = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "nope"})
+check("unknown engine rejected", st == 400, st)
+st, _ = writer.call("PUT", f"/api/shots/{s1['id']}", {"engine": "veo"})
+check("writer cannot pick the engine", st == 403, st)
+st, _ = editor.call("POST", f"/api/shots/{s1['id']}/generate", {})
+check("non-Veo shot is not sent to the API", st == 400, st)
+s2 = ep["shots"][1]
+editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "kling"})
+st, r = editor.call("POST", f"/api/episodes/{eid}/generate", {"mode": "all"})
+check("episode generate skips non-Veo shots", st == 200 and r["skipped"] >= 1, r)
+editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "veo"})
+editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "veo"})
+
 # comments
 st, _ = writer.call("POST", f"/api/episodes/{eid}/comments", {"text": "кадр тёмный", "shot_id": s1["id"], "is_fix": True})
 st, cs = writer.call("GET", f"/api/episodes/{eid}/comments")
@@ -137,6 +153,29 @@ st, _ = editor.call("POST", f"/api/episodes/{eid}/status", {"status": "review"})
 check("editor can return script to writer", st == 200, st)
 st, eps = editor.call("GET", "/api/episodes")
 check("returned episode disappears for editor", all(e["id"] != eid for e in eps))
+
+# реплики из кавычек в тексте действия
+st, ep3 = writer.call("POST", "/api/episodes", {"title": "Кавычки", "script": (
+    "Шот 1\nМаша входит в кафе и тихо говорит: «Привет, Костя!»\n\n"
+    "Шот 2\n«Ты опоздал», — сказала Маша.\nКостя пожимает плечами.\n\n"
+    "Шот 3\nНа вывеске «Кафе» горит свет. Кто-то шепчет: «Не уходи».\n")})
+check("quotes episode created", st == 200 and len(ep3["shots"]) == 3, st)
+q1, q2, q3 = ep3["shots"]
+check("quote becomes a dialogue line with speaker and manner",
+      [(d["speaker"], d["parenthetical"], d["text"]) for d in q1["dialogue"]] == [("Маша", "тихо", "Привет, Костя!")], q1["dialogue"])
+check("quote removed from the action", "«" not in q1["action"] and "Привет" not in q1["action"] and "говорит" not in q1["action"], q1["action"])
+check("dash attribution removed", [d["speaker"] for d in q2["dialogue"]] == ["Маша"] and "сказала" not in q2["action"], (q2["dialogue"], q2["action"]))
+check("title in quotes stays in the action", "«Кафе»" in q3["action"], q3["action"])
+check("on-screen message in quotes is not speech", "«Встретимся?»" in shot3["action"] and all(d["text"] != "Встретимся?" for d in shot3["dialogue"]), shot3["action"])
+check("unknown speaker stays empty and blocks completeness",
+      q3["dialogue"][0]["speaker"] == "" and q3["dialogue"][0].get("auto") and any("не выбран говорящий" in m for m in q3["missing"]), q3)
+check("empty speaker does not break the prompt", '"Не уходи"' in q3["prompt"], q3["prompt"])
+# выбранный говорящий появляется в кадре, имя в действии тоже
+maria = next(a for a in assets if a["name"] == "Маша")
+st, upd = writer.call("PUT", f"/api/shots/{q3['id']}", {"dialogue": [{**q3["dialogue"][0], "speaker": "Маша", "asset_id": maria["id"]}]})
+check("chosen speaker joins the characters in frame", any(c["asset_id"] == maria["id"] for c in upd["characters"]), upd["characters"])
+st, upd = writer.call("PUT", f"/api/shots/{q3['id']}", {"action": upd["action"] + " Костя смотрит на неё."})
+check("name typed into the action joins the characters", any(c["name"] == "Костя" for c in upd["characters"]), upd["characters"])
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

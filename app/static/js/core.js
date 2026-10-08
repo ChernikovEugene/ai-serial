@@ -133,3 +133,8 @@ export function fitMeter(est, max) {
   const cls = est > max ? "over" : est > max - 0.8 ? "tight" : "ok";
   return `<div class="fit ${cls}" title="Оценка ${est} с из ${max} с"><span style="width:${pct}%"></span></div>`;
 }
+
+/** Цвет героя в тексте шота: свой у каждого персонажа (по номеру в библиотеке), локации — один спокойный. */
+const HERO_COLORS = ["#ff7a9c", "#ffb04d", "#8be05a", "#4fd1c5", "#5fa8ff", "#b58cff", "#ff8fd8", "#e6d34f"];
+export const assetColor = (a) => (a.kind === "location" ? "#7f8ea3" : HERO_COLORS[a.id % HERO_COLORS.length]);
+export const engineName = (key) => state.meta?.engines?.find((e) => e.key === key)?.name || key;

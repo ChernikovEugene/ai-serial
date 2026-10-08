@@ -97,6 +97,7 @@ TABLES = {
         warnings TEXT NOT NULL DEFAULT '[]',
         selected_take_id INTEGER,
         needs_redo INTEGER NOT NULL DEFAULT 0,
+        engine TEXT NOT NULL DEFAULT 'veo',
         updated_at TEXT NOT NULL DEFAULT ''""",
     "takes": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,

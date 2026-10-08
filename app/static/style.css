@@ -599,3 +599,23 @@ p.muted, .muted.sm-desc, .queue-head .muted, .cal-filters .muted, .arc-card-syn 
   .sm-strip { overflow-x: auto; padding: 2px 4px 8px; margin-right: -4px; }
   .sm-cell { flex: 0 0 30px; }
 }
+
+/* Подсветка героев в полях шота: поле прозрачное, под ним копия текста с цветными плашками */
+.hl-wrap { position: relative; }
+.hl-wrap > .hl-back, .hl-wrap > input, .hl-wrap > textarea { font: inherit; line-height: 1.45; padding: 7px 9px; border-radius: 8px;
+  border: 1px solid transparent; letter-spacing: normal; box-sizing: border-box; }
+.hl-wrap > .hl-back { position: absolute; inset: 0; white-space: pre-wrap; word-wrap: break-word; overflow: hidden; color: transparent;
+  pointer-events: none; background: #0d0f12; border-color: var(--line); }
+.hl-wrap.single > .hl-back { white-space: pre; }
+.hl-wrap > input, .hl-wrap > textarea { position: relative; display: block; width: 100%; background: transparent; border-color: var(--line); }
+.hl-wrap > input:focus, .hl-wrap > textarea:focus { border-color: var(--accent2); }
+.hl-back mark { color: transparent; background: color-mix(in srgb, var(--c) 34%, transparent); border-radius: 4px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }
+.chip { border-left: 4px solid var(--c, var(--line)); }
+/* реплика, у которой автор ещё не проверил пустое поле: красная рамка */
+.dlg-line input.need-red { border-color: #ff4d5e; background: color-mix(in srgb, #ff4d5e 12%, #0d0f12); }
+.dlg-line input.need-red::placeholder { color: #ff8f99; }
+.dlg-line.auto .auto-tag { grid-column: 1 / -1; }
+.up-label { margin: 0; text-align: center; cursor: pointer; }
+.ep-head-min textarea { width: 100%; }
+.ep-head-min > label { margin-top: 12px; }
