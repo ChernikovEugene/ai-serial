@@ -1688,7 +1688,7 @@ def delete_template(tid: int):
 # ---------- settings ----------
 
 SECRET_SETTINGS = ("veo_api_key", "github_token")
-PROMPT_SETTINGS = {"style", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
+PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
 @app.get("/api/settings")
@@ -1711,6 +1711,13 @@ def write_settings(values: dict):
     if PROMPT_SETTINGS & values.keys():
         refresh_all_prompts()
     return read_settings()
+
+
+# Промпты шотов пересобираются при запуске: подхватывают новые правила сборки и изменения в библиотеке (закреплённые вручную не трогаем)
+try:
+    refresh_all_prompts()
+except Exception as e:  # noqa: BLE001 - запуск студии важнее
+    print("Не удалось пересобрать промпты:", e)
 
 
 # ---------- static ----------
