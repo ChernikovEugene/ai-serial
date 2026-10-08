@@ -194,6 +194,22 @@ check("character with image is a reference in the prompt", "the character from r
 check("preserve-identity rules in the prompt", "Strictly preserve" in p4 and "Recreate the location exactly" in p4, p4)
 check("location reference numbered", "shown in reference image 2" in p4, p4)
 check("reference order matches the references list", [r["kind"] for r in ep4["shots"][0]["references"]] == ["character", "location"], ep4["shots"][0]["references"])
+# много фото в одной версии: догрузка, порядок, удаление
+av = alt["versions"][0]
+st, _ = editor.call("POST", f"/api/assets/{alt['id']}/versions/{av['id']}/images", form={"images": ("b.png", PNG)})
+check("editor cannot add photos", st == 403, st)
+st, a2 = writer.call("POST", f"/api/assets/{alt['id']}/versions/{av['id']}/images", form={"images": ("b.png", PNG)})
+imgs = next(v for v in a2["versions"] if v["id"] == av["id"])["images"] if st == 200 else []
+check("photos appended to the version", len(imgs) == 2, (st, imgs))
+st, a3 = writer.call("PUT", f"/api/assets/{alt['id']}/versions/{av['id']}/images", {"images": imgs[::-1]})
+check("photos reordered", st == 200 and next(v for v in a3["versions"] if v["id"] == av["id"])["images"] == imgs[::-1], st)
+st, _ = writer.call("PUT", f"/api/assets/{alt['id']}/versions/{av['id']}/images", {"images": ["/etc/passwd"]})
+check("foreign photo path rejected", st == 400, st)
+st, a4 = writer.call("PUT", f"/api/assets/{alt['id']}/versions/{av['id']}/images", {"images": imgs[:1]})
+check("photo removed", st == 200 and len(next(v for v in a4["versions"] if v["id"] == av["id"])["images"]) == 1, st)
+st, meta = writer.call("GET", "/api/meta")
+check("meta has series title", st == 200 and "series_title" in meta, st)
+
 check("character without image keeps the name", "Character Костя" in ep3["shots"][1]["prompt"] or "Костя" in ep3["shots"][1]["prompt"], ep3["shots"][1]["prompt"])
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
