@@ -199,6 +199,7 @@ def meta(request: Request):
         "anchor_number": int(s["anchor_number"]), "anchor_date": s["anchor_date"],
         "today": date.today().isoformat(),
         "engines": [{"key": k, "name": n} for k, n in ENGINES],
+        "series_title": s.get("series_title") or "Сериал",
     }
 
 
@@ -428,6 +429,41 @@ def activate_version(asset_id: int, version_id: int):
         if not c.execute("SELECT 1 FROM asset_versions WHERE id=? AND asset_id=?", (version_id, asset_id)).fetchone():
             raise HTTPException(404, "Версия не найдена")
         c.execute("UPDATE assets SET active_version_id=? WHERE id=?", (version_id, asset_id))
+    return get_asset(asset_id)
+
+
+def load_version(asset_id: int, version_id: int) -> tuple[dict, dict]:
+    a = get_asset(asset_id)
+    v = next((v for v in a["versions"] if v["id"] == version_id), None)
+    if not v:
+        raise HTTPException(404, "Версия не найдена")
+    return a, v
+
+
+@app.post("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.writer)])
+def add_version_images(asset_id: int, version_id: int, images: list[UploadFile] = File(default=[])):
+    """Догрузить фото в версию (ракурсы со всех сторон). Первое фото версии остаётся главным референсом."""
+    a, v = load_version(asset_id, version_id)
+    paths = v["images"] + [save_upload(f, f"{a['kind']}s/{asset_id}") for f in images if f.filename]
+    with db.connect() as c:
+        c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(paths), version_id))
+    refresh_all_prompts()
+    return get_asset(asset_id)
+
+
+class ImagesIn(BaseModel):
+    images: list[str]
+
+
+@app.put("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.writer)])
+def set_version_images(asset_id: int, version_id: int, body: ImagesIn):
+    """Порядок фото (первое — главный референс) и удаление лишних. Новые пути сюда не принимаются."""
+    _, v = load_version(asset_id, version_id)
+    if not set(body.images) <= set(v["images"]):
+        raise HTTPException(400, "Можно только переставить или убрать фото этой версии")
+    with db.connect() as c:
+        c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(list(dict.fromkeys(body.images))), version_id))
+    refresh_all_prompts()
     return get_asset(asset_id)
 
 
