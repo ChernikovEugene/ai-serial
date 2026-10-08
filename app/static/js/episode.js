@@ -25,7 +25,7 @@ export async function renderEpisode(id, tab) {
   stopEpisodePolling();
   if (E.id !== id) { E.sel = null; }
   E.id = id;
-  if (tab) E.tab = ["script", "shots", "review", "history"].includes(tab) ? tab : "script";
+  if (tab) E.tab = ["script", "shots", "review", "main", "history"].includes(tab) ? tab : "script";
   const [ep] = await Promise.all([api(`/api/episodes/${id}`), loadAssets()]);
   E.ep = ep;
   if (!E.sel || !ep.shots.some((s) => s.id === E.sel)) E.sel = ep.shots[0]?.id ?? null;
@@ -46,7 +46,7 @@ function schedulePoll() {
     const sig = signature(ep);
     if (sig !== E.sig) {
       E.ep = ep; E.sig = sig;
-      if (E.tab !== "script") { drawTab(); drawHeader(); } // never wipe the text being edited
+      if (!["script", "main"].includes(E.tab)) { drawTab(); drawHeader(); } // never wipe the text being edited
     }
     schedulePoll();
   }, 4000);
@@ -55,7 +55,7 @@ function schedulePoll() {
 function draw() {
   view().innerHTML = `<div id="ep-header"></div>
     <div class="tabs">
-      ${[["script", "Сценарий"], ["shots", "Шоты"], ["review", "Просмотр и правки"], ["history", "История"]]
+      ${[["script", "Сценарий"], ["shots", "Шоты"], ["review", "Просмотр и правки"], ["main", "Основное"], ["history", "История"]]
         .map(([k, n]) => `<button class="tab ${E.tab === k ? "on" : ""}" data-tab="${k}">${n}</button>`).join("")}
     </div>
     <div id="ep-tab"></div>`;
@@ -117,34 +117,8 @@ export function drawHeader() {
       </div>
       <div class="timeline">${ep.shots.map((s) => `<span data-jump="${s.id}" title="Шот ${esc(s.label)}: ${s.duration} с, по тексту ${s.est_seconds} с"
         class="${s.over_limit ? "over" : ""} ${s.missing.length ? "incomplete" : ""} ${s.selected_take_id ? "has-video" : ""}" style="flex:${s.duration}">${esc(s.label)}</span>`).join("")}</div>
-      <details class="post-text" ${ep.post_text ? "" : "open"}>
-        <summary>Описание для поста ${ep.post_text ? `<span class="muted small">· ${ep.post_text.length} симв.</span>` : `<span class="muted small">· пока не написано</span>`}</summary>
-        <textarea id="post-text" rows="4" placeholder="Текст под роликом: подпись, хэштеги, призыв…" ${canPost() ? "" : "readonly"}>${esc(ep.post_text || "")}</textarea>
-        <div class="row"><button class="ghost small" id="copy-post">📋 Скопировать</button>
-          <span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span></div>
-      </details>
-      <details class="post-text result-box" ${ep.result_note || ep.result_url ? "" : canResult() ? "open" : ""}>
-        <summary>Итог и готовый ролик ${ep.result_url ? `<span class="muted small">· ссылка есть</span>` : `<span class="muted small">· пока не заполнено</span>`}</summary>
-        <div class="result-grid">
-          <div>
-            <label>Итог: что получилось, что важно помнить</label>
-            <textarea id="res-note" rows="3" placeholder="Например: вышло с первого дубля, пришлось перегенерировать шот 3…" ${canResult() ? "" : "readonly"}>${esc(ep.result_note || "")}</textarea>
-            <label>Где лежит готовый ролик (ссылка)</label>
-            <input id="res-url" type="url" placeholder="https://www.dropbox.com/…" value="${esc(ep.result_url || "")}" ${canResult() ? "" : "readonly"}>
-            <div class="muted small" style="margin-top:4px">Вставьте ссылку на Dropbox или прямую ссылку на файл — ниже появится превью. Сохраняется само.</div>
-          </div>
-          <div id="res-preview">${resultPreview(ep.result_url)}</div>
-        </div>
-      </details>
     </div>`;
   bindTitleRow(ep);
-  $("#copy-post").onclick = () => copyText($("#post-text").value);
-  bindResult(ep);
-  if (canPost()) $("#post-text").onchange = async (ev) => {
-    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { post_text: ev.target.value } });
-    ep.post_text = ev.target.value;
-    toast("Описание для поста сохранено");
-  };
   if (can.gen()) {
     $("#gen").onclick = async () => {
       const mode = $("#gen-mode").value;
@@ -271,7 +245,41 @@ function drawTab() {
   if (E.tab === "script") return drawScript(el);
   if (E.tab === "shots") return drawShots(el);
   if (E.tab === "review") return drawReview(el);
+  if (E.tab === "main") return drawMain(el);
   if (E.tab === "history") return drawHistory(el);
+}
+
+/** Вкладка «Основное»: описание для поста, итог и готовый ролик. */
+function drawMain(el) {
+  const ep = E.ep;
+  el.innerHTML = `<div class="ep-main">
+      <details class="post-text" open>
+        <summary>Описание для поста ${ep.post_text ? `<span class="muted small">· ${ep.post_text.length} симв.</span>` : `<span class="muted small">· пока не написано</span>`}</summary>
+        <textarea id="post-text" rows="4" placeholder="Текст под роликом: подпись, хэштеги, призыв…" ${canPost() ? "" : "readonly"}>${esc(ep.post_text || "")}</textarea>
+        <div class="row"><button class="ghost small" id="copy-post">📋 Скопировать</button>
+          <span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span></div>
+      </details>
+      <details class="post-text result-box" open>
+        <summary>Итог и готовый ролик ${ep.result_url ? `<span class="muted small">· ссылка есть</span>` : `<span class="muted small">· пока не заполнено</span>`}</summary>
+        <div class="result-grid">
+          <div>
+            <label>Итог: что получилось, что важно помнить</label>
+            <textarea id="res-note" rows="3" placeholder="Например: вышло с первого дубля, пришлось перегенерировать шот 3…" ${canResult() ? "" : "readonly"}>${esc(ep.result_note || "")}</textarea>
+            <label>Где лежит готовый ролик (ссылка)</label>
+            <input id="res-url" type="url" placeholder="https://www.dropbox.com/…" value="${esc(ep.result_url || "")}" ${canResult() ? "" : "readonly"}>
+            <div class="muted small" style="margin-top:4px">Вставьте ссылку на Dropbox или прямую ссылку на файл — ниже появится превью. Сохраняется само.</div>
+          </div>
+          <div id="res-preview">${resultPreview(ep.result_url)}</div>
+        </div>
+      </details>
+  </div>`;
+  $("#copy-post").onclick = () => copyText($("#post-text").value);
+  bindResult(ep);
+  if (canPost()) $("#post-text").onchange = async (ev) => {
+    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { post_text: ev.target.value } });
+    ep.post_text = ev.target.value;
+    toast("Описание для поста сохранено");
+  };
 }
 
 // ---------------- script tab ----------------
