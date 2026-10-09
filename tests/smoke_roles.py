@@ -212,5 +212,35 @@ check("meta has series title", st == 200 and "series_title" in meta, st)
 
 check("character without image keeps the name", "Character Костя" in ep3["shots"][1]["prompt"] or "Костя" in ep3["shots"][1]["prompt"], ep3["shots"][1]["prompt"])
 
+# --- готовность шота, звук, архив, ключи нейросетей ---
+s4 = ep4["shots"][0]
+check("shot has checks", [c["key"] for c in s4["checks"]] == ["characters", "location", "prompt", "sound"], s4.get("checks"))
+check("veo shot without replica: sound check open", not s4["ready"] and not s4["checks"][3]["ok"], s4["checks"])
+st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"sound_off": True})
+check("writer ticks sound_off -> ready", st == 200 and r["sound_off"] and r["ready"], (st, r.get("checks")))
+st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling", "voiceover": True, "sound_off": False})
+check("editor sets voiceover; replica required again", st == 200 and r["voiceover"] and not r["ready"], (st, r.get("checks")))
+st, _ = writer.call("GET", "/api/integrations")
+check("writer cannot read integrations", st == 403, st)
+st, lst = admin.call("POST", "/api/integrations", {"name": "Kling основной", "kind": "kling", "api_key": "sk-secret-1234"})
+check("integration added, key masked", st == 200 and lst[-1]["key_mask"] == "••••1234" and "api_key" not in lst[-1], (st, lst))
+iid = lst[-1]["id"]
+st, lst = admin.call("PUT", f"/api/integrations/{iid}", {"name": "Kling 2", "api_key": "••••1234"})
+check("masked key keeps the old value", st == 200 and lst[-1]["name"] == "Kling 2" and lst[-1]["key_mask"] == "••••1234", lst)
+st, _ = admin.call("DELETE", f"/api/integrations/{iid}")
+check("integration deleted", st == 200)
+st, _ = admin.call("GET", f"/api/episodes/{ep4['id']}/download")
+check("download blocked before approval", st == 400, st)
+st, up = admin.call("POST", f"/api/shots/{s4['id']}/upload-take", form={"video": ("a.mp4", b"\x00\x00fakevideo")})
+check("manual video uploaded", st == 200 and up["selected_take_id"], st)
+st, _ = admin.call("POST", f"/api/episodes/{ep4['id']}/status", {"status": "ready"})
+print("  (status ready ->", st, ")")
+if st == 200:
+    req = urllib.request.Request(BASE + f"/api/episodes/{ep4['id']}/download")
+    with admin.op.open(req) as resp:
+        import io, zipfile
+        names = zipfile.ZipFile(io.BytesIO(resp.read())).namelist()
+    check("archive named by latin title + shot number", names == ["referensy/referensy_01.mp4"], names)
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)
