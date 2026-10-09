@@ -98,6 +98,7 @@ export function drawHeader() {
       <div class="row">
         ${titleRow(ep)}
         <a class="btn" href="/api/episodes/${ep.id}/export" title="Выгрузить серию в JSON">JSON</a>
+        ${["ready", "posted"].includes(ep.status) && withVideo ? `<a class="btn primary" href="/api/episodes/${ep.id}/download" title="Архив со всеми шотами: название серии латиницей + номер шота">⬇ Скачать архив</a>` : ""}
         ${can.gen() ? `<select id="gen-mode" style="width:auto">
             <option value="missing">шоты без видео</option><option value="redo">шоты с правками</option><option value="all">все шоты заново</option></select>
           <button class="primary" id="gen" title="Через API уходят шоты, которые делаются в Veo. Остальные монтажёр присылает готовым файлом.">▶ Отправить в генерацию</button>` : ""}
@@ -418,14 +419,13 @@ function shotHtml(s) {
   const roG = can.gen() ? "" : "disabled";  // generation: the editor's part
   const sel = s.selected_take;
   return `
-  <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""}" id="shot-${s.id}">
+  <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
     <div class="side">
       <div class="shot-no">Шот ${esc(s.label)}</div>
       <div>${fitMeter(s.est_seconds, max)}
         <div class="small ${s.over_limit ? "warn-t" : "muted"}">нужно ~${s.est_seconds} с${s.speech_seconds ? ` · речь ${s.speech_seconds} с · ${s.words} сл.` : ""}</div></div>
-      ${s.missing.length
-        ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>`
-        : `<div class="ok-t small">✓ заполнен</div>`}
+      ${s.missing.length ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+      <ul class="checks ${s.ready ? "all" : ""}" title="Когда все пункты отмечены, рамка шота становится зелёной">${s.checks.map((c) => `<li class="${c.ok ? "ok" : ""}">${c.ok ? "✓" : "○"} ${esc(c.label)}</li>`).join("")}</ul>
       ${can.gen() ? `<div><label>Нейросеть</label><select data-f="engine">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select></div>` : ""}
       <div><label>Длина клипа</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${[4, 6, 8].map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
         ${s.forced_8 ? `<div class="muted small">8 с: с референсами Veo 3.1 делает только 8 с</div>` : ""}</div>
@@ -457,6 +457,11 @@ function shotHtml(s) {
       </div>
       <label>Действие</label><textarea data-f="action" rows="3" ${roW}>${esc(s.action)}</textarea>
       <label>Камера</label><input data-f="camera" value="${esc(s.camera)}" ${roW}>
+      <fieldset class="sound-zone" ${s.sound_off ? "disabled" : ""}>
+        <legend>Звук</legend>
+        ${s.engine === "veo"
+          ? `<div class="muted small">Veo 3 сразу генерирует звук вместе с видео: речь, шумы, музыку.</div>`
+          : `<label class="check"><input type="checkbox" data-f="voiceover" ${s.voiceover ? "checked" : ""}> Озвучить реплики в ElevenLabs</label>`}
       <label>Реплики <span class="muted small">— берутся из кавычек в сценарии; красным подсвечено то, что не удалось определить. «в кадре»: персонаж говорит, идёт в Veo; «закадр»: голос за кадром, озвучивается отдельно</span></label>
       <div class="dialogue">${s.dialogue.map((d, i) => `
         <div class="dlg-line ${d.voice === "voiceover" ? "vo" : ""} ${d.auto ? "auto" : ""}" data-line="${i}">
@@ -466,6 +471,8 @@ function shotHtml(s) {
           <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
           ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
       ${canWrite() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
+      </fieldset>
+      <label class="check no-sound"><input type="checkbox" data-f="sound_off" ${s.sound_off ? "checked" : ""} ${canWrite() || can.gen() ? "" : "disabled"}> Звук не нужен (зона звука отключается, проверка пройдена)</label>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     </div>
@@ -526,6 +533,7 @@ function bindShot(s) {
     const f = inp.dataset.f;
     let v = inp.value;
     if (f === "duration") v = +v;
+    if (inp.type === "checkbox") v = inp.checked;
     if (f === "location_version_id") return save(v ? { location_version_id: +v } : { clear_location: true });
     if (f === "prompt") return save({ prompt: v, prompt_locked: true });
     save({ [f]: v });

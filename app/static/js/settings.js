@@ -43,8 +43,10 @@ export async function renderSettings() {
         (<code>gh auth login</code>), токен не нужен.</p>
       ${field("github_token", "Токен GitHub (хранится только у вас в data/studio.db)", "input", `type="password" placeholder="ghp_…" autocomplete="off"`)}
     </div>
+    ${admin ? `<div class="card" style="margin-top:14px" id="integrations"></div>` : ""}
     ${admin ? `<div class="row" style="margin-top:14px"><div class="spacer"></div><button class="primary" id="save">Сохранить настройки</button></div>` : ""}`;
 
+  if (admin) drawIntegrations();
   if (admin) {
     $("#save").onclick = async () => {
       const values = Object.fromEntries($$("[data-k]").map((i) => [i.dataset.k, i.value]));
@@ -65,4 +67,41 @@ export function renderPublish() {
     <div class="card"><p>Следующий этап: сборка серии из выбранных дублей в один ролик и публикация в аккаунт TikTok через TikTok Content Posting API,
     со статусом «Опубликовано» автоматически.</p>
     <p class="muted">Сейчас готовые видео лежат в папке <code>data/media/renders</code>, а серию целиком можно посмотреть во вкладке «Просмотр и правки».</p></div>`;
+}
+
+const KINDS = [["veo", "Veo 3"], ["kling", "Kling"], ["sora", "Sora"], ["runway", "Runway"], ["seedance", "Seedance"],
+  ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
+
+async function drawIntegrations() {
+  const box = $("#integrations");
+  const list = await api("/api/integrations");
+  const opts = (sel) => KINDS.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${n}</option>`).join("");
+  box.innerHTML = `<h2 style="margin-top:0">Нейросети и API-ключи</h2>
+    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Сейчас через API работает только Veo (ключ выше); остальные ключи сохраняются до подключения.</p>
+    ${list.map((i) => `<div class="int-row" data-id="${i.id}">
+      <input data-i="name" value="${esc(i.name)}" style="width:200px" placeholder="Имя">
+      <select data-i="kind" style="width:auto">${opts(i.kind)}</select>
+      <input data-i="api_key" type="password" value="${esc(i.key_mask)}" placeholder="API-ключ" autocomplete="off" style="width:260px">
+      <button class="small" data-isave>Сохранить</button><button class="ghost small danger" data-idel>Удалить</button></div>`).join("") || `<div class="muted small">Пока ничего не добавлено</div>`}
+    <h3>Добавить нейросеть</h3>
+    <div class="int-row" id="int-new">
+      <input data-i="name" style="width:200px" placeholder="Имя, например: Kling основной">
+      <select data-i="kind" style="width:auto">${opts("other")}</select>
+      <input data-i="api_key" type="password" style="width:260px" placeholder="API-ключ" autocomplete="off">
+      <button class="primary small" id="int-add">Добавить</button></div>`;
+  const read = (row) => Object.fromEntries($$("[data-i]", row).map((i) => [i.dataset.i, i.value]));
+  $("#int-add", box).onclick = async () => {
+    await api("/api/integrations", { json: read($("#int-new", box)) });
+    toast("Нейросеть добавлена"); drawIntegrations();
+  };
+  $$("[data-isave]", box).forEach((b) => (b.onclick = async () => {
+    const row = b.closest(".int-row");
+    await api(`/api/integrations/${row.dataset.id}`, { method: "PUT", json: read(row) });
+    toast("Сохранено"); drawIntegrations();
+  }));
+  $$("[data-idel]", box).forEach((b) => (b.onclick = async () => {
+    if (!confirm("Удалить эту нейросеть и её ключ?")) return;
+    await api(`/api/integrations/${b.closest(".int-row").dataset.id}`, { method: "DELETE" });
+    drawIntegrations();
+  }));
 }

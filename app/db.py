@@ -98,7 +98,15 @@ TABLES = {
         selected_take_id INTEGER,
         needs_redo INTEGER NOT NULL DEFAULT 0,
         engine TEXT NOT NULL DEFAULT 'veo',
+        sound_off INTEGER NOT NULL DEFAULT 0,
+        voiceover INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL DEFAULT ''""",
+    "integrations": """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'other',
+        api_key TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT ''""",
     "takes": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         shot_id INTEGER NOT NULL REFERENCES shots(id) ON DELETE CASCADE,

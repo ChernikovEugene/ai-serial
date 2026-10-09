@@ -264,6 +264,21 @@ def refresh_shot(s: dict, ctx: Ctx) -> dict:
     return s
 
 
+def shot_checks(s: dict) -> list[dict]:
+    """Готовность шота к генерации: персонаж, локация, промпт и (если звук нужен) реплика. Отдельно от shot_missing,
+    который решает, можно ли утверждать сценарий."""
+    has_text = any((d.get("text") or "").strip() for d in s.get("dialogue") or [])
+    has_sound = s.get("engine") == "veo" or bool(s.get("voiceover"))
+    sound_ok = bool(s.get("sound_off")) or not has_sound or has_text
+    return [
+        {"key": "characters", "label": "Выбраны персонажи", "ok": bool(s.get("characters"))},
+        {"key": "location", "label": "Выбрана локация", "ok": bool(s.get("location_version_id"))},
+        {"key": "prompt", "label": "Прописан промпт", "ok": bool((s.get("prompt") or "").strip())},
+        {"key": "sound", "label": "Звук: «звук не нужен» или прописана реплика" if has_sound else "Звук не требуется",
+         "ok": sound_ok},
+    ]
+
+
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     _, refs, warns = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
     w = breakdown.shot_warnings(s, ctx.max_s)
@@ -271,6 +286,8 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
         w.append(f"Локация «{s['scene']}» не найдена в библиотеке")
     s["warnings"] = w + warns
     s["missing"] = breakdown.shot_missing(s, ctx.max_s)
+    s["checks"] = shot_checks(s)
+    s["ready"] = all(c["ok"] for c in s["checks"])
     s["revisions"] = max(0, len(takes) - 1)  # how many times this shot was re-generated
     s["over_limit"] = s["est_seconds"] > ctx.max_s
     s["forced_8"] = bool(breakdown.forced_duration(refs, s, ctx.settings))
@@ -285,7 +302,7 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
 
 SHOT_COLS = ["idx", "label", "scene", "duration", "est_seconds", "speech_seconds", "words", "camera", "action",
              "dialogue", "characters", "location_version_id", "composition_image", "composition_mode",
-             "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine"]
+             "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "voiceover"]
 
 
 def save_shot(c, s: dict):
@@ -1251,7 +1268,8 @@ def apply_breakdown(eid: int):
             s = dict(match) if match else {"episode_id": eid, "composition_image": "", "composition_mode": "reference",
                                            "composition_note": "", "prompt": "", "prompt_locked": 0,
                                            "negative_prompt": ctx.settings.get("negative_prompt", ""),
-                                           "selected_take_id": None, "needs_redo": 0, "engine": "veo"}
+                                           "selected_take_id": None, "needs_redo": 0, "engine": "veo",
+                                           "sound_off": 0, "voiceover": 0}
             s.update({k: n[k] for k in ("idx", "label", "scene", "duration", "camera", "action", "dialogue",
                                         "characters", "location_version_id")})
             refresh_shot(s, ctx)
@@ -1347,6 +1365,8 @@ class ShotPatch(BaseModel):
     prompt_locked: bool | None = None
     needs_redo: bool | None = None
     engine: str | None = None
+    sound_off: bool | None = None
+    voiceover: bool | None = None
 
 
 def load_shot(sid: int) -> dict:
@@ -1367,8 +1387,9 @@ def shot_response(sid: int) -> dict:
 
 
 # Content belongs to the writer, generation settings to the editor (the producer may touch both).
-WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location"}
-EDITOR_SHOT_FIELDS = {"duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
+WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
+                       "sound_off", "voiceover"}
+EDITOR_SHOT_FIELDS = {"sound_off", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
                       "prompt_locked", "needs_redo", "engine"}
 
 
@@ -1527,6 +1548,45 @@ def upload_take(sid: int, request: Request, video: UploadFile = File(...)):
         c.execute("UPDATE shots SET selected_take_id=?, needs_redo=0 WHERE id=?", (tid, sid))
     db.log(s["episode_id"], uid(request), f"Шот {s['label']}: загружено видео вручную (дубль {n})")
     return shot_response(sid)
+
+
+# ---------- download approved episode ----------
+
+_TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+               ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u",
+                "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"]))
+
+
+def latin_slug(title: str, fallback: str = "episode") -> str:
+    s = "".join(_TR.get(ch, ch) for ch in (title or "").lower())
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s or fallback
+
+
+@app.get("/api/episodes/{eid}/download")
+def download_episode(eid: int):
+    import io
+    import zipfile
+    ep = load_episode_row(eid)
+    if ep["status"] not in ("ready", "posted"):
+        raise HTTPException(400, "Скачать можно после согласования ролика (статус «Готов к постингу»)")
+    with db.connect() as c:
+        rows = db.rows(c.execute(
+            "SELECT s.idx, t.video_path FROM shots s JOIN takes t ON t.id=s.selected_take_id "
+            "WHERE s.episode_id=? ORDER BY s.idx", (eid,)))
+    slug = latin_slug(ep["title"], f"episode_{ep['number'] or eid}")
+    buf = io.BytesIO()
+    n = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        for r in rows:
+            f = db.MEDIA_DIR / r["video_path"]
+            if r["video_path"] and f.is_file():
+                n += 1
+                z.write(f, f"{slug}/{slug}_{n:02d}{f.suffix.lower()}")
+    if not n:
+        raise HTTPException(400, "В серии нет выбранных видео для архива")
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}.zip"'})
 
 
 # ---------- comments / fixes ----------
@@ -1747,6 +1807,57 @@ def write_settings(values: dict):
     if PROMPT_SETTINGS & values.keys():
         refresh_all_prompts()
     return read_settings()
+
+
+# ---------- API keys of neural networks ----------
+
+class IntegrationIn(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    api_key: str | None = None
+
+
+def integration_out(r: dict) -> dict:
+    k = r.get("api_key") or ""
+    return {"id": r["id"], "name": r["name"], "kind": r["kind"], "has_key": bool(k), "key_mask": ("••••" + k[-4:]) if k else ""}
+
+
+@app.get("/api/integrations", dependencies=[Depends(auth.admin)])
+def list_integrations():
+    with db.connect() as c:
+        return [integration_out(r) for r in db.rows(c.execute("SELECT * FROM integrations ORDER BY id"))]
+
+
+@app.post("/api/integrations", dependencies=[Depends(auth.admin)])
+def add_integration(p: IntegrationIn):
+    name = (p.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Дайте нейросети имя")
+    kind = p.kind if p.kind in (*ENGINE_NAMES, "elevenlabs") else "other"
+    with db.connect() as c:
+        c.execute("INSERT INTO integrations(name, kind, api_key, created_at) VALUES (?,?,?,?)",
+                  (name, kind, (p.api_key or "").strip(), db.now()))
+    return list_integrations()
+
+
+@app.put("/api/integrations/{iid}", dependencies=[Depends(auth.admin)])
+def edit_integration(iid: int, p: IntegrationIn):
+    with db.connect() as c:
+        r = db.row(c.execute("SELECT * FROM integrations WHERE id=?", (iid,)).fetchone())
+        if not r:
+            raise HTTPException(404, "Не найдено")
+        name = (p.name if p.name is not None else r["name"]).strip() or r["name"]
+        kind = p.kind if p.kind in (*ENGINE_NAMES, "elevenlabs") else r["kind"]
+        key = r["api_key"] if p.api_key is None or p.api_key.startswith("••••") else p.api_key.strip()
+        c.execute("UPDATE integrations SET name=?, kind=?, api_key=? WHERE id=?", (name, kind, key, iid))
+    return list_integrations()
+
+
+@app.delete("/api/integrations/{iid}", dependencies=[Depends(auth.admin)])
+def delete_integration(iid: int):
+    with db.connect() as c:
+        c.execute("DELETE FROM integrations WHERE id=?", (iid,))
+    return list_integrations()
 
 
 # Промпты шотов пересобираются при запуске: подхватывают новые правила сборки и изменения в библиотеке (закреплённые вручную не трогаем)
