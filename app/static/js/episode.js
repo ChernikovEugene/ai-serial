@@ -86,6 +86,15 @@ export async function copyText(text) {
   toast(ok ? "Скопировано" : "Не удалось скопировать: выделите текст и нажмите ⌘C", !ok);
 }
 
+/** Кнопка архива согласованной версии: появляется только после «Согласовать» на вкладке «Просмотр и правки». */
+export function archiveButton(ep) {
+  if (!ep.approved_version) return "";
+  const v = `v${ep.approved_version}`;
+  if (ep.export_status === "building") return `<span class="btn ghost" title="Шоты перекодируются в MP4 FHD 1080x1920, 60 кадров/с">⏳ Архив ${v} собирается…</span>`;
+  if (ep.export_status === "error") return `<span class="btn ghost danger" title="${esc(ep.export_error)}">Архив ${v} не собрался: ${esc(ep.export_error)}</span>`;
+  return `<a class="btn primary" href="/api/episodes/${ep.id}/download" title="Шоты отдельными файлами MP4 FHD 1080x1920, 60 кадров/с: папки «номер серии» / «название серии», файлы «название_номер шота»">⬇ Скачать архив ${v}</a>`;
+}
+
 export function drawHeader() {
   // Пока автор пишет сценарий, шапка короткая: номер, название, синопсис. Всё остальное — на других вкладках.
   if (E.tab === "script") return drawScriptHeader();
@@ -98,7 +107,7 @@ export function drawHeader() {
       <div class="row">
         ${titleRow(ep)}
         <a class="btn" href="/api/episodes/${ep.id}/export" title="Выгрузить серию в JSON">JSON</a>
-        ${["ready", "posted"].includes(ep.status) && withVideo ? `<a class="btn primary" href="/api/episodes/${ep.id}/download" title="Архив со всеми шотами: название серии латиницей + номер шота">⬇ Скачать архив</a>` : ""}
+        ${archiveButton(ep)}
         ${can.gen() ? `<select id="gen-mode" style="width:auto">
             <option value="missing">шоты без видео</option><option value="redo">шоты с правками</option><option value="all">все шоты заново</option></select>
           <button class="primary" id="gen" title="Через API уходят шоты, которые делаются в Veo. Остальные монтажёр присылает готовым файлом.">▶ Отправить в генерацию</button>` : ""}

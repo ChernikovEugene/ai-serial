@@ -1,10 +1,10 @@
 // «Просмотр и правки»: вся серия одним роликом в рамке соцсети, указатель шота на таймлайне, правки по точкам времени.
 import { $, $$, api, can, esc, fmtDateTime, media, state, toast } from "./core.js";
-import { E, TAKE_STATUS, drawHeader, renderEpisode, takeBadge } from "./episode.js";
+import { E, TAKE_STATUS, archiveButton, drawHeader, renderEpisode, takeBadge } from "./episode.js";
 
 const FEEDS = [["none", "Без ленты"], ["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
 const FEED_KEY = "reviewFeed";
-const R = { feed: "tiktok", safe: false, version: "cur", i: 0, local: 0, playing: false, timer: 0, dur: [], comments: [], root: null };
+const R = { feed: "tiktok", safe: false, version: "", poll: 0, i: 0, local: 0, playing: false, timer: 0, dur: [], comments: [], root: null };
 try { R.feed = localStorage.getItem(FEED_KEY) || "tiktok"; } catch { /* без памяти браузера тоже работает */ }
 
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -13,18 +13,18 @@ const offsets = () => { let t = 0; return R.dur.map((d) => { const o = t; t += d
 const total = () => R.dur.reduce((a, b) => a + b, 0) || 1;
 const globalTime = () => (offsets()[R.i] || 0) + R.local;
 
-/** Какой дубль шота показываем: «текущий» (выбранный в монтаже) или версия серии vN (дубль с номером N, а если его нет, ближайший прежний). */
+/** Какой дубль шота показываем в версии серии vN: дубль с номером N, а если его нет, ближайший прежний. */
 function takeFor(s, v) {
   const withVideo = s.takes.filter((t) => t.video_path);
-  if (v === "cur") return s.selected_take?.video_path ? s.selected_take : null;
   return withVideo.filter((t) => t.take_no <= +v).at(-1) || withVideo[0] || null;
 }
-const versionCount = () => Math.max(1, ...shots().flatMap((s) => s.takes.filter((t) => t.video_path).map((t) => t.take_no)));
-const versionLabel = (v) => (v === "cur" ? "Текущий монтаж" : `v${v}`);
+const versionCount = () => Math.max(0, ...shots().flatMap((s) => s.takes.filter((t) => t.video_path).map((t) => t.take_no)));
+const versionLabel = (v) => (+v ? `v${v}` : "нет видео");
 
 export function stopReview() {
   R.playing = false;
   clearInterval(R.timer);
+  clearTimeout(R.poll);
   $("video", R.root || document)?.pause?.();
 }
 
@@ -37,16 +37,20 @@ export async function drawReview(el) {
   R.dur = ep.shots.map((s) => s.duration);
   R.i = Math.max(0, ep.shots.findIndex((s) => s.id === E.sel));
   R.local = 0;
-  if (R.version !== "cur" && +R.version > versionCount()) R.version = "cur";
-  const redo = ep.shots.filter((x) => x.needs_redo || x.open_fixes).length;
   const vs = versionCount();
+  if (!R.version || +R.version > vs || (+R.version < 1 && vs)) R.version = String(vs); // по умолчанию показывается последняя версия
+  const redo = ep.shots.filter((x) => x.needs_redo || x.open_fixes).length;
   el.innerHTML = `
     <div class="review">
       <div class="review-left">${phone()}</div>
       <div class="review-right">
         <div class="row" style="gap:8px;flex-wrap:wrap">
-          <div class="seg" id="versions">${["cur", ...Array.from({ length: vs }, (_, i) => String(i + 1))]
-            .map((v) => `<button data-ver="${v}" class="${R.version === v ? "on" : ""}">${v === "cur" ? "Текущий" : `v${v}`}</button>`).join("")}</div>
+          ${vs ? `<div class="seg" id="versions">${Array.from({ length: vs }, (_, i) => String(i + 1))
+            .map((v) => `<button data-ver="${v}" class="${R.version === v ? "on" : ""}">v${v}${+v === ep.approved_version ? " ✓" : ""}</button>`).join("")}</div>` : `<span class="muted small">Версий пока нет: нет ни одного видео.</span>`}
+          ${vs && can.gen() ? (+R.version === ep.approved_version
+            ? `<span class="badge ok" title="Согласовал(а): ${esc(ep.approved_by_name || "")} ${esc(ep.approved_at || "")}">версия согласована</span>`
+            : `<button class="primary" id="approve-ver">Согласовать v${R.version}</button>`) : ""}
+          ${archiveButton(ep)}
         </div>
         <div class="seg" id="feeds" style="margin-top:10px">${FEEDS.map(([k, n]) => `<button data-feed="${k}" class="${R.feed === k ? "on" : ""}">${n}</button>`).join("")}
           <button data-safe title="Показать безопасные зоны: где интерфейс соцсети закрывает картинку" class="${R.safe ? "on" : ""}">◎</button></div>
@@ -70,6 +74,9 @@ export async function drawReview(el) {
       </div>
     </div>`;
   bindChrome();
+  if (ep.export_status === "building") {
+    R.poll = setTimeout(async () => { if (E.tab === "review" && R.root?.isConnected) renderEpisode(E.id); }, 3000); // ждём, пока соберётся архив
+  }
   mount(R.i, 0, false);
   drawTrack();
   drawComments();
@@ -226,7 +233,7 @@ function paint() {
 
 // ---------------- правки ----------------
 
-const visible = (c) => R.version === "cur" || !c.take_no || c.take_no === +R.version;
+const visible = (c) => !c.take_no || c.take_no === +R.version;
 const initials = (n) => (n || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 
 function seekComment(c) {
@@ -271,6 +278,12 @@ function bindChrome() {
   $("#ph-media").onclick = () => (R.playing ? pause() : play());
   $("#p-prev").onclick = () => { const o = offsets(); seek(R.local > 1 ? o[R.i] : o[Math.max(0, R.i - 1)]); };
   $("#p-next").onclick = () => seek((offsets()[R.i + 1] ?? total() - 0.02));
+  $("#approve-ver") && ($("#approve-ver").onclick = async () => {
+    if (!confirm(`Точно согласовать версию №${R.version}? После этого её можно будет скачать архивом: шоты отдельными файлами MP4, FHD 1080x1920, 60 кадров/с.`)) return;
+    await api(`/api/episodes/${E.id}/approve-version`, { json: { version: +R.version } });
+    toast(`Версия v${R.version} согласована, собираю архив…`);
+    renderEpisode(E.id);
+  });
   $$("[data-ver]", el).forEach((b) => (b.onclick = () => { R.version = b.dataset.ver; drawReview(el); }));
   $$("[data-feed]", el).forEach((b) => (b.onclick = () => {
     R.feed = b.dataset.feed;
