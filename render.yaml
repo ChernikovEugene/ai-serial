@@ -1,0 +1,24 @@
+# Хостинг студии на Render: каждый пуш в main выкатывается сам, база и видео лежат на постоянном диске.
+services:
+  - type: web
+    name: ai-serial-studio
+    runtime: python
+    plan: starter
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: STUDIO_DATA_DIR
+        value: /var/data
+      - key: GITHUB_REPO
+        value: ChernikovEugene/ai-serial
+      - key: GITHUB_TOKEN
+        sync: false
+    disk:
+      name: studio-data
+      mountPath: /var/data
+      sizeGB: 10

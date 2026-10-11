@@ -22,6 +22,8 @@ class GitHubError(Exception):
 
 
 def repo_slug() -> str:
+    if os.environ.get("GITHUB_REPO"):  # на хостинге .git может не быть
+        return os.environ["GITHUB_REPO"]
     try:
         url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True,
                              text=True, timeout=10).stdout.strip()
