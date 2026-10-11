@@ -138,3 +138,12 @@ export function fitMeter(est, max) {
 const HERO_COLORS = ["#ff7a9c", "#ffb04d", "#8be05a", "#4fd1c5", "#5fa8ff", "#b58cff", "#ff8fd8", "#e6d34f"];
 export const assetColor = (a) => (a.kind === "location" ? "#7f8ea3" : HERO_COLORS[a.id % HERO_COLORS.length]);
 export const engineName = (key) => state.meta?.engines?.find((e) => e.key === key)?.name || key;
+
+/** Соцсети, для которых пишется описание поста. */
+export const POST_NETS = [["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
+/** Описание для одной соцсети: общее, если стоит «одинаковое везде». */
+export const postTextFor = (ep, net) => (ep.post_same === 0 ? ep[`post_text_${net}`] || "" : ep.post_text || "");
+/** Всё описание одним текстом (для копирования с доски): по блокам, если описания разные. */
+export const postTextAll = (ep) => (ep.post_same === 0
+  ? POST_NETS.map(([k, n]) => (ep[`post_text_${k}`] ? `${n}:\n${ep[`post_text_${k}`]}` : "")).filter(Boolean).join("\n\n")
+  : ep.post_text || "");

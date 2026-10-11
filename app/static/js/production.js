@@ -1,7 +1,7 @@
 // «Продакшн» — канбан нейронщика-монтажёра: все серии очереди по этапам производства, срочные сверху.
 // Карточки перетаскиваются между колонками — это и есть смена статуса серии. «Выложено ✓» убирает серию с доски.
 // Серии без готового ТЗ видны в «Ждёт ТЗ» (название, дата, арка), но не открываются и не двигаются.
-import { $$, api, can, esc, fmtDate, state, STATUS_COLORS, toast, view } from "./core.js";
+import { $$, api, can, esc, fmtDate, postTextAll, state, STATUS_COLORS, toast, view } from "./core.js";
 import { copyText } from "./episode.js";
 
 const COLUMNS = [
@@ -61,7 +61,7 @@ function card(e, today) {
     <span class="arc-label">${arc}</span>
     ${e.locked ? `<span class="muted small">Ждёт ТЗ от сценариста</span>`
       : `<span class="muted small">${e.shots ? `${e.shots} шотов · видео ${e.with_take}/${e.shots}` : "шотов пока нет"}${e.open_fixes ? ` · <span class="warn-t">правок: ${e.open_fixes}</span>` : ""}${e.redo ? ` · на перегенерацию: ${e.redo}` : ""}</span>`}
-    ${movable && e.status === "ready" ? `<div class="row prod-actions"><button class="ghost small" data-post-text="${e.id}" title="${e.post_text ? "Скопировать описание для поста" : "Сценарист ещё не написал описание"}">📋 Текст поста</button>
+    ${movable && e.status === "ready" ? `<div class="row prod-actions"><button class="ghost small" data-post-text="${e.id}" title="${postTextAll(e) ? "Скопировать описание для поста" : "Сценарист ещё не написал описание"}">📋 Текст поста</button>
       <button class="small prod-posted-btn" data-posted="${e.id}">Выложено ✓</button></div>` : ""}`;
   return e.locked
     ? `<div class="prod-card locked" style="--c:${STATUS_COLORS[e.status]}">${body}</div>`
@@ -87,7 +87,7 @@ async function markPosted(id) {
 function bindBoard(eps) {
   $$("[data-post-text]").forEach((b) => (b.onclick = (ev) => {
     ev.preventDefault();
-    copyText(eps.find((e) => e.id === +b.dataset.postText)?.post_text || "");
+    copyText(postTextAll(eps.find((e) => e.id === +b.dataset.postText) || {}));
   }));
   $$("[data-posted]").forEach((b) => (b.onclick = async (ev) => {
     ev.preventDefault();

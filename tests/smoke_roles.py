@@ -296,5 +296,13 @@ if ffm:
 else:
     print("  (ffmpeg не найден: проверка архива пропущена)")
 
+# описание поста по соцсетям
+st, e0 = writer.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_text": "общее описание"})
+check("post: existing text is kept, same-for-all by default", st == 200 and e0["post_text"] == "общее описание" and e0["post_same"] == 1, e0.get("post_same"))
+st, e1 = writer.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_same": False, "post_text_tiktok": "для тикток", "post_text_reels": "для рилс"})
+check("post: per-network texts saved", st == 200 and e1["post_same"] == 0 and e1["post_text_tiktok"] == "для тикток" and e1["post_text_reels"] == "для рилс" and e1["post_text"] == "общее описание", e1.get("post_same"))
+st, _ = editor.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_text_shorts": "x"})
+check("post: editor cannot write descriptions", st == 403, st)
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)
