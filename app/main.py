@@ -499,7 +499,7 @@ def episode_summaries(role: str = "admin") -> list[dict]:
     max_s = int(settings.get("max_shot_seconds") or 8)
     with db.connect() as c:
         eps = db.rows(c.execute("SELECT id, number, pinned, planned_date, title, status, posted_at, updated_at, "
-                                "arc_id, position, synopsis, post_text FROM episodes ORDER BY number IS NULL, number, position, id"))
+                                "arc_id, position, synopsis, post_text, post_same, post_text_tiktok, post_text_reels, post_text_shorts FROM episodes ORDER BY number IS NULL, number, position, id"))
         stats = {r["episode_id"]: dict(r) for r in c.execute(
             "SELECT episode_id, COUNT(*) AS shots, COALESCE(SUM(duration),0) AS seconds, "
             "COALESCE(SUM(est_seconds),0) AS est, SUM(est_seconds > ?) AS over, "
@@ -1108,17 +1108,26 @@ class EpisodePatch(BaseModel):
     notes: str | None = None
     synopsis: str | None = None
     post_text: str | None = None
+    post_same: bool | None = None
+    post_text_tiktok: str | None = None
+    post_text_reels: str | None = None
+    post_text_shorts: str | None = None
+
+
+POST_FIELDS = {"post_text", "post_same", "post_text_tiktok", "post_text_reels", "post_text_shorts"}
 
 
 @app.put("/api/episodes/{eid}", dependencies=[Depends(auth.writer)])
 def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = True):
     ep = load_episode_row(eid)
     changes = p.model_dump(exclude_unset=True)
-    if set(changes) - {"post_text"}:  # описание для поста сценарист правит на любом этапе
+    if set(changes) - POST_FIELDS:  # описание для поста сценарист правит на любом этапе
         writer_may_edit(request, ep["status"])
     with db.connect() as c:
         for k, v in changes.items():
             if v is not None:
+                if k == "post_same":
+                    v = int(v)
                 c.execute(f"UPDATE episodes SET {k}=?, updated_at=? WHERE id=?", (v, db.now(), eid))
     if p.script is not None and p.script != ep["script"]:
         db.log(eid, uid(request), "Сценарий изменён")

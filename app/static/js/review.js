@@ -1,5 +1,5 @@
 // «Просмотр и правки»: вся серия одним роликом в рамке соцсети, указатель шота на таймлайне, правки по точкам времени.
-import { $, $$, api, can, engineName, esc, fmtDateTime, media, state, toast } from "./core.js";
+import { $, $$, api, can, engineName, postTextFor, esc, fmtDateTime, media, state, toast } from "./core.js";
 import { E, TAKE_STATUS, archiveButton, drawHeader, renderEpisode, takeBadge } from "./episode.js";
 
 const FEEDS = [["none", "Без ленты"], ["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
@@ -89,7 +89,7 @@ function phone() {
   const ep = E.ep;
   const series = state.meta?.series_title || "Сериал";
   const user = "@" + series.toLowerCase().replace(/[^a-zа-яё0-9]+/gi, "_").replace(/^_|_$/g, "");
-  const caption = esc((ep.title || "Серия") + (ep.post_text ? " · " + ep.post_text.replace(/\s+/g, " ").slice(0, 90) : ""));
+  const caption = esc((ep.title || "Серия") + (postTextFor(ep, R.feed) ? " · " + postTextFor(ep, R.feed).replace(/\s+/g, " ").slice(0, 90) : ""));
   const rail = {
     tiktok: [["♥", "12,4K"], ["💬", "318"], ["🔖", "1 204"], ["➦", "87"]],
     reels: [["♥", "12,4K"], ["💬", "318"], ["➤", "87"], ["⋯", ""]],

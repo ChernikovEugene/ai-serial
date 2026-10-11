@@ -451,6 +451,9 @@ a.prod-card:hover { border-color: var(--muted); border-left-color: var(--c); }
 .post-text { margin-top: 10px; }
 .post-text summary { cursor: pointer; font-weight: 600; }
 .post-text textarea { width: 100%; margin: 8px 0 6px; }
+.post-same { display: flex; gap: 8px; align-items: center; margin: 8px 0 0; font-weight: 500; }
+.post-same input { width: auto; margin: 0; }
+.post-block label { display: block; margin-top: 10px; font-weight: 600; }
 
 /* «Тех. требования» */
 .tt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-bottom: 10px; }

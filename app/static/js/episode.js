@@ -1,6 +1,6 @@
 // Episode card: script editor with live analysis, shots, review & comments, history.
 import {
-  $, $$, api, assetColor, can, closeModal, engineName, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state,
+  POST_NETS, $, $$, api, assetColor, can, closeModal, engineName, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state,
   statusPill, statusSelect, STATUS_COLORS, toast, view,
 } from "./core.js";
 import { attachMentions } from "./mention.js";
@@ -265,10 +265,9 @@ function drawMain(el) {
   const ep = E.ep;
   el.innerHTML = `<div class="ep-main">
       <details class="post-text" open>
-        <summary>Описание для поста ${ep.post_text ? `<span class="muted small">· ${ep.post_text.length} симв.</span>` : `<span class="muted small">· пока не написано</span>`}</summary>
-        <textarea id="post-text" rows="4" placeholder="Текст под роликом: подпись, хэштеги, призыв…" ${canPost() ? "" : "readonly"}>${esc(ep.post_text || "")}</textarea>
-        <div class="row"><button class="ghost small" id="copy-post">📋 Скопировать</button>
-          <span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span></div>
+        <summary>Описание для поста <span class="muted small" id="post-count"></span></summary>
+        <label class="post-same"><input type="checkbox" id="post-same" ${ep.post_same === 0 ? "" : "checked"} ${canPost() ? "" : "disabled"}> Одинаковое описание везде</label>
+        <div id="post-blocks"></div>
       </details>
       <details class="post-text result-box" open>
         <summary>Итог и готовый ролик ${ep.result_url ? `<span class="muted small">· ссылка есть</span>` : `<span class="muted small">· пока не заполнено</span>`}</summary>
@@ -284,12 +283,17 @@ function drawMain(el) {
         </div>
       </details>
   </div>`;
-  $("#copy-post").onclick = () => copyText($("#post-text").value);
+  drawPostBlocks(ep);
   bindResult(ep);
-  if (canPost()) $("#post-text").onchange = async (ev) => {
-    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { post_text: ev.target.value } });
-    ep.post_text = ev.target.value;
-    toast("Описание для поста сохранено");
+  if (canPost()) $("#post-same").onchange = async (ev) => {
+    const same = ev.target.checked;
+    const patch = { post_same: same };
+    // Включили отдельные описания впервые: каждая соцсеть стартует с общего текста, ничего не теряется
+    if (!same && POST_NETS.every(([k]) => !ep[`post_text_${k}`])) POST_NETS.forEach(([k]) => (patch[`post_text_${k}`] = ep.post_text || ""));
+    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: patch });
+    ep.post_same = same ? 1 : 0;
+    Object.entries(patch).forEach(([k, v]) => { if (k.startsWith("post_text_")) ep[k] = v; });
+    drawPostBlocks(ep);
   };
 }
 
@@ -676,4 +680,25 @@ export function newEpisodeDialog(opts = {}) {
     location.hash = `#/episodes/${ep.id}/script`;
   };
   setTimeout(() => $("#ne-title", m).focus(), 50);
+}
+
+/** Блоки описания: один общий или по одному на соцсеть. */
+function drawPostBlocks(ep) {
+  const same = ep.post_same !== 0;
+  const blocks = same ? [["post_text", "", "Текст под роликом: подпись, хэштеги, призыв…"]]
+    : POST_NETS.map(([k, n]) => [`post_text_${k}`, n, `Описание для ${n}: подпись, хэштеги, призыв…`]);
+  const len = blocks.reduce((n, [f]) => n + (ep[f] || "").length, 0);
+  $("#post-count").textContent = len ? `· ${len} симв.` : "· пока не написано";
+  $("#post-blocks").innerHTML = blocks.map(([f, name, ph]) => `<div class="post-block">
+      ${name ? `<label>${name}</label>` : ""}
+      <textarea data-post="${f}" rows="4" placeholder="${ph}" ${canPost() ? "" : "readonly"}>${esc(ep[f] || "")}</textarea>
+      <div class="row"><button class="ghost small" data-copy-post="${f}">📋 Скопировать${name ? ` для ${name}` : ""}</button>
+        ${name === "" ? `<span class="muted small">${canPost() ? "Пишет сценарист; сохраняется само." : "Пишет сценарист."}</span>` : ""}</div></div>`).join("");
+  $$("[data-copy-post]").forEach((b) => (b.onclick = () => copyText(ep[b.dataset.copyPost] || "")));
+  if (canPost()) $$("[data-post]").forEach((ta) => (ta.onchange = async () => {
+    await api(`/api/episodes/${E.id}?reparse=false`, { method: "PUT", json: { [ta.dataset.post]: ta.value } });
+    ep[ta.dataset.post] = ta.value;
+    drawPostBlocks(ep);
+    toast("Описание для поста сохранено");
+  }));
 }
