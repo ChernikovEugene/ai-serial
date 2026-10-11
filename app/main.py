@@ -1317,10 +1317,13 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
     if not ep["shots"]:
         raise HTTPException(400, "В серии нет шотов")
     settings = db.get_settings()
-    started = skipped = 0
+    started = skipped = uploaded = 0
     for s in ep["shots"]:
         busy = s["gen_status"] in ("queued", "running")
         if busy:
+            continue
+        if (s.get("selected_take") or {}).get("source") == "upload":  # готовое видео загружено вручную: на генерацию не отправляем
+            uploaded += 1
             continue
         if s["engine"] != "veo":  # этот шот монтажёр делает в другой нейросети и пришлёт файлом
             if not s["selected_take_id"] or s["needs_redo"]:
@@ -1336,7 +1339,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
         with db.connect() as c:
             c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=?", (db.now(), eid))
         db.log(eid, uid(request), f"Отправлено в Veo шотов: {started}")
-    return {"started": started, "skipped": skipped}
+    return {"started": started, "skipped": skipped, "uploaded": uploaded}
 
 
 @app.get("/api/episodes/{eid}/export")

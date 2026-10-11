@@ -125,7 +125,8 @@ export function drawHeader() {
       const mode = $("#gen-mode").value;
       if (mode === "all" && !confirm("Сгенерировать заново все шоты? Каждый шот получит новый дубль (это платно при работе через API).")) return;
       const r = await api(`/api/episodes/${E.id}/generate`, { json: { mode } });
-      const rest = r.skipped ? ` Ещё ${r.skipped} шотов делаются в других нейросетях: загрузите готовые видео в карточках шотов.` : "";
+      const rest = (r.skipped ? ` Ещё ${r.skipped} шотов делаются в других нейросетях: загрузите готовые видео в карточках шотов.` : "")
+        + (r.uploaded ? ` Шотов с загруженным видео пропущено: ${r.uploaded}.` : "");
       toast(r.started ? `Отправлено в Veo: ${r.started} шотов.${rest}` : `Через API нечего отправлять.${rest || " У всех шотов Veo уже есть видео."}`);
       renderEpisode(E.id);
     };
@@ -448,12 +449,9 @@ function shotHtml(s) {
         ${s.needs_redo ? `<span class="badge warn">нужна перегенерация</span>` : ""}</div>
       ${s.takes.at(-1)?.error ? `<div class="small err-t">${esc(s.takes.at(-1).error)}</div>` : ""}
       ${sel?.video_path ? `<video src="${media(sel.video_path)}" controls preload="metadata"></video>` : ""}
-      ${can.gen() ? (s.engine === "veo"
-        ? `<button class="primary" data-act="gen">Сгенерировать дубль</button><button data-act="req">Запрос к Veo</button>
-           <label class="btn ghost small up-label">Или загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>`
-        : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>
-           <label class="btn primary up-label">Загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>
-           <button data-act="copyprompt">Скопировать промпт</button>`) : ""}
+      ${can.gen() ? `${s.engine === "veo" ? "" : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>`}
+           <button data-act="copyprompt">Скопировать промпт</button>
+           <label class="btn primary up-label">Загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>` : ""}
     </div>
     <div>
       <div class="row loc-head"><label style="margin:0">Локация</label><div class="spacer"></div>
@@ -617,23 +615,8 @@ function bindShot(s) {
     if (act === "addline") return save({ dialogue: [...readLines(), { speaker: s.characters[0]?.name || "", asset_id: s.characters[0]?.asset_id ?? null, voice: "direct", parenthetical: "", text: "" }] });
     if (act === "rebuild") return replaceShot(await api(`/api/shots/${s.id}/rebuild-prompt`, { json: {} }));
     if (act === "rmcomp") return replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "DELETE" }));
-    if (act === "gen") {
-      replaceShot(await api(`/api/shots/${s.id}/generate`, { json: {} }));
-      toast(`Шот ${s.label} отправлен в Veo`); return renderEpisode(E.id);
-    }
-    if (act === "req") return showRequest(s);
     if (act === "copyprompt") return copyText(s.prompt);
   }));
-}
-
-async function showRequest(s) {
-  const req = await api(`/api/shots/${s.id}/request`);
-  const m = modal(`<h1>Запрос к Veo — шот ${esc(s.label)}</h1>
-    <p class="muted small">Так выглядит запрос, который уйдёт в Veo. Изображения показаны путями, при отправке они кодируются в base64.</p>
-    <pre class="code">${esc(JSON.stringify(req, null, 2))}</pre>
-    <div class="row"><div class="spacer"></div><button id="copy">Скопировать промпт</button><button id="close">Закрыть</button></div>`, true);
-  $("#close", m).onclick = closeModal;
-  $("#copy", m).onclick = () => { navigator.clipboard.writeText(req.instances[0].prompt); toast("Промпт скопирован"); };
 }
 
 // ---------------- history tab ----------------
