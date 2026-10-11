@@ -250,21 +250,51 @@ st, _ = admin.call("DELETE", f"/api/integrations/{iid}")
 check("integration deleted", st == 200)
 st, _ = admin.call("GET", f"/api/episodes/{ep4['id']}/download")
 check("download blocked before approval", st == 400, st)
-st, up = admin.call("POST", f"/api/shots/{s4['id']}/upload-take", form={"video": ("a.mp4", b"\x00\x00fakevideo")})
+import io, shutil, subprocess, tempfile, time, zipfile
+ffm = shutil.which("ffmpeg")
+if not ffm:
+    try:
+        import imageio_ffmpeg
+        ffm = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        ffm = None
+video = b"\x00\x00fakevideo"
+if ffm:  # настоящий короткий ролик 540x960, 25 кадров/с: архив должен перекодировать его в 1080x1920, 60 кадров/с
+    tmpv = Path(tempfile.mkdtemp()) / "src.mp4"
+    subprocess.run([ffm, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=540x960:rate=25:duration=1",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-shortest", "-pix_fmt", "yuv420p", str(tmpv)], check=True)
+    video = tmpv.read_bytes()
+st, up = admin.call("POST", f"/api/shots/{s4['id']}/upload-take", form={"video": ("a.mp4", video)})
 check("manual video uploaded", st == 200 and up["selected_take_id"], st)
 editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "veo"})
 st, r = editor.call("POST", f"/api/episodes/{ep4['id']}/generate", {"mode": "all"})
 check("episode generate skips shots with an uploaded video", st == 200 and r["started"] == 0 and r["uploaded"] == 1, (st, r))
 st, sh = admin.call("GET", f"/api/episodes/{ep4['id']}")
 check("uploaded shot got no new take", len(sh["shots"][0]["takes"]) == 1, [t["source"] for t in sh["shots"][0]["takes"]])
-st, _ = admin.call("POST", f"/api/episodes/{ep4['id']}/status", {"status": "ready"})
-print("  (status ready ->", st, ")")
-if st == 200:
+st, _ = writer.call("POST", f"/api/episodes/{ep4['id']}/approve-version", {"version": 1})
+check("writer cannot approve a version", st == 403, st)
+st, _ = admin.call("POST", f"/api/episodes/{ep4['id']}/approve-version", {"version": 5})
+check("version without video cannot be approved", st == 400, st)
+st, ep4a = admin.call("POST", f"/api/episodes/{ep4['id']}/approve-version", {"version": 1})
+check("version v1 approved", st == 200 and ep4a["approved_version"] == 1, (st, ep4a.get("approved_version")))
+for _ in range(120):
+    st, ep4a = admin.call("GET", f"/api/episodes/{ep4['id']}")
+    if ep4a["export_status"] != "building":
+        break
+    time.sleep(0.5)
+if ffm:
+    check("archive built", ep4a["export_status"] == "ready", (ep4a["export_status"], ep4a["export_error"]))
     req = urllib.request.Request(BASE + f"/api/episodes/{ep4['id']}/download")
     with admin.op.open(req) as resp:
-        import io, zipfile
-        names = zipfile.ZipFile(io.BytesIO(resp.read())).namelist()
-    check("archive named by latin title + shot number", names == ["referensy/referensy_01.mp4"], names)
+        z = zipfile.ZipFile(io.BytesIO(resp.read()))
+    folder = f"{ep4a['number']:02d}" if ep4a["number"] is not None else f"id{ep4['id']}"
+    check("archive: episode number / title / shot number", z.namelist() == [f"{folder}/referensy/referensy_01.mp4"], z.namelist())
+    out = Path(tempfile.mkdtemp()) / "o.mp4"
+    out.write_bytes(z.read(z.namelist()[0]))
+    info = subprocess.run([ffm, "-i", str(out)], capture_output=True, text=True).stderr
+    check("archive video is 1080x1920 at 60 fps", "1080x1920" in info and "60 fps" in info, info[-400:])
+else:
+    print("  (ffmpeg не найден: проверка архива пропущена)")
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

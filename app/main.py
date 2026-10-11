@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, breakdown, db, feedback, schedule, veo
+from . import auth, breakdown, db, exporter, feedback, schedule, veo
 from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -30,6 +30,7 @@ HOLIDAYS = {
 
 db.init()
 veo.recover()
+exporter.recover()
 app = FastAPI(title="Студия сериала")
 
 
@@ -1095,6 +1096,7 @@ def get_episode(eid: int) -> dict:
         mates = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS ?", (ep["arc_id"],))]
     ep.update(schedule.arc_numbers(mates, schedule.load_arcs()).get(eid, {"arc_id": None, "arc_title": "", "arc_number": None}))
     ep["status_name"] = db.STATUS_NAMES.get(ep["status"], ep["status"])
+    ep["approved_by_name"] = user_names().get(ep["approved_by"], "") if ep.get("approved_by") else ""
     ep["cast"] = episode_cast(eid)
     ep["marked"] = breakdown.has_markers(ep["script"])
     return ep
@@ -1570,30 +1572,68 @@ def latin_slug(title: str, fallback: str = "episode") -> str:
     return s or fallback
 
 
+def version_picks(eid: int, version: int) -> list[dict]:
+    """Для версии серии vN: у каждого шота берётся последний дубль с видео, номер которого не больше N
+    (если такого нет, самый ранний). Так же версию показывает вкладка «Просмотр и правки»."""
+    with db.connect() as c:
+        shots = db.rows(c.execute("SELECT id, idx, label FROM shots WHERE episode_id=? ORDER BY idx", (eid,)))
+        takes = db.rows(c.execute(
+            "SELECT t.id, t.shot_id, t.take_no, t.video_path FROM takes t JOIN shots s ON s.id=t.shot_id "
+            "WHERE s.episode_id=? AND t.video_path<>'' ORDER BY t.take_no", (eid,)))
+    out = []
+    for s in shots:
+        mine = [t for t in takes if t["shot_id"] == s["id"]]
+        upto = [t for t in mine if t["take_no"] <= version]
+        pick = upto[-1] if upto else (mine[0] if mine else None)
+        out.append({"shot_id": s["id"], "idx": s["idx"], "label": s["label"], "take_id": pick["id"] if pick else None,
+                    "video_path": pick["video_path"] if pick else ""})
+    return out
+
+
+class ApproveVersionIn(BaseModel):
+    version: int
+
+
+@app.post("/api/episodes/{eid}/approve-version", dependencies=[Depends(auth.editor)])
+def approve_version(eid: int, a: ApproveVersionIn, request: Request):
+    ep = load_episode_row(eid)
+    if ep["export_status"] == "building":
+        raise HTTPException(409, "Архив предыдущей версии ещё собирается, подождите минуту")
+    picks = version_picks(eid, a.version)
+    with db.connect() as c:
+        top = c.execute("SELECT COALESCE(MAX(t.take_no), 0) FROM takes t JOIN shots s ON s.id=t.shot_id "
+                        "WHERE s.episode_id=? AND t.video_path<>''", (eid,)).fetchone()[0]
+    if a.version < 1 or a.version > top or not any(p["video_path"] for p in picks):
+        raise HTTPException(400, f"В версии v{a.version} нет видео")
+    empty = [p["label"] or str(p["idx"]) for p in picks if not p["video_path"]]
+    if empty:
+        raise HTTPException(409, f"Версию v{a.version} нельзя согласовать: нет видео у шотов {', '.join(empty)}")
+    slug = latin_slug(ep["title"], f"episode_{ep['number'] or eid}")
+    folder = f"{ep['number']:02d}" if ep["number"] is not None else f"id{eid}"
+    with db.connect() as c:
+        c.execute("UPDATE episodes SET approved_version=?, approved_takes=?, approved_by=?, approved_at=?, "
+                  "export_status='building', export_error='', updated_at=?, "
+                  "status=CASE WHEN status IN ('generating','fixes','client_review') THEN 'ready' ELSE status END WHERE id=?",
+                  (a.version, json.dumps({str(p["shot_id"]): p["take_id"] for p in picks}), uid(request), db.now(),
+                   db.now(), eid))
+    db.log(eid, uid(request), f"Согласована версия v{a.version}")
+    exporter.start(eid, a.version, folder, slug, [(p["idx"], p["video_path"]) for p in picks])
+    return get_episode(eid)
+
+
 @app.get("/api/episodes/{eid}/download")
 def download_episode(eid: int):
-    import io
-    import zipfile
     ep = load_episode_row(eid)
-    if ep["status"] not in ("ready", "posted"):
-        raise HTTPException(400, "Скачать можно после согласования ролика (статус «Готов к постингу»)")
-    with db.connect() as c:
-        rows = db.rows(c.execute(
-            "SELECT s.idx, t.video_path FROM shots s JOIN takes t ON t.id=s.selected_take_id "
-            "WHERE s.episode_id=? ORDER BY s.idx", (eid,)))
+    v = ep["approved_version"]
+    if not v:
+        raise HTTPException(400, "Сначала согласуйте версию на вкладке «Просмотр и правки»")
+    if ep["export_status"] == "building":
+        raise HTTPException(409, "Архив ещё собирается, повторите через минуту")
+    f = exporter.export_path(eid, v)
+    if ep["export_status"] == "error" or not f.is_file():
+        raise HTTPException(500, ep["export_error"] or "Архив не собран")
     slug = latin_slug(ep["title"], f"episode_{ep['number'] or eid}")
-    buf = io.BytesIO()
-    n = 0
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
-        for r in rows:
-            f = db.MEDIA_DIR / r["video_path"]
-            if r["video_path"] and f.is_file():
-                n += 1
-                z.write(f, f"{slug}/{slug}_{n:02d}{f.suffix.lower()}")
-    if not n:
-        raise HTTPException(400, "В серии нет выбранных видео для архива")
-    return Response(buf.getvalue(), media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{slug}.zip"'})
+    return FileResponse(f, media_type="application/zip", filename=f"{slug}_v{v}.zip")
 
 
 # ---------- comments / fixes ----------
