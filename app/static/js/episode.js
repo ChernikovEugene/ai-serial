@@ -409,6 +409,17 @@ export function takeBadge(s) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+// варианты камеры: подпись в списке -> текст, который уходит в промпт; первый вариант стоит по умолчанию
+const CAMERA_PRESETS = [
+  ["статичная", "Static camera, locked-off, no camera movement"],
+  ["ручная, лёгкая тряска", "Handheld camera, slight natural shake"],
+  ["медленный наезд", "Slow push-in"],
+  ["медленный отъезд", "Slow pull-back"],
+  ["панорама", "Slow pan"],
+  ["слежение за героем", "Tracking shot following the character"],
+];
+const customCam = new Set(); // шоты, где выбран «свой вариант» камеры, но текст ещё не введён
+
 const VOICE = { direct: "в кадре", voiceover: "закадр" };
 
 function shotHtml(s) {
@@ -416,6 +427,7 @@ function shotHtml(s) {
   const chars = state.assets.filter((a) => a.kind === "character");
   const locAssets = state.assets.filter((a) => a.kind === "location");
   const locs = locAssets.flatMap((a) => a.versions.map((v) => ({ ...v, asset: a })));
+  const camCustom = customCam.has(s.id) || !CAMERA_PRESETS.some(([, v]) => v === s.camera);
   const locText = s.location_mode === "text"; // одноразовая локация: описание вместо выбора из библиотеки
   const curLoc = locs.find((v) => v.id === s.location_version_id);
   const roW = canWrite() ? "" : "disabled"; // content: the writer's part
@@ -465,7 +477,12 @@ function shotHtml(s) {
           ${chars.filter((a) => !s.characters.some((c) => c.asset_id === a.id)).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>` : ""}
       </div>
       <label>Действие</label><textarea data-f="action" rows="3" ${roW}>${esc(s.action)}</textarea>
-      <label>Камера</label><input data-f="camera" value="${esc(s.camera)}" ${roW}>
+      <label>Камера</label>
+      <div class="cam-pick">
+        <select data-camsel ${roW}>${CAMERA_PRESETS.map(([n, v]) => `<option value="${esc(v)}" ${!camCustom && s.camera === v ? "selected" : ""}>${n}</option>`).join("")}
+          <option value="" ${camCustom ? "selected" : ""}>свой вариант…</option></select>
+        ${camCustom ? `<input data-f="camera" value="${esc(CAMERA_PRESETS.some(([, v]) => v === s.camera) ? "" : s.camera)}" placeholder="Опишите камеру: например, медленный облёт вокруг героини" ${roW}>` : ""}
+      </div>
       <fieldset class="sound-zone" ${s.sound_off ? "disabled" : ""}>
         <legend>Звук</legend>
         ${s.engine === "veo"
@@ -546,6 +563,13 @@ function bindShot(s) {
     if (f === "prompt") return save({ prompt: v, prompt_locked: true });
     save({ [f]: v });
   }));
+  const camSel = $("[data-camsel]", el);
+  if (camSel) camSel.onchange = () => {
+    if (camSel.value) { customCam.delete(s.id); return save({ camera: camSel.value }); }
+    customCam.add(s.id);
+    replaceShot(s);
+    $("[data-f=camera]", $(`#shot-${s.id}`))?.focus();
+  };
   const locMode = $("[data-locmode]", el);
   if (locMode) locMode.onchange = () => save({ location_mode: locMode.checked ? "text" : "library" });
   const locName = $("[data-locname]", el);

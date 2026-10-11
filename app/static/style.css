@@ -688,3 +688,4 @@ fieldset.sound-zone:disabled { opacity: .45; }
 .loc-pick select { width: auto; max-width: 45%; }
 textarea.need { border-color: var(--warn); }
 .loc-head .check { margin: 0; font-size: 12px; }
+.cam-pick { display: flex; flex-direction: column; gap: 6px; }

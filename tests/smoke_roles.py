@@ -220,6 +220,12 @@ st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"sound_off": True})
 check("writer ticks sound_off -> ready", st == 200 and r["sound_off"] and r["ready"], (st, r.get("checks")))
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling", "voiceover": True, "sound_off": False})
 check("editor sets voiceover; replica required again", st == 200 and r["voiceover"] and not r["ready"], (st, r.get("checks")))
+# --- камера по умолчанию статичная ---
+check("default camera is static", s4["camera"] == "Static camera, locked-off, no camera movement", s4["camera"])
+st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"camera": "Slow push-in"})
+check("camera preset saved and used in prompt", st == 200 and "Camera: Slow push-in." in r["prompt"], (st, r["prompt"][-200:]))
+st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"camera": "Медленный облёт вокруг героини"})
+check("custom camera text saved", st == 200 and r["camera"] == "Медленный облёт вокруг героини", st)
 # --- локация шота: текстом вместо библиотеки ---
 loc_before = s4["location_version_id"]
 st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"clear_location": True, "location_mode": "text"})

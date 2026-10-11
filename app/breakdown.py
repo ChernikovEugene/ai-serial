@@ -500,6 +500,9 @@ def shot_warnings(shot: dict, max_s: int) -> list[str]:
     return w
 
 
+DEFAULT_CAMERA = "Static camera, locked-off, no camera movement"
+
+
 def location_text_mode(shot: dict) -> bool:
     """Одноразовая локация: вместо выбора из библиотеки в шоте вписано описание текстом."""
     return shot.get("location_mode") == "text"
@@ -551,17 +554,7 @@ def _finalize(s: dict, i: int, idx: AssetIndex, max_s: int, wps: float, marked: 
     loc = s["location"]
     loc_v = idx.version(loc, s.get("loc_label")) if loc else None
 
-    camera = s["camera"]
-    if not camera:
-        speakers = list(dict.fromkeys(d["speaker"] for d in s["dialogue"] if d["speaker"]))
-        if len(speakers) == 1:
-            camera = f"Medium close-up on {speakers[0]}, eye level, slight handheld"
-        elif len(speakers) >= 2:
-            camera = "Two-shot, medium, over-the-shoulder"
-        elif s["first_in_scene"]:
-            camera = "Establishing wide shot, slow push-in"
-        else:
-            camera = "Medium shot, steady"
+    camera = s["camera"] or DEFAULT_CAMERA  # камера по умолчанию статичная; другую выбирают в карточке шота или пишут в сценарии
 
     est, sp = estimate(s["action"], s["dialogue"], wps)
     shot = {
