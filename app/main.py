@@ -272,7 +272,7 @@ def shot_checks(s: dict) -> list[dict]:
     sound_ok = bool(s.get("sound_off")) or not has_sound or has_text
     return [
         {"key": "characters", "label": "Выбраны персонажи", "ok": bool(s.get("characters"))},
-        {"key": "location", "label": "Выбрана локация", "ok": bool(s.get("location_version_id"))},
+        {"key": "location", "label": "Выбрана локация", "ok": breakdown.has_location(s)},
         {"key": "prompt", "label": "Прописан промпт", "ok": bool((s.get("prompt") or "").strip())},
         {"key": "sound", "label": "Звук: «звук не нужен» или прописана реплика" if has_sound else "Звук не требуется",
          "ok": sound_ok},
@@ -282,7 +282,7 @@ def shot_checks(s: dict) -> list[dict]:
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     _, refs, warns = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
     w = breakdown.shot_warnings(s, ctx.max_s)
-    if not s.get("location_version_id") and s.get("scene"):
+    if not breakdown.has_location(s) and s.get("scene") and not breakdown.location_text_mode(s):
         w.append(f"Локация «{s['scene']}» не найдена в библиотеке")
     s["warnings"] = w + warns
     s["missing"] = breakdown.shot_missing(s, ctx.max_s)
@@ -301,8 +301,8 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
 
 
 SHOT_COLS = ["idx", "label", "scene", "duration", "est_seconds", "speech_seconds", "words", "camera", "action",
-             "dialogue", "characters", "location_version_id", "composition_image", "composition_mode",
-             "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "voiceover"]
+             "dialogue", "characters", "location_version_id", "location_mode", "location_text", "composition_image",
+             "composition_mode", "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "voiceover"]
 
 
 def save_shot(c, s: dict):
@@ -1269,7 +1269,7 @@ def apply_breakdown(eid: int):
                                            "composition_note": "", "prompt": "", "prompt_locked": 0,
                                            "negative_prompt": ctx.settings.get("negative_prompt", ""),
                                            "selected_take_id": None, "needs_redo": 0, "engine": "veo",
-                                           "sound_off": 0, "voiceover": 0}
+                                           "sound_off": 0, "voiceover": 0, "location_mode": "library", "location_text": ""}
             s.update({k: n[k] for k in ("idx", "label", "scene", "duration", "camera", "action", "dialogue",
                                         "characters", "location_version_id")})
             refresh_shot(s, ctx)
@@ -1358,6 +1358,8 @@ class ShotPatch(BaseModel):
     characters: list[dict] | None = None
     location_version_id: int | None = None
     clear_location: bool = False
+    location_mode: str | None = None
+    location_text: str | None = None
     composition_mode: str | None = None
     composition_note: str | None = None
     prompt: str | None = None
@@ -1388,7 +1390,7 @@ def shot_response(sid: int) -> dict:
 
 # Content belongs to the writer, generation settings to the editor (the producer may touch both).
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
-                       "sound_off", "voiceover"}
+                       "location_mode", "location_text", "sound_off", "voiceover"}
 EDITOR_SHOT_FIELDS = {"sound_off", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
                       "prompt_locked", "needs_redo", "engine"}
 
@@ -1413,6 +1415,8 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         raise HTTPException(400, "Veo поддерживает длительность 4, 6 или 8 секунд")
     if data.get("engine") not in (None, *ENGINE_NAMES):
         raise HTTPException(400, "Неизвестная нейросеть")
+    if data.get("location_mode") not in (None, "library", "text"):
+        raise HTTPException(400, "Неизвестный способ задать локацию")
     if data.get("composition_mode") not in (None, "reference", "first_frame"):
         raise HTTPException(400, "Неизвестный режим композиции")
     for k, v in data.items():

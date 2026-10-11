@@ -414,7 +414,10 @@ const VOICE = { direct: "в кадре", voiceover: "закадр" };
 function shotHtml(s) {
   const max = state.meta.max_shot_seconds;
   const chars = state.assets.filter((a) => a.kind === "character");
-  const locs = state.assets.filter((a) => a.kind === "location").flatMap((a) => a.versions.map((v) => ({ ...v, asset: a })));
+  const locAssets = state.assets.filter((a) => a.kind === "location");
+  const locs = locAssets.flatMap((a) => a.versions.map((v) => ({ ...v, asset: a })));
+  const locText = s.location_mode === "text"; // одноразовая локация: описание вместо выбора из библиотеки
+  const curLoc = locs.find((v) => v.id === s.location_version_id);
   const roW = canWrite() ? "" : "disabled"; // content: the writer's part
   const roG = can.gen() ? "" : "disabled";  // generation: the editor's part
   const sel = s.selected_take;
@@ -441,9 +444,16 @@ function shotHtml(s) {
            <button data-act="copyprompt">Скопировать промпт</button>`) : ""}
     </div>
     <div>
-      <label>Локация</label>
-      <select data-f="location_version_id" ${roW} class="${s.location_version_id ? "" : "need"}"><option value="">— не выбрана —</option>
-        ${locs.map((v) => `<option value="${v.id}" ${v.id === s.location_version_id ? "selected" : ""}>${esc(v.asset.name)} · v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
+      <div class="row loc-head"><label style="margin:0">Локация</label><div class="spacer"></div>
+        <label class="check small" title="Для одноразовой локации: вместо выбора из библиотеки просто опишите, где происходит действие">
+          <input type="checkbox" data-locmode ${locText ? "checked" : ""} ${roW}> текстом</label></div>
+      ${locText
+        ? `<textarea data-f="location_text" rows="2" ${roW} class="${s.location_text.trim() ? "" : "need"}" placeholder="Где происходит действие: например, пустая парковка ночью, под дождём">${esc(s.location_text)}</textarea>`
+        : `<div class="loc-pick">
+            <input data-locname list="loc-names-${s.id}" value="${esc(curLoc ? curLoc.asset.name : "")}" placeholder="— не выбрана: начните вводить название —" ${roW} class="${curLoc ? "" : "need"}">
+            <datalist id="loc-names-${s.id}">${locAssets.map((a) => `<option value="${esc(a.name)}">`).join("")}</datalist>
+            ${curLoc ? `<select data-locver ${roW} title="Версия локации">${curLoc.asset.versions.map((v) => `<option value="${v.id}" ${v.id === s.location_version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>` : ""}
+          </div>`}
       <label>Персонажи в кадре</label>
       <div class="chips">${s.characters.map((c, i) => {
         const a = chars.find((x) => x.id === c.asset_id);
@@ -533,10 +543,21 @@ function bindShot(s) {
     let v = inp.value;
     if (f === "duration") v = +v;
     if (inp.type === "checkbox") v = inp.checked;
-    if (f === "location_version_id") return save(v ? { location_version_id: +v } : { clear_location: true });
     if (f === "prompt") return save({ prompt: v, prompt_locked: true });
     save({ [f]: v });
   }));
+  const locMode = $("[data-locmode]", el);
+  if (locMode) locMode.onchange = () => save({ location_mode: locMode.checked ? "text" : "library" });
+  const locName = $("[data-locname]", el);
+  if (locName) locName.onchange = () => {
+    const name = locName.value.trim().toLowerCase();
+    if (!name) return save({ clear_location: true });
+    const a = state.assets.find((x) => x.kind === "location" && x.name.toLowerCase() === name);
+    if (!a) { toast("Такой локации нет в библиотеке. Выберите из списка или включите «текстом»"); return replaceShot(s); }
+    save({ location_version_id: E.ep.cast[a.id] || a.active_version_id || a.versions[0]?.id });
+  };
+  const locVer = $("[data-locver]", el);
+  if (locVer) locVer.onchange = () => save({ location_version_id: +locVer.value });
   $$("[data-char]", el).forEach((sel) => (sel.onchange = () => save({ characters: s.characters.map((c, i) => (i === +sel.dataset.char ? { ...c, version_id: +sel.value } : c)) })));
   $$("[data-rmchar]", el).forEach((b) => (b.onclick = () => save({ characters: s.characters.filter((_, i) => i !== +b.dataset.rmchar) })));
   const add = $("[data-addchar]", el);

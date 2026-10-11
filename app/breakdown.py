@@ -500,12 +500,23 @@ def shot_warnings(shot: dict, max_s: int) -> list[str]:
     return w
 
 
+def location_text_mode(shot: dict) -> bool:
+    """Одноразовая локация: вместо выбора из библиотеки в шоте вписано описание текстом."""
+    return shot.get("location_mode") == "text"
+
+
+def has_location(shot: dict) -> bool:
+    if location_text_mode(shot):
+        return bool((shot.get("location_text") or "").strip())
+    return bool(shot.get("location_version_id"))
+
+
 def shot_missing(shot: dict, max_s: int) -> list[str]:
     """What still blocks a shot from being 'fully filled'. A script cannot be approved while any shot has these."""
     miss = []
     if not (shot.get("action") or "").strip() and not shot.get("dialogue"):
         miss.append("пустой шот: нет ни действия, ни реплик")
-    if not shot.get("location_version_id"):
+    if not has_location(shot):
         miss.append("не выбрана локация")
     if shot.get("est_seconds", 0) > max_s:
         miss.append(f"не влезает в {max_s} с (нужно ~{shot['est_seconds']:.1f} с)")
@@ -593,7 +604,8 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
     engine = shot.get("engine") or "veo"
     comp = shot.get("composition_image")
     mode = shot.get("composition_mode") or "reference"
-    loc_v = versions.get(shot.get("location_version_id"))
+    loc_text = (shot.get("location_text") or "").strip() if location_text_mode(shot) else ""
+    loc_v = None if location_text_mode(shot) else versions.get(shot.get("location_version_id"))
     char_vs = [(c, versions.get(c.get("version_id"))) for c in shot.get("characters", [])]
 
     # --- референсы: какие картинки прикладываются и в каком порядке
@@ -657,7 +669,9 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
             parts.append(_sent(f"Location: {name}, shown in reference image {loc_n}" + (f". Details: {desc}" if desc else "")))
         else:
             parts.append(_sent(f"Location: {name}" + (f" — {desc}" if desc else "")))
-    elif shot.get("scene"):
+    elif loc_text:
+        parts.append(_sent(f"Location: {text(loc_text)}"))
+    elif shot.get("scene") and not location_text_mode(shot):
         parts.append(_sent(f"Location: {shot['scene']}"))
 
     for c, v in char_vs:
