@@ -88,6 +88,8 @@ TABLES = {
         dialogue TEXT NOT NULL DEFAULT '[]',
         characters TEXT NOT NULL DEFAULT '[]',
         location_version_id INTEGER,
+        location_mode TEXT NOT NULL DEFAULT 'library',
+        location_text TEXT NOT NULL DEFAULT '',
         composition_image TEXT NOT NULL DEFAULT '',
         composition_mode TEXT NOT NULL DEFAULT 'reference',
         composition_note TEXT NOT NULL DEFAULT '',
