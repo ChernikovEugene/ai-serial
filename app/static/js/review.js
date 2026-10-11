@@ -1,10 +1,10 @@
 // «Просмотр и правки»: вся серия одним роликом в рамке соцсети, указатель шота на таймлайне, правки по точкам времени.
-import { $, $$, api, can, esc, fmtDateTime, media, state, toast } from "./core.js";
+import { $, $$, api, can, engineName, esc, fmtDateTime, media, state, toast } from "./core.js";
 import { E, TAKE_STATUS, archiveButton, drawHeader, renderEpisode, takeBadge } from "./episode.js";
 
 const FEEDS = [["none", "Без ленты"], ["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
 const FEED_KEY = "reviewFeed";
-const R = { feed: "tiktok", safe: false, version: "", poll: 0, i: 0, local: 0, playing: false, timer: 0, dur: [], comments: [], root: null };
+const R = { feed: "tiktok", safe: false, version: "", poll: 0, draft: null, i: 0, local: 0, playing: false, timer: 0, dur: [], comments: [], root: null };
 try { R.feed = localStorage.getItem(FEED_KEY) || "tiktok"; } catch { /* без памяти браузера тоже работает */ }
 
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -321,25 +321,39 @@ function bindChrome() {
 
 // ---------------- дубли и перегенерация выбранного шота (монтажёр) ----------------
 
+/** Как нейросеть связана со звуком шота: Veo 3 делает звук сам, у остальных реплики озвучиваются отдельно. */
+function soundNote(s) {
+  if (s.engine === "veo") return "Звук: Veo 3 сразу генерирует звук вместе с видео.";
+  if (s.sound_off) return "Звук: в шоте отмечено «звук не нужен».";
+  return s.voiceover ? "Звук: реплики озвучиваются в ElevenLabs (галочка в карточке шота)." : "Звук: озвучка реплик выключена (включается в карточке шота).";
+}
+
 function drawShotTools() {
   const box = $("#shot-tools");
   if (!box) return;
   const s = shots()[R.i];
   const open = box.open;
+  const veo = s.engine === "veo";
+  const draft = R.draft?.shot === s.id ? R.draft : {}; // набранное не пропадает, когда меняется нейросеть
   box.innerHTML = `<summary><b>Шот ${esc(s.label)}: дубли${can.gen() ? " и перегенерация" : ""}</b> ${takeBadge(s)}
       <span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span></summary>
     <div class="row" style="margin:8px 0">${can.gen() ? `<label class="btn" style="margin:0">Загрузить видео<input type="file" id="up-take" accept="video/mp4,video/quicktime,video/webm" hidden></label>` : ""}</div>
     <div class="muted small" style="margin:6px 0">${esc(s.action || "")} ${s.dialogue.map((d) => `<br><b>${esc(d.speaker)}</b>${d.voice === "voiceover" ? " <i>(за кадром)</i>" : ""}: ${esc(d.text)}`).join("")}</div>
-    ${can.gen() && s.engine === "veo" ? `<details class="regen" id="regen" ${s.needs_redo || s.open_fixes ? "open" : ""}>
+    ${can.gen() ? `<details class="regen" id="regen" ${s.needs_redo || s.open_fixes || R.draft?.shot === s.id ? "open" : ""}>
       <summary><b>${s.takes.length ? "Перегенерировать шот" : "Сгенерировать шот"}</b>
-        <span class="muted small">— можно улучшить промпт перед запуском; новый дубль не удаляет старые</span></summary>
+        <span class="muted small">— можно сменить нейросеть и улучшить промпт перед запуском; новый дубль не удаляет старые</span></summary>
+      <label>Нейросеть для нового дубля <span class="muted small">(выбор запоминается в шоте: от неё зависят промпт и звук)</span></label>
+      <select id="r-engine" style="width:auto">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
+      <div class="muted small" style="margin-top:4px">${soundNote(s)}</div>
       <label>Промпт для нового дубля</label>
-      <textarea id="r-prompt" rows="8" class="prompt">${esc(s.prompt)}</textarea>
-      <label>Что не так с прошлым дублем <span class="muted small">(запишется в историю шота)</span></label>
-      <input id="r-reason" placeholder="например: лицо поплыло, камера слишком далеко">
+      <textarea id="r-prompt" rows="8" class="prompt">${esc(draft.prompt ?? s.prompt)}</textarea>
+      ${veo ? `<label>Что не так с прошлым дублем <span class="muted small">(запишется в историю шота)</span></label>
+      <input id="r-reason" placeholder="например: лицо поплыло, камера слишком далеко" value="${esc(draft.reason || "")}">` : `<div class="muted small" style="margin-top:6px">Через API уходит только Veo 3. Скопируйте промпт, сделайте видео в «${esc(engineName(s.engine))}» и загрузите готовый файл кнопкой «Загрузить видео» выше.</div>`}
       <div class="row" style="margin-top:10px"><button class="ghost small" id="r-reset" title="Вернуть промпт из карточки шота">↻ как в карточке</button>
-        <div class="spacer"></div><button class="primary" id="r-go" ${["queued", "running"].includes(s.gen_status) ? "disabled" : ""}>▶ Сгенерировать дубль ${s.takes.length + 1}</button></div>
-    </details>` : can.gen() ? `<div class="muted small">Шот делается не в Veo: сделайте новое видео в своей нейросети и загрузите файлом.</div>` : ""}
+        <div class="spacer"></div>${veo
+          ? `<button class="primary" id="r-go" ${["queued", "running"].includes(s.gen_status) ? "disabled" : ""}>▶ Сгенерировать дубль ${s.takes.length + 1}</button>`
+          : `<button class="primary" id="r-copy">Скопировать промпт</button>`}</div>
+    </details>` : ""}
     <div class="takes">${s.takes.length ? [...s.takes].reverse().map((t) => {
       const [lab, cls] = TAKE_STATUS[t.status] || [t.status, ""];
       return `<div class="take ${t.id === s.selected_take_id ? "on" : ""}">
@@ -355,22 +369,20 @@ function drawShotTools() {
           ${can.gen() ? `<button class="small" data-reuse="${t.id}">Взять этот промпт</button>` : ""}</details>` : ""}
       </div>`;
     }).join("") : `<div class="muted small">Дублей ещё нет.</div>`}</div>`;
-  box.open = open || !s.takes.length;
+  box.open = open || !s.takes.length || R.draft?.shot === s.id;
 
   $$("[data-take]", box).forEach((b) => (b.onclick = async () => {
     await api(`/api/shots/${s.id}/select-take`, { json: { take_id: +b.dataset.take } });
     await renderEpisode(E.id);
   }));
-  const go = $("#r-go", box);
-  if (go) {
-    go.onclick = async () => {
-      const prompt = $("#r-prompt").value.trim();
-      if (!prompt) return toast("Промпт не может быть пустым", true);
-      go.disabled = true;
-      await api(`/api/shots/${s.id}/generate`, { json: { prompt, reason: $("#r-reason").value } });
-      toast(`Шот ${s.label}: новый дубль отправлен в Veo`);
-      renderEpisode(E.id);
+  const eng = $("#r-engine", box);
+  if (eng) {
+    eng.onchange = async () => {
+      R.draft = { shot: s.id, prompt: $("#r-prompt").value === s.prompt ? undefined : $("#r-prompt").value, reason: $("#r-reason")?.value };
+      await api(`/api/shots/${s.id}`, { method: "PUT", json: { engine: eng.value } });
+      await renderEpisode(E.id);
     };
+    $("#r-copy", box) && ($("#r-copy", box).onclick = () => navigator.clipboard.writeText($("#r-prompt").value).then(() => toast("Промпт скопирован")));
     $("#r-reset").onclick = () => { $("#r-prompt").value = s.prompt; };
     $$("[data-reuse]", box).forEach((b) => (b.onclick = () => {
       const t = s.takes.find((x) => x.id === +b.dataset.reuse);
@@ -379,6 +391,18 @@ function drawShotTools() {
       $("#regen").scrollIntoView({ behavior: "smooth", block: "center" });
       toast(`Промпт дубля ${t.take_no} подставлен: отредактируйте и запускайте`);
     }));
+  }
+  const go = $("#r-go", box);
+  if (go) {
+    go.onclick = async () => {
+      const prompt = $("#r-prompt").value.trim();
+      if (!prompt) return toast("Промпт не может быть пустым", true);
+      go.disabled = true;
+      R.draft = null;
+      await api(`/api/shots/${s.id}/generate`, { json: { prompt, reason: $("#r-reason").value } });
+      toast(`Шот ${s.label}: новый дубль отправлен в Veo`);
+      renderEpisode(E.id);
+    };
   }
   const up = $("#up-take", box);
   if (up) up.onchange = async () => {
