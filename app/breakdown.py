@@ -18,26 +18,36 @@ import re
 ALLOWED_DURATIONS = (4, 6, 8)
 # Какие длины клипа умеет каждая нейросеть (секунды) и подсказка под выбором длины в карточке шота.
 # Данные по открытым описаниям API на октябрь 2026, при смене версий моделей сверять с документацией.
+# Длины клипа по нейросетям (проверено в октябре 2026: документация Veo 3.1, fal.ai для Kling 2.5/2.6,
+# Magnific для Runway Gen-4.5, Segmind для Seedance 2.0). Если нейросеть обновится, поправьте здесь.
 ENGINE_DURATIONS = {
     "veo": (4, 6, 8),
     "kling": (5, 10),
     "sora": (4, 8, 12),
-    "runway": (5, 10),
-    "seedance": (5, 10),
-    "other": (4, 5, 6, 8, 10, 12),
+    "runway": (5, 8, 10),
+    "seedance": (4, 5, 6, 8, 10, 12, 15),
+    "other": (4, 5, 6, 8, 10, 12, 15),
 }
 ENGINE_DURATION_NOTES = {
-    "veo": "Veo 3.1: 4, 6 или 8 с. С референсами персонажей — только 8 с.",
-    "kling": "Kling 2.x: 5 или 10 с за одну генерацию.",
-    "sora": "Sora 2: 4, 8 или 12 с.",
-    "runway": "Runway Gen-4: 5 или 10 с, нужен стартовый кадр.",
-    "seedance": "Seedance: 5 или 10 с (часть сервисов принимает 2–12 с).",
-    "other": "Другая нейросеть: укажите длину, которую она поддерживает.",
+    "veo": "Veo 3 / 3.1: 4, 6 или 8 с. С референсами на Veo 3.1 только 8 с.",
+    "kling": "Kling 2.5 Turbo и 2.6: только 5 или 10 с за одну генерацию.",
+    "sora": "Sora закрыта OpenAI (API отключён 24.09.2026). Длины 4, 8, 12 с даны по прежним данным.",
+    "runway": "Runway Gen-4.5: 5, 8 или 10 с (Gen-4: 5 или 10 с).",
+    "seedance": "Seedance 2.0: 4, 5, 6, 8, 10, 12 или 15 с.",
+    "other": "Другая нейросеть: выберите длину по её документации.",
 }
 
 
 def engine_durations(engine: str | None) -> tuple:
     return ENGINE_DURATIONS.get(engine or "veo", ENGINE_DURATIONS["other"])
+
+
+def engine_limit(engine: str | None, settings: dict) -> int:
+    """Самый длинный клип нейросети: по нему считается «не влезает». Для Veo ещё ограничен настройкой «лимит шота»."""
+    top = max(engine_durations(engine))
+    if (engine or "veo") == "veo":
+        top = min(top, int(settings.get("max_shot_seconds") or top))
+    return top
 
 
 def snap_duration(engine: str | None, duration: int, est: float = 0) -> int:
@@ -516,7 +526,7 @@ def _handle_inline(line: str, idx: AssetIndex, add_dialogue) -> bool:
 def shot_warnings(shot: dict, max_s: int) -> list[str]:
     w = []
     if shot["est_seconds"] > max_s:
-        w.append(f"Не влезает в Veo: ~{shot['est_seconds']:.1f} с при лимите {max_s} с "
+        w.append(f"Не влезает в клип: ~{shot['est_seconds']:.1f} с при лимите {max_s} с "
                  f"(речь {shot['speech_seconds']:.1f} с, {shot['words']} слов). Сократите реплики или разбейте шот.")
     elif shot["est_seconds"] > max_s - 0.8:
         w.append(f"Впритык: ~{shot['est_seconds']:.1f} с из {max_s} с — актёр может не успеть договорить")

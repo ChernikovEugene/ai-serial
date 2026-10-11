@@ -327,6 +327,15 @@ st, _ = writer.call("DELETE", f"/api/calendar-events/{ev['id']}")
 st, evs = writer.call("GET", "/api/calendar-events")
 check("calendar event deleted", all(e["id"] != ev["id"] for e in evs), evs)
 
+# лимит «не влезает» зависит от нейросети шота
+st, longp = writer.call("POST", "/api/episodes", {"title": "Длинный шот", "script": "Шот 1\nЛОКАЦИЯ: @Лофт\nМаша идёт по комнате, останавливается у окна, долго смотрит на улицу, потом медленно возвращается к дивану и садится, не отводя взгляда от двери.\n"})
+ls = longp["shots"][0]
+st, r = admin.call("PUT", f"/api/shots/{ls['id']}", {"engine": "veo"})
+veo_max = r["max_s"]
+st, r = admin.call("PUT", f"/api/shots/{ls['id']}", {"engine": "kling"})
+check("per-engine limit: kling shot limit is 10 s, veo 8 s", st == 200 and r["max_s"] == 10 and veo_max == 8, (st, r.get("max_s"), veo_max))
+check("kling limit: est within 10 s is not over", r["over_limit"] == (r["est_seconds"] > 10), (r["est_seconds"], r["over_limit"]))
+
 # описание поста по соцсетям
 st, e0 = writer.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_text": "общее описание"})
 check("post: existing text is kept, same-for-all by default", st == 200 and e0["post_text"] == "общее описание" and e0["post_same"] == 1, e0.get("post_same"))

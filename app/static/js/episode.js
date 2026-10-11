@@ -120,7 +120,7 @@ export function drawHeader() {
       <div class="summary">
         <span><b>${ep.shots.length}</b> шотов</span>
         <span>хронометраж <b>${fmtDur(ep.total_seconds)}</b> <span class="muted">(по тексту ~${fmtDur(ep.est_seconds)})</span></span>
-        ${ep.over_limit ? `<span class="warn-t">⚠ не влезают в ${max} с: <b>${ep.over_limit}</b></span>` : `<span class="ok-t">✓ все шоты влезают в клип</span>`}
+        ${ep.over_limit ? `<span class="warn-t">⚠ не влезают в клип: <b>${ep.over_limit}</b></span>` : `<span class="ok-t">✓ все шоты влезают в клип</span>`}
         ${ep.shots.length ? (ep.incomplete
           ? `<span class="warn-t" title="Согласовать сценарий можно, когда у каждого шота выбрана локация, заполнены реплики и текст влезает в лимит">заполнено <b>${filled}/${ep.shots.length}</b> шотов</span>`
           : `<span class="ok-t">✓ все шоты заполнены</span>`) : ""}
@@ -454,7 +454,7 @@ function shotHtml(s) {
   <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
     <div class="side">
       <div class="shot-no">Шот ${esc(s.label)}</div>
-      <div>${fitMeter(s.est_seconds, max)}
+      <div>${fitMeter(s.est_seconds, s.max_s)}
         <div class="small ${s.over_limit ? "warn-t" : "muted"}">нужно ~${s.est_seconds} с${s.speech_seconds ? ` · речь ${s.speech_seconds} с · ${s.words} сл.` : ""}</div></div>
       ${s.missing.length ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
       <ul class="checks ${s.ready ? "all" : ""}" title="Когда все пункты отмечены, рамка шота становится зелёной">${s.checks.map((c) => `<li class="${c.ok ? "ok" : ""}">${c.ok ? "✓" : "○"} ${esc(c.label)}</li>`).join("")}</ul>
