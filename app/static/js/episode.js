@@ -441,7 +441,6 @@ function shotHtml(s) {
            <button data-act="copyprompt">Скопировать промпт</button>`) : ""}
     </div>
     <div>
-      <label>Сцена</label><input data-f="scene" value="${esc(s.scene)}" ${roW}>
       <label>Локация</label>
       <select data-f="location_version_id" ${roW} class="${s.location_version_id ? "" : "need"}"><option value="">— не выбрана —</option>
         ${locs.map((v) => `<option value="${v.id}" ${v.id === s.location_version_id ? "selected" : ""}>${esc(v.asset.name)} · v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
@@ -515,9 +514,9 @@ function bindShot(s) {
   if (!el) return;
   const save = async (patch) => replaceShot(await api(`/api/shots/${s.id}`, { method: "PUT", json: patch }));
   // «@» в текстовых полях шота подсказывает персонажей и локации из библиотеки (как в сценарии); выбор сразу сохраняется
-  $$("[data-f=scene], [data-f=action], [data-f=camera]", el).forEach(attachHighlight); // герои из библиотеки подсвечены цветом
+  $$("[data-f=action], [data-f=camera]", el).forEach(attachHighlight); // герои из библиотеки подсвечены цветом
   if (canWrite()) {
-    $$("[data-f=scene], [data-f=action], [data-f=camera], [data-d=text], [data-d=parenthetical]", el)
+    $$("[data-f=action], [data-f=camera], [data-d=text], [data-d=parenthetical]", el)
       .forEach((inp) => attachMentions(inp, () => inp.dispatchEvent(new Event("change"))));
   }
   const up = $("[data-upload]", el);
