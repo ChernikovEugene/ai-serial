@@ -516,7 +516,6 @@ function shotHtml(s) {
       <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
         <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
       <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>
-      <label>Негативный промпт</label><input data-f="negative_prompt" value="${esc(s.negative_prompt)}" ${roG}>
       <label>${s.engine === "veo" ? "Уйдёт в Veo как изображения (до 3); в промпте они называются «reference image 1, 2…»" : "Картинки-референсы: в промпте они названы «reference image 1, 2…», прикладывайте в этом порядке"}</label>
       <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${i + 1} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
     </div>` : ""}
