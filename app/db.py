@@ -192,7 +192,12 @@ TABLES = {
 JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members"}
 
 DEFAULT_SETTINGS = {
-    "veo_provider": "stub",          # stub | gemini
+    "veo_provider": "stub",          # устарело: было stub | gemini, теперь gen_mode + veo_route
+    "gen_mode": "",                  # stub | live (пусто: ещё не перенесено из veo_provider, см. init)
+    "veo_route": "magnific",         # Veo через Magnific или напрямую через Google (Gemini API)
+    "magnific_api_key": "",
+    "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
+    "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",
@@ -277,6 +282,13 @@ def init():
                   [k for k, _ in STATUSES])
         for k, v in DEFAULT_SETTINGS.items():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
+        # режим генерации раньше задавался veo_provider (stub | gemini): Gemini значит «по-настоящему, Veo через Google»
+        if c.execute("SELECT value FROM settings WHERE key='gen_mode'").fetchone()[0] == "":
+            live = c.execute("SELECT value FROM settings WHERE key='veo_provider'").fetchone()[0] == "gemini"
+            c.execute("UPDATE settings SET value=? WHERE key='gen_mode'", ("live" if live else "stub",))
+            if live:
+                c.execute("UPDATE settings SET value='google' WHERE key='veo_route'")
+        c.execute("UPDATE shots SET engine='other' WHERE engine='sora'")  # Sora закрыта, в Magnific её нет
         c.execute("UPDATE settings SET value=? WHERE key='anchor_date' AND value=''",
                   (datetime.now().date().isoformat(),))
         _migrate_arcs_v2(c)

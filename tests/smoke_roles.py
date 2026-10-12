@@ -131,19 +131,19 @@ check("takes keep prompt and reason", [t["reason"] for t in sh["takes"]] == ["л
       and sh["takes"][0]["prompt"] == "Better prompt v2", sh["takes"])
 check("revisions counted", sh["revisions"] == 1, sh["revisions"])
 
-# нейросеть на шот: выбирает монтажёр, через API идёт только Veo
-st, shot = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "kling"})
-check("editor picks another engine for a shot", st == 200 and shot["engine"] == "kling", f"{st} {shot if st != 200 else ''}")
+# нейросеть на шот: выбирает монтажёр, через API (Magnific) идут все, кроме «Другой»
+st, shot = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "other"})
+check("editor picks another engine for a shot", st == 200 and shot["engine"] == "other", f"{st} {shot if st != 200 else ''}")
 st, _ = editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "nope"})
 check("unknown engine rejected", st == 400, st)
 st, _ = writer.call("PUT", f"/api/shots/{s1['id']}", {"engine": "veo"})
 check("writer cannot pick the engine", st == 403, st)
 st, _ = editor.call("POST", f"/api/shots/{s1['id']}/generate", {})
-check("non-Veo shot is not sent to the API", st == 400, st)
+check("manual-engine shot is not sent to the API", st == 400, st)
 s2 = ep["shots"][1]
-editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "kling"})
+editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "other"})
 st, r = editor.call("POST", f"/api/episodes/{eid}/generate", {"mode": "all"})
-check("episode generate skips non-Veo shots", st == 200 and r["skipped"] >= 1, r)
+check("episode generate skips manual-engine shots", st == 200 and r["skipped"] >= 1, r)
 editor.call("PUT", f"/api/shots/{s1['id']}", {"engine": "veo"})
 editor.call("PUT", f"/api/shots/{s2['id']}", {"engine": "veo"})
 
@@ -302,12 +302,14 @@ else:
     print("  (ffmpeg не найден: проверка архива пропущена)")
 
 # длина клипа по нейросети
-st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling"})
-check("kling: duration snapped to 5/10", st == 200 and r["duration"] in (5, 10), (st, r.get("duration")))
+st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "runway"})
+check("runway: duration snapped to 5/8/10", st == 200 and r["duration"] in (5, 8, 10), (st, r.get("duration")))
 st, _ = editor.call("PUT", f"/api/shots/{s4['id']}", {"duration": 6})
-check("kling: 6 s rejected", st == 400, st)
-st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "sora", "duration": 12})
-check("sora: 12 s accepted", st == 200 and r["duration"] == 12, (st, r.get("duration")))
+check("runway: 6 s rejected", st == 400, st)
+st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling", "duration": 13})
+check("kling 3 omni: 13 s accepted", st == 200 and r["duration"] == 13, (st, r.get("duration")))
+st, _ = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "sora"})
+check("sora is retired", st == 400, st)
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "veo"})
 check("back to veo: duration fits 4/6/8", st == 200 and r["duration"] in (4, 6, 8), (st, r.get("duration")))
 st, meta = editor.call("GET", "/api/meta")
@@ -333,8 +335,47 @@ ls = longp["shots"][0]
 st, r = admin.call("PUT", f"/api/shots/{ls['id']}", {"engine": "veo"})
 veo_max = r["max_s"]
 st, r = admin.call("PUT", f"/api/shots/{ls['id']}", {"engine": "kling"})
-check("per-engine limit: kling shot limit is 10 s, veo 8 s", st == 200 and r["max_s"] == 10 and veo_max == 8, (st, r.get("max_s"), veo_max))
-check("kling limit: est within 10 s is not over", r["over_limit"] == (r["est_seconds"] > 10), (r["est_seconds"], r["over_limit"]))
+check("per-engine limit: kling shot limit is 15 s, veo 8 s", st == 200 and r["max_s"] == 15 and veo_max == 8, (st, r.get("max_s"), veo_max))
+check("kling limit: est within 15 s is not over", r["over_limit"] == (r["est_seconds"] > 15), (r["est_seconds"], r["over_limit"]))
+
+# нейросети Magnific: ссылки на героев и локации в промпте и запрос — по правилам каждой модели
+st, meta = editor.call("GET", "/api/meta")
+check("meta: generation starts as a stub", meta["gen_mode"] == "stub" and meta["veo_route"] == "magnific", (meta.get("gen_mode"), meta.get("veo_route")))
+check("meta: engines carry ref rules and tips", all("refs_note" in e and "tips" in e for e in meta["engines"]), meta["engines"])
+admin.call("PUT", f"/api/shots/{s4['id']}", {"prompt_locked": False})
+st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "seedance"})
+check("seedance: @Image tokens in prompt", st == 200 and "Character @Image1" in r["prompt"] and "shown in @Image2" in r["prompt"], r.get("prompt"))
+st, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
+check("seedance: request to seedance-2-pro with reference_images", q["url"].endswith("/v1/ai/video/seedance-2-pro-720p")
+      and len(q["body"]["reference_images"]) == 2 and q["body"]["aspect_ratio"] == "social_story_9_16", q)
+st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "wan"})
+check("wan: Image N labels, location only in words", "Character Image 1" in r["prompt"] and [x["kind"] for x in r["references"]] == ["character"]
+      and any("только персонажей" in w for w in r["warnings"]), (r.get("prompt"), r.get("warnings")))
+st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "runway"})
+check("runway: no references, warned", r["references"] == [] and any("не принимает референсы" in w for w in r["warnings"]), r.get("warnings"))
+st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "veo"})
+check("veo: natural-language references", "the character from reference image 1" in r["prompt"] and r["duration"] == 8, r.get("prompt"))
+st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling"})
+check("kling: @Image tokens", "Character @Image1" in r["prompt"], r.get("prompt"))
+st, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
+check("kling without public address: explained", "ссылкой" in q.get("warning", "") and any("ссылкой" in w for w in r["warnings"]), q)
+admin.call("PUT", "/api/settings", {"public_base_url": BASE})
+st, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
+urls = q.get("body", {}).get("image_urls", [])
+check("kling: images as signed public links", q.get("url", "").endswith("/kling-v3-omni-pro") and len(urls) == 2
+      and all(u.startswith(BASE + "/pub/") for u in urls), q)
+if urls:
+    with urllib.request.urlopen(urls[0]) as resp:
+        check("signed link opens without login", resp.status == 200 and resp.read() == PNG, resp.status)
+    bad = urls[0].replace("/pub/", "/pub/0")
+    try:
+        urllib.request.urlopen(bad)
+        check("tampered link rejected", False)
+    except urllib.error.HTTPError as e:
+        check("tampered link rejected", e.code == 404, e.code)
+admin.call("PUT", "/api/settings", {"public_base_url": ""})
+st, sset = admin.call("GET", "/api/settings")
+check("media secret not exposed", "media_secret" not in sset, list(sset))
 
 # описание поста по соцсетям
 st, e0 = writer.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_text": "общее описание"})

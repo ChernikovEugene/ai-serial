@@ -321,9 +321,11 @@ function bindChrome() {
 
 // ---------------- дубли и перегенерация выбранного шота (монтажёр) ----------------
 
-/** Как нейросеть связана со звуком шота: Veo 3 делает звук сам, у остальных реплики озвучиваются отдельно. */
+const engineOf = (s) => state.meta.engines.find((e) => e.key === s.engine) || {};
+
+/** Как нейросеть связана со звуком шота: Veo, Kling Omni и Seedance делают звук сами, у остальных реплики озвучиваются отдельно. */
 function soundNote(s) {
-  if (s.engine === "veo") return "Звук: Veo 3 сразу генерирует звук вместе с видео.";
+  if (engineOf(s).audio) return `Звук: ${engineName(s.engine)} сразу генерирует звук вместе с видео.`;
   if (s.sound_off) return "Звук: в шоте отмечено «звук не нужен».";
   return s.voiceover ? "Звук: реплики озвучиваются в ElevenLabs (галочка в карточке шота)." : "Звук: озвучка реплик выключена (включается в карточке шота).";
 }
@@ -333,7 +335,7 @@ function drawShotTools() {
   if (!box) return;
   const s = shots()[R.i];
   const open = box.open;
-  const veo = s.engine === "veo";
+  const veo = !!engineOf(s).api; // нейросеть подключена через API (все, кроме «Другой»)
   const draft = R.draft?.shot === s.id ? R.draft : {}; // набранное не пропадает, когда меняется нейросеть
   box.innerHTML = `<summary><b>Шот ${esc(s.label)}: дубли${can.gen() ? " и перегенерация" : ""}</b> ${takeBadge(s)}
       <span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span></summary>
@@ -348,7 +350,7 @@ function drawShotTools() {
       <label>Промпт для нового дубля</label>
       <textarea id="r-prompt" rows="8" class="prompt">${esc(draft.prompt ?? s.prompt)}</textarea>
       ${veo ? `<label>Что не так с прошлым дублем <span class="muted small">(запишется в историю шота)</span></label>
-      <input id="r-reason" placeholder="например: лицо поплыло, камера слишком далеко" value="${esc(draft.reason || "")}">` : `<div class="muted small" style="margin-top:6px">Через API уходит только Veo 3. Скопируйте промпт, сделайте видео в «${esc(engineName(s.engine))}» и загрузите готовый файл кнопкой «Загрузить видео» выше.</div>`}
+      <input id="r-reason" placeholder="например: лицо поплыло, камера слишком далеко" value="${esc(draft.reason || "")}">` : `<div class="muted small" style="margin-top:6px">«Другая» нейросеть не подключена к API. Скопируйте промпт, сделайте видео в «${esc(engineName(s.engine))}» и загрузите готовый файл кнопкой «Загрузить видео» выше.</div>`}
       <div class="row" style="margin-top:10px"><button class="ghost small" id="r-reset" title="Вернуть промпт из карточки шота">↻ как в карточке</button>
         <div class="spacer"></div>${veo
           ? `<button class="primary" id="r-go" ${["queued", "running"].includes(s.gen_status) ? "disabled" : ""}>▶ Сгенерировать дубль ${s.takes.length + 1}</button>`
@@ -400,7 +402,7 @@ function drawShotTools() {
       go.disabled = true;
       R.draft = null;
       await api(`/api/shots/${s.id}/generate`, { json: { prompt, reason: $("#r-reason").value } });
-      toast(`Шот ${s.label}: новый дубль отправлен в Veo`);
+      toast(`Шот ${s.label}: новый дубль отправлен в ${engineName(s.engine)}`);
       renderEpisode(E.id);
     };
   }

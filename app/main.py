@@ -1,3 +1,4 @@
+import hmac
 import json
 import re
 import uuid
@@ -9,15 +10,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, breakdown, db, exporter, feedback, schedule, veo
+from . import auth, breakdown, db, exporter, feedback, models, schedule, veo
 from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
-# В какой нейросети делается шот: выбирает монтажёр. Через API уходит только Veo, остальные приходят готовым файлом.
-ENGINES = [("veo", "Veo 3"), ("kling", "Kling"), ("sora", "Sora"), ("runway", "Runway"), ("seedance", "Seedance"),
-           ("other", "Другая")]
+# В какой нейросети делается шот: выбирает монтажёр. Все, кроме «Другой», уходят через Magnific API (app/models.py).
+ENGINES = models.ENGINES
 ENGINE_NAMES = dict(ENGINES)
 
 HOLIDAYS = {
@@ -195,12 +195,15 @@ def meta(request: Request):
         "roles": auth.ROLES,
         "role_duties": auth.ROLE_DUTIES,
         "status_flow": status_flow(request.state.user["role"]),
-        "veo_provider": s["veo_provider"], "veo_model": s["veo_model"],
+        "gen_mode": s.get("gen_mode") or "stub", "veo_route": models.veo_route(s), "veo_model": s["veo_model"],
         "max_shot_seconds": int(s["max_shot_seconds"]), "words_per_second": float(s["words_per_second"]),
         "anchor_number": int(s["anchor_number"]), "anchor_date": s["anchor_date"],
         "today": date.today().isoformat(),
-        "engines": [{"key": k, "name": n, "durations": list(breakdown.engine_durations(k)),
-                     "duration_note": breakdown.ENGINE_DURATION_NOTES.get(k, "")} for k, n in ENGINES],
+        "engines": [{"key": k, "name": m["name"], "durations": list(m["durations"]), "duration_note": m["duration_note"],
+                     "refs_note": m["refs_note"], "tips": m["tips"], "audio": m["audio"], "api": models.has_api(k),
+                     "max_refs": m["max_refs"], "first_frame": m["first_frame"], "prompt_max": m["prompt_max"],
+                     "ref_example": models.token(k, 1) if m["ref_token"] else ""}
+                    for k, m in models.MODELS.items()],
         "series_title": s.get("series_title") or "Сериал",
     }
 
@@ -271,7 +274,7 @@ def shot_checks(s: dict) -> list[dict]:
     """Готовность шота к генерации: персонаж, локация, промпт и (если звук нужен) реплика. Отдельно от shot_missing,
     который решает, можно ли утверждать сценарий."""
     has_text = any((d.get("text") or "").strip() for d in s.get("dialogue") or [])
-    has_sound = s.get("engine") == "veo" or bool(s.get("voiceover"))
+    has_sound = models.spec(s.get("engine"))["audio"] or bool(s.get("voiceover"))
     sound_ok = bool(s.get("sound_off")) or not has_sound or has_text
     return [
         {"key": "characters", "label": "Выбраны персонажи", "ok": bool(s.get("characters"))},
@@ -288,7 +291,17 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     w = breakdown.shot_warnings(s, max_s)
     if not breakdown.has_location(s) and s.get("scene") and not breakdown.location_text_mode(s):
         w.append(f"Локация «{s['scene']}» не найдена в библиотеке")
-    s["warnings"] = w + warns
+    m = models.spec(s.get("engine"))
+    if m["prompt_max"] and len(s.get("prompt") or "") > m["prompt_max"]:
+        warns.append(f"Промпт {len(s['prompt'])} знаков, а {m['name']} принимает до {m['prompt_max']}: сократите стиль или правила")
+    if s.get("prompt_locked") and refs and m["ref_token"]:
+        want = models.token(s.get("engine"), 1).rstrip("1")
+        if want.strip() not in (s.get("prompt") or ""):
+            warns.append(f"Промпт изменён вручную: для {m['name']} картинки называются «{models.token(s.get('engine'), 1)}», "
+                         "«↻ пересобрать» соберёт его заново")
+    if link := models.link_warning(s, refs, ctx.settings):
+        warns.append(link)
+    s["warnings"] = w + warns + models.image_warnings(s.get("engine"), refs)
     s["missing"] = breakdown.shot_missing(s, max_s)
     s["checks"] = shot_checks(s)
     s["ready"] = all(c["ok"] for c in s["checks"])
@@ -1371,7 +1384,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
         if (s.get("selected_take") or {}).get("source") == "upload":  # готовое видео загружено вручную: на генерацию не отправляем
             uploaded += 1
             continue
-        if s["engine"] != "veo":  # этот шот монтажёр делает в другой нейросети и пришлёт файлом
+        if not models.has_api(s["engine"]):  # этот шот монтажёр делает вручную в другой нейросети и пришлёт файлом
             if not s["selected_take_id"] or s["needs_redo"]:
                 skipped += 1
             continue
@@ -1384,7 +1397,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
     if started:
         with db.connect() as c:
             c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=?", (db.now(), eid))
-        db.log(eid, uid(request), f"Отправлено в Veo шотов: {started}")
+        db.log(eid, uid(request), f"Отправлено в генерацию шотов: {started}")
     return {"started": started, "skipped": skipped, "uploaded": uploaded}
 
 
@@ -1557,8 +1570,8 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     s = shot_response(sid)
     if s["gen_status"] in ("queued", "running"):
         raise HTTPException(400, "Этот шот уже генерируется")
-    if s["engine"] != "veo":
-        raise HTTPException(400, f"Этот шот делается в «{ENGINE_NAMES.get(s['engine'], s['engine'])}»: через API уходит только Veo. "
+    if not models.has_api(s["engine"]):
+        raise HTTPException(400, f"Этот шот делается в «{ENGINE_NAMES.get(s['engine'], s['engine'])}»: через API он не уходит. "
                                  "Сделайте видео там и загрузите готовый файл.")
     g = g or RegenerateIn()
     if g.prompt is not None and g.prompt.strip() and g.prompt.strip() != s["prompt"].strip():
@@ -1572,7 +1585,7 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
         c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=? AND status NOT IN ('posted')",
                   (db.now(), s["episode_id"]))
     note = f" — причина: {g.reason.strip()}" if g.reason.strip() else ""
-    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: новый дубль (№{len(s['takes']) + 1}) отправлен в Veo{note}")
+    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: новый дубль (№{len(s['takes']) + 1}) отправлен в {ENGINE_NAMES.get(s['engine'], s['engine'])}{note}")
     return shot_response(sid)
 
 
@@ -1877,13 +1890,14 @@ def delete_template(tid: int):
 
 # ---------- settings ----------
 
-SECRET_SETTINGS = ("veo_api_key", "github_token")
-PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "dialogue_language", "words_per_second", "max_shot_seconds"}
+SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key")
+PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
 @app.get("/api/settings")
 def read_settings():
     s = db.get_settings()
+    s.pop("media_secret", None)
     for k in SECRET_SETTINGS:
         s[k] = ("••••" + s[k][-4:]) if s.get(k) else ""
     return s
@@ -1962,6 +1976,17 @@ except Exception as e:  # noqa: BLE001 - запуск студии важнее
 
 
 # ---------- static ----------
+
+@app.get("/pub/{sig}/{rel:path}")
+def public_media(sig: str, rel: str):
+    """Картинка по подписанной ссылке: так её забирает Magnific у моделей, которые принимают картинки только ссылкой.
+    Подпись привязана к пути файла, поэтому по ней нельзя открыть другие файлы студии."""
+    f = (db.MEDIA_DIR / rel).resolve()
+    if not hmac.compare_digest(sig, models.sign(rel)) or db.MEDIA_DIR.resolve() not in f.parents or not f.is_file() \
+            or f.suffix.lower() not in IMAGE_EXT:
+        raise HTTPException(404, "Не найдено")
+    return FileResponse(f)
+
 
 app.mount("/media", StaticFiles(directory=db.MEDIA_DIR), name="media")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

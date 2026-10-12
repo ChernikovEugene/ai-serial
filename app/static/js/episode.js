@@ -67,6 +67,26 @@ function draw() {
 // Длины клипа и подсказка для нейросети шота (список приходит с сервера в /api/meta).
 const engineInfo = (key) => state.meta.engines.find((e) => e.key === key) || state.meta.engines.find((e) => e.key === "other");
 
+// Подпись картинки-референса так, как на неё ссылается промпт выбранной нейросети: @Image1, Image 1 или просто номер.
+function refTag(s, r, i) {
+  const ex = engineInfo(s.engine).ref_example;
+  if (s.composition_mode === "first_frame" && r.kind === "composition") return "первый кадр";
+  return ex && ex !== "reference image 1" ? esc(ex.replace("1", String(i + 1))) : String(i + 1);
+}
+
+// Под выбором нейросети: как она принимает героев и локации и как под неё писать (правила из документации Magnific).
+function engineHelp(s) {
+  const e = engineInfo(s.engine);
+  const facts = [
+    e.api ? (e.max_refs ? `референсов до ${e.max_refs}${e.ref_example ? `, в промпте «${e.ref_example}»` : ""}` : "без референсов") : "вручную, не через API",
+    e.audio ? "звук делает сама" : "звук отдельно (ElevenLabs)",
+    e.prompt_max ? `промпт до ${e.prompt_max} знаков` : "",
+  ].filter(Boolean);
+  return `<div class="muted small">${esc(facts.join(" · "))}</div>
+    ${e.tips.length ? `<details class="small"><summary class="muted">как заполнять для ${esc(e.name)}</summary>
+      <ul style="margin:4px 0 0 16px;padding:0">${e.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}`;
+}
+
 // The writer cannot touch a script once the producer has approved it.
 const writerLocked = () => state.meta.user.role === "writer" && !["dev", "review"].includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
@@ -113,7 +133,7 @@ export function drawHeader() {
         ${archiveButton(ep)}
         ${can.gen() ? `<select id="gen-mode" style="width:auto">
             <option value="missing">шоты без видео</option><option value="redo">шоты с правками</option><option value="all">все шоты заново</option></select>
-          <button class="primary" id="gen" title="Через API уходят шоты, которые делаются в Veo. Остальные монтажёр присылает готовым файлом.">▶ Отправить в генерацию</button>` : ""}
+          <button class="primary" id="gen" title="Через Magnific API уходят шоты всех нейросетей, кроме «Другой»: её монтажёр присылает готовым файлом.">▶ Отправить в генерацию</button>` : ""}
       </div>
       <div class="muted small" style="margin:6px 0 0 2px">${ep.arc_id ? `Арка «${esc(ep.arc_title)}» · ` : ""}${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Черновик — в очередь не идёт"}
             · <a href="#" id="move-ep">${ep.number != null ? "перенести" : "назначить дату"}</a></div>
@@ -126,7 +146,7 @@ export function drawHeader() {
           : `<span class="ok-t">✓ все шоты заполнены</span>`) : ""}
         <span>видео <b>${withVideo}/${ep.shots.length}</b></span>
         ${fixes ? `<span class="warn-t">открытых правок: <b>${fixes}</b></span>` : ""}
-        <span class="muted">${state.meta.veo_provider === "gemini" ? "Veo API" : "режим заглушки"}</span>
+        <span class="muted">${state.meta.gen_mode === "live" ? "генерация через Magnific" : "режим заглушки"}</span>
       </div>
       <div class="timeline">${ep.shots.map((s) => `<span data-jump="${s.id}" title="Шот ${esc(s.label)}: ${s.duration} с, по тексту ${s.est_seconds} с"
         class="${s.over_limit ? "over" : ""} ${s.missing.length ? "incomplete" : ""} ${s.selected_take_id ? "has-video" : ""}" style="flex:${s.duration}">${esc(s.label)}</span>`).join("")}</div>
@@ -139,7 +159,7 @@ export function drawHeader() {
       const r = await api(`/api/episodes/${E.id}/generate`, { json: { mode } });
       const rest = (r.skipped ? ` Ещё ${r.skipped} шотов делаются в других нейросетях: загрузите готовые видео в карточках шотов.` : "")
         + (r.uploaded ? ` Шотов с загруженным видео пропущено: ${r.uploaded}.` : "");
-      toast(r.started ? `Отправлено в Veo: ${r.started} шотов.${rest}` : `Через API нечего отправлять.${rest || " У всех шотов Veo уже есть видео."}`);
+      toast(r.started ? `Отправлено в генерацию: ${r.started} шотов.${rest}` : `Через API нечего отправлять.${rest || " У всех шотов уже есть видео."}`);
       renderEpisode(E.id);
     };
   }
@@ -458,14 +478,15 @@ function shotHtml(s) {
         <div class="small ${s.over_limit ? "warn-t" : "muted"}">нужно ~${s.est_seconds} с${s.speech_seconds ? ` · речь ${s.speech_seconds} с · ${s.words} сл.` : ""}</div></div>
       ${s.missing.length ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
       <ul class="checks ${s.ready ? "all" : ""}" title="Когда все пункты отмечены, рамка шота становится зелёной">${s.checks.map((c) => `<li class="${c.ok ? "ok" : ""}">${c.ok ? "✓" : "○"} ${esc(c.label)}</li>`).join("")}</ul>
-      ${can.gen() ? `<div><label>Нейросеть</label><select data-f="engine">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select></div>` : ""}
+      ${can.gen() ? `<div><label>Нейросеть</label><select data-f="engine">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
+        ${engineHelp(s)}</div>` : ""}
       <div><label>Длина клипа</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${engineInfo(s.engine).durations.map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
         <div class="muted small">${s.forced_8 ? "8 с: с референсами Veo 3.1 делает только 8 с" : esc(engineInfo(s.engine).duration_note)}</div></div>
       <div>${takeBadge(s)} ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span>` : ""}
         ${s.needs_redo ? `<span class="badge warn">нужна перегенерация</span>` : ""}</div>
       ${s.takes.at(-1)?.error ? `<div class="small err-t">${esc(s.takes.at(-1).error)}</div>` : ""}
       ${sel?.video_path ? `<video src="${media(sel.video_path)}" controls preload="metadata"></video>` : ""}
-      ${can.gen() ? `${s.engine === "veo" ? "" : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>`}
+      ${can.gen() ? `${engineInfo(s.engine).api ? "" : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>`}
            <button data-act="copyprompt">Скопировать промпт</button>
            <label class="btn primary up-label">Загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>` : ""}
     </div>
@@ -499,10 +520,10 @@ function shotHtml(s) {
       </div>
       <fieldset class="sound-zone" ${s.sound_off ? "disabled" : ""}>
         <legend>Звук</legend>
-        ${s.engine === "veo"
-          ? `<div class="muted small">Veo 3 сразу генерирует звук вместе с видео: речь, шумы, музыку.</div>`
+        ${engineInfo(s.engine).audio
+          ? `<div class="muted small">${esc(engineName(s.engine))} сразу генерирует звук вместе с видео: речь и шумы.</div>`
           : `<label class="check"><input type="checkbox" data-f="voiceover" ${s.voiceover ? "checked" : ""}> Озвучить реплики в ElevenLabs</label>`}
-      <label>Реплики <span class="muted small">— берутся из кавычек в сценарии; красным подсвечено то, что не удалось определить. «в кадре»: персонаж говорит, идёт в Veo; «закадр»: голос за кадром, озвучивается отдельно</span></label>
+      <label>Реплики <span class="muted small">— берутся из кавычек в сценарии; красным подсвечено то, что не удалось определить. «в кадре»: персонаж говорит, идёт в промпт нейросети; «закадр»: голос за кадром, озвучивается отдельно</span></label>
       <div class="dialogue">${s.dialogue.map((d, i) => `
         <div class="dlg-line ${d.voice === "voiceover" ? "vo" : ""} ${d.auto ? "auto" : ""}" data-line="${i}">
           <input data-d="speaker" class="${!d.speaker || (d.voice !== "voiceover" && !d.asset_id) ? "need-red" : ""}" value="${esc(d.speaker)}" placeholder="Кто говорит" list="char-names-${s.id}" ${roW}>
@@ -530,8 +551,8 @@ function shotHtml(s) {
       <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
         <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
       <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>
-      <label>${s.engine === "veo" ? "Уйдёт в Veo как изображения (до 3); в промпте они называются «reference image 1, 2…»" : "Картинки-референсы: в промпте они названы «reference image 1, 2…», прикладывайте в этом порядке"}</label>
-      <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${i + 1} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
+      <label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
+      <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${refTag(s, r, i)} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
     </div>` : ""}
   </div>`;
 }
@@ -553,7 +574,7 @@ function replaceShot(s) {
 async function uploadComposition(s, file) {
   const fd = new FormData(); fd.append("image", file);
   replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "POST", body: fd }));
-  toast("Референс композиции добавлен — он попадёт в промпт и в запрос к Veo");
+  toast("Референс композиции добавлен — он попадёт в промпт и в запрос к нейросети");
 }
 
 function bindShot(s) {
