@@ -64,6 +64,9 @@ function draw() {
   drawTab();
 }
 
+// Длины клипа и подсказка для нейросети шота (список приходит с сервера в /api/meta).
+const engineInfo = (key) => state.meta.engines.find((e) => e.key === key) || state.meta.engines.find((e) => e.key === "other");
+
 // The writer cannot touch a script once the producer has approved it.
 const writerLocked = () => state.meta.user.role === "writer" && !["dev", "review"].includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
@@ -456,8 +459,8 @@ function shotHtml(s) {
       ${s.missing.length ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
       <ul class="checks ${s.ready ? "all" : ""}" title="Когда все пункты отмечены, рамка шота становится зелёной">${s.checks.map((c) => `<li class="${c.ok ? "ok" : ""}">${c.ok ? "✓" : "○"} ${esc(c.label)}</li>`).join("")}</ul>
       ${can.gen() ? `<div><label>Нейросеть</label><select data-f="engine">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select></div>` : ""}
-      <div><label>Длина клипа</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${[4, 6, 8].map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
-        ${s.forced_8 ? `<div class="muted small">8 с: с референсами Veo 3.1 делает только 8 с</div>` : ""}</div>
+      <div><label>Длина клипа</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${engineInfo(s.engine).durations.map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
+        <div class="muted small">${s.forced_8 ? "8 с: с референсами Veo 3.1 делает только 8 с" : esc(engineInfo(s.engine).duration_note)}</div></div>
       <div>${takeBadge(s)} ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span>` : ""}
         ${s.needs_redo ? `<span class="badge warn">нужна перегенерация</span>` : ""}</div>
       ${s.takes.at(-1)?.error ? `<div class="small err-t">${esc(s.takes.at(-1).error)}</div>` : ""}
@@ -538,6 +541,13 @@ function replaceShot(s) {
   if (i >= 0) E.ep.shots[i] = { ...E.ep.shots[i], ...s };
   const el = $(`#shot-${s.id}`);
   if (el) { el.outerHTML = shotHtml(E.ep.shots[i]); bindShot(E.ep.shots[i]); }
+  if (s.episode_status && s.episode_status !== E.ep.status) { // все шоты заполнены — сервер сам перевёл серию в «ТЗ готово»
+    E.ep.status = s.episode_status;
+    E.ep.incomplete = E.ep.shots.filter((x) => x.missing.length).length;
+    drawHeader();
+    if (writerLocked()) drawTab(); // сценарист после «ТЗ готово» уже не правит шоты — перерисовать карточки только для чтения
+    if (s.episode_status === "approved") toast("Все шоты заполнены — серия переведена в «ТЗ готово», монтажёр её увидит");
+  }
 }
 
 async function uploadComposition(s, file) {

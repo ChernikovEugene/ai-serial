@@ -30,12 +30,14 @@ export async function renderCalendar() {
 
   view().innerHTML = `
     <div class="row"><h1>Календарь постинга</h1><div class="spacer"></div>
+      ${can.edit() ? `<button id="add-ev">+ Своё событие</button>` : ""}
+      <button id="my-evs">Свои события</button>
       <a class="btn" href="#/series">Серии</a>
       <div class="row cal-nav"><button id="prev">←</button><b class="month-title">${MONTHS[first.getMonth()]} ${first.getFullYear()}</b><button id="next">→</button>
         <button class="ghost" id="today">Сегодня</button></div></div>
     <div class="row cal-filters">
       ${LAYERS.map(([k, name]) => `<label class="check"><input type="checkbox" data-layer="${k}" ${show[k] ? "checked" : ""}> ${name}</label>`).join("")}
-      <span class="muted small">1 серия в день. Перетащите серию на другой день; клик по числу — своё событие или новая арка. Своё событие можно растянуть на несколько дней: потяните «⟩» на другой день.</span>
+      <span class="muted small">1 серия в день. Перетащите серию на другой день. Свои события: кнопка «+ Своё событие» или клик по числу; клик по событию — изменить или удалить, «⟩» — растянуть на несколько дней.</span>
     </div>
     <div class="cal">
       ${["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => `<div class="cal-h">${d}</div>`).join("")}
@@ -62,6 +64,8 @@ export async function renderCalendar() {
   $("#prev").onclick = () => { cursor.setMonth(cursor.getMonth() - 1); renderCalendar(); };
   $("#next").onclick = () => { cursor.setMonth(cursor.getMonth() + 1); renderCalendar(); };
   $("#today").onclick = () => { cursor = null; renderCalendar(); };
+  $("#my-evs").onclick = () => eventsListDialog();
+  if ($("#add-ev")) $("#add-ev").onclick = () => eventDialog(null, today);
   $$(".cal-ep").forEach((el) => el.addEventListener("click", () => (location.hash = `#/episodes/${el.dataset.id}`)));
   bindArcDividers(renderCalendar);
   $$("[data-create]").forEach((b) => (b.onclick = () => newEpisodeDialog({ date: b.dataset.create })));
@@ -71,13 +75,13 @@ export async function renderCalendar() {
     await api(`/api/calendar-events/${b.dataset.delev}`, { method: "DELETE" }); renderCalendar();
   }));
   if (!can.edit()) return;
-  $$("[data-addev]").forEach((b) => (b.onclick = () => addEventDialog(b.dataset.addev)));
+  $$("[data-addev]").forEach((b) => (b.onclick = () => eventDialog(null, b.dataset.addev, { arcButton: true })));
   // Своё событие: клик — изменить, «⟩» на последнем дне — потянуть на другой день, чтобы растянуть или сжать
   const allEvs = Object.values(evs).flat();
   $$("[data-evid]").forEach((el) => (el.onclick = (e) => {
     if (e.target.closest("[data-delev]")) return;
     const ev = allEvs.find((x) => x.id === +el.dataset.evid);
-    if (ev) editEventDialog(ev);
+    if (ev) eventDialog({ id: ev.id, date: ev.ev_date, end_date: ev.ev_end, title: ev.title, yearly: ev.yearly, color: ev.color });
   }));
   let growing = null;
   $$("[data-grow]").forEach((h) => {
@@ -98,7 +102,7 @@ export async function renderCalendar() {
         const ev = growing; growing = null;
         const shift = Math.round((new Date(day.dataset.date + "T00:00:00") - new Date(ev.occ_start + "T00:00:00")) / 86400000);
         if (shift < 0) return toast("Событие не может заканчиваться раньше начала", true);
-        await api(`/api/calendar-events/${ev.id}`, { method: "PUT", json: { date: ev.ev_date, title: ev.title, yearly: ev.yearly, end_date: addDays(ev.ev_date, shift) } });
+        await api(`/api/calendar-events/${ev.id}`, { method: "PUT", json: { date: ev.ev_date, title: ev.title, yearly: ev.yearly, color: ev.color, end_date: addDays(ev.ev_date, shift) } });
         return renderCalendar();
       }
       if (!dragId) return;
@@ -116,50 +120,77 @@ function evChip(ev) {
   if (ev.builtin) return `<div class="cal-ev">🎉 ${esc(ev.title)}</div>`;
   const edit = can.edit();
   const multi = ev.ev_end > ev.ev_date;
-  const label = ev.first || new Date(ev.date + "T00:00:00").getDay() === 1 ? `🎉 ${esc(ev.title)}` : `<span class="ev-cont">↳ ${esc(ev.title)}</span>`;
-  return `<div class="cal-ev own ${multi ? "multi" : ""} ${ev.first ? "first" : ""} ${ev.last ? "last" : ""}" ${edit ? `data-evid="${ev.id}" title="Нажмите, чтобы изменить"` : ""}>
+  const label = ev.first || new Date(ev.date + "T00:00:00").getDay() === 1 ? `${esc(ev.title)}` : `<span class="ev-cont">↳ ${esc(ev.title)}</span>`;
+  return `<div style="--ec:${evColor(ev)}" class="cal-ev own ${multi ? "multi" : ""} ${ev.first ? "first" : ""} ${ev.last ? "last" : ""}" ${edit ? `data-evid="${ev.id}" title="Нажмите, чтобы изменить"` : ""}>
     ${label}${ev.first && edit ? ` <span data-delev="${ev.id}" title="Удалить">✕</span>` : ""}${ev.last && edit ? `<span class="ev-grow" draggable="true" data-grow="${ev.id}" title="Потяните на другой день, чтобы растянуть событие">⟩</span>` : ""}</div>`;
 }
 
-function editEventDialog(ev) {
-  const m = modal(`<h1>Своё событие</h1>
-    <label>Название</label><input id="ev-title" value="${esc(ev.title)}">
-    <div class="row"><div style="flex:1"><label>С</label><input id="ev-from" type="date" value="${ev.ev_date}"></div>
-      <div style="flex:1"><label>По (включительно)</label><input id="ev-to" type="date" value="${ev.ev_end}"></div></div>
-    <label class="check"><input type="checkbox" id="ev-yearly" ${ev.yearly ? "checked" : ""}> повторять каждый год</label>
-    <div class="row" style="margin-top:14px"><button class="ghost danger" id="ev-del">Удалить</button>
-      <div class="spacer"></div><button class="ghost" id="cancel">Отмена</button><button class="primary" id="save">Сохранить</button></div>`);
+// Цвета своих событий: отличаются от праздников (оранжевый текст с 🎉) и от статусов серий
+const EV_COLORS = ["#7c5cff", "#2f80ed", "#00a389", "#e0457b", "#f2994a", "#6b7280"];
+const evColor = (ev) => ev.color || EV_COLORS[0];
+const fmtD = (iso) => iso.split("-").reverse().join(".");
+
+/** Добавить (ev = null) или изменить своё событие: название, даты, повтор, цвет. */
+function eventDialog(ev, iso, { arcButton = false } = {}) {
+  const e = ev || { date: iso, end_date: iso, title: "", yearly: false, color: "" };
+  let color = evColor(e);
+  const m = modal(`<h1>${ev ? "Своё событие" : "Новое событие"}</h1>
+    <label>Название (праздник, инфоповод, тренд, съёмка)</label><input id="ev-title" value="${esc(e.title)}" placeholder="Например: выход нового iPhone">
+    <div class="row"><div style="flex:1"><label>С</label><input id="ev-from" type="date" value="${e.date}"></div>
+      <div style="flex:1"><label>По (включительно)</label><input id="ev-to" type="date" value="${e.end_date || e.date}"></div></div>
+    <label>Цвет в календаре</label>
+    <div class="ev-colors">${EV_COLORS.map((c) => `<button type="button" class="ev-color ${c === color ? "on" : ""}" data-color="${c}" style="--ec:${c}" aria-label="цвет ${c}"></button>`).join("")}</div>
+    <label class="check"><input type="checkbox" id="ev-yearly" ${e.yearly ? "checked" : ""}> повторять каждый год</label>
+    <div class="row" style="margin-top:14px">${ev ? `<button class="ghost danger" id="ev-del">Удалить</button>` : ""}
+      ${arcButton ? `<button class="ghost" id="new-arc">▶ Начать новую арку с этого дня</button>` : ""}
+      <div class="spacer"></div><button class="ghost" id="cancel">Отмена</button><button class="primary" id="save">${ev ? "Сохранить" : "Добавить"}</button></div>`);
+  $$(".ev-color", m).forEach((b) => (b.onclick = () => {
+    color = b.dataset.color;
+    $$(".ev-color", m).forEach((x) => x.classList.toggle("on", x === b));
+  }));
+  $("#ev-from", m).onchange = () => { if ($("#ev-to", m).value < $("#ev-from", m).value) $("#ev-to", m).value = $("#ev-from", m).value; };
   $("#cancel", m).onclick = closeModal;
-  $("#ev-del", m).onclick = async () => {
-    if (!confirm("Удалить событие?")) return;
+  if (arcButton) $("#new-arc", m).onclick = () => arcDialog({ date: iso, onChange: renderCalendar });
+  if (ev) $("#ev-del", m).onclick = async () => {
+    if (!confirm(`Удалить событие «${ev.title}»?`)) return;
     await api(`/api/calendar-events/${ev.id}`, { method: "DELETE" }); closeModal(); renderCalendar();
   };
   $("#save", m).onclick = async () => {
-    const from = $("#ev-from", m).value, to = $("#ev-to", m).value;
-    if (!$("#ev-title", m).value.trim() || !from) return toast("Укажите название и день начала", true);
+    const title = $("#ev-title", m).value.trim(), from = $("#ev-from", m).value, to = $("#ev-to", m).value;
+    if (!title || !from) return toast("Укажите название и день начала", true);
     if (to && to < from) return toast("Событие не может заканчиваться раньше начала", true);
-    await api(`/api/calendar-events/${ev.id}`, { method: "PUT", json: { date: from, title: $("#ev-title", m).value, yearly: $("#ev-yearly", m).checked, end_date: to === from ? "" : to } });
-    closeModal(); renderCalendar();
-  };
-}
-
-function addEventDialog(iso) {
-  const m = modal(`<h1>Событие на ${iso.split("-").reverse().join(".")}</h1>
-    <label>Название (праздник, инфоповод, тренд)</label><input id="ev-title" placeholder="Например: выход нового iPhone">
-    <label>Если событие идёт несколько дней — до какого дня включительно (можно оставить пустым)</label>
-    <input id="ev-to" type="date" min="${iso}" style="width:200px">
-    <label class="check"><input type="checkbox" id="ev-yearly"> повторять каждый год</label>
-    <div class="row" style="margin-top:14px"><button class="ghost" id="new-arc">▶ Начать новую арку с этого дня</button>
-      <div class="spacer"></div><button class="ghost" id="cancel">Отмена</button><button class="primary" id="save">Добавить</button></div>`);
-  $("#cancel", m).onclick = closeModal;
-  $("#new-arc", m).onclick = () => arcDialog({ date: iso, onChange: renderCalendar });
-  $("#save", m).onclick = async () => {
-    const title = $("#ev-title", m).value.trim();
-    if (!title) return toast("Введите название", true);
-    const to = $("#ev-to", m).value;
-    if (to && to < iso) return toast("Событие не может заканчиваться раньше начала", true);
-    await api("/api/calendar-events", { json: { date: iso, title, yearly: $("#ev-yearly", m).checked, end_date: to === iso ? "" : to } });
+    const json = { date: from, title, yearly: $("#ev-yearly", m).checked, color, end_date: !to || to === from ? "" : to };
+    if (ev) await api(`/api/calendar-events/${ev.id}`, { method: "PUT", json });
+    else await api("/api/calendar-events", { json });
     closeModal(); renderCalendar();
   };
   setTimeout(() => $("#ev-title", m).focus(), 50);
+}
+
+/** Меню «Свои события»: список всех событий с переходом к месяцу, правкой и удалением. */
+async function eventsListDialog() {
+  const list = await api("/api/calendar-events");
+  const edit = can.edit();
+  const m = modal(`<h1>Свои события</h1>
+    <p class="muted small">В календаре свои события — цветная плашка, праздники — оранжевый текст с 🎉.</p>
+    ${list.length ? `<div class="ev-list">${list.map((ev) => `<div class="ev-row" style="--ec:${evColor(ev)}">
+        <span class="ev-dot"></span>
+        <div class="ev-main"><b>${esc(ev.title)}</b><div class="muted small">${fmtD(ev.date)}${ev.end_date ? ` – ${fmtD(ev.end_date)}` : ""}${ev.yearly ? " · каждый год" : ""}</div></div>
+        <button class="ghost small" data-goto="${ev.date}">Показать</button>
+        ${edit ? `<button class="ghost small" data-ed="${ev.id}">Изменить</button><button class="ghost small danger" data-rm="${ev.id}">Удалить</button>` : ""}
+      </div>`).join("")}</div>` : `<p class="muted">Своих событий пока нет.</p>`}
+    <div class="row" style="margin-top:14px">${edit ? `<button class="primary" id="ev-new">+ Добавить событие</button>` : ""}<div class="spacer"></div><button class="ghost" id="cancel">Закрыть</button></div>`);
+  $("#cancel", m).onclick = closeModal;
+  if (edit) $("#ev-new", m).onclick = () => eventDialog(null, state.meta.today);
+  $$("[data-goto]", m).forEach((b) => (b.onclick = () => {
+    const d = new Date(b.dataset.goto + "T00:00:00");
+    cursor = new Date(d.getFullYear(), d.getMonth(), 1); closeModal(); renderCalendar();
+  }));
+  $$("[data-ed]", m).forEach((b) => (b.onclick = () => eventDialog(list.find((x) => x.id === +b.dataset.ed))));
+  $$("[data-rm]", m).forEach((b) => (b.onclick = async () => {
+    const ev = list.find((x) => x.id === +b.dataset.rm);
+    if (!confirm(`Удалить событие «${ev.title}»?`)) return;
+    await api(`/api/calendar-events/${ev.id}`, { method: "DELETE" });
+    renderCalendar(); eventsListDialog();
+  }));
 }

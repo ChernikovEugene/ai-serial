@@ -159,6 +159,7 @@ TABLES = {
         title TEXT NOT NULL,
         yearly INTEGER NOT NULL DEFAULT 0,
         end_date TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '',
         created_by INTEGER""",
     "arcs": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,

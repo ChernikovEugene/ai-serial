@@ -16,6 +16,37 @@ Recognised inside the text (all optional):
 import re
 
 ALLOWED_DURATIONS = (4, 6, 8)
+# Какие длины клипа умеет каждая нейросеть (секунды) и подсказка под выбором длины в карточке шота.
+# Данные по открытым описаниям API на октябрь 2026, при смене версий моделей сверять с документацией.
+ENGINE_DURATIONS = {
+    "veo": (4, 6, 8),
+    "kling": (5, 10),
+    "sora": (4, 8, 12),
+    "runway": (5, 10),
+    "seedance": (5, 10),
+    "other": (4, 5, 6, 8, 10, 12),
+}
+ENGINE_DURATION_NOTES = {
+    "veo": "Veo 3.1: 4, 6 или 8 с. С референсами персонажей — только 8 с.",
+    "kling": "Kling 2.x: 5 или 10 с за одну генерацию.",
+    "sora": "Sora 2: 4, 8 или 12 с.",
+    "runway": "Runway Gen-4: 5 или 10 с, нужен стартовый кадр.",
+    "seedance": "Seedance: 5 или 10 с (часть сервисов принимает 2–12 с).",
+    "other": "Другая нейросеть: укажите длину, которую она поддерживает.",
+}
+
+
+def engine_durations(engine: str | None) -> tuple:
+    return ENGINE_DURATIONS.get(engine or "veo", ENGINE_DURATIONS["other"])
+
+
+def snap_duration(engine: str | None, duration: int, est: float = 0) -> int:
+    """Длина, которую умеет нейросеть: прежняя, если подходит, иначе ближайшая, в которую влезает шот."""
+    allowed = engine_durations(engine)
+    if duration in allowed:
+        return duration
+    need = max(duration or 0, est or 0)
+    return next((d for d in allowed if d >= need), allowed[-1])
 MAX_REFERENCE_IMAGES = 3
 MAX_DIALOGUE_LINES_PER_SHOT = 2
 
@@ -706,6 +737,8 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
 
 def forced_duration(refs: list[dict], shot: dict, settings: dict) -> int | None:
     """Veo 3.1 only renders 8 s clips when reference images are attached."""
+    if (shot.get("engine") or "veo") != "veo":
+        return None
     if refs and (shot.get("composition_mode") != "first_frame" or not shot.get("composition_image")) \
             and "3.1" in settings.get("veo_model", ""):
         return 8

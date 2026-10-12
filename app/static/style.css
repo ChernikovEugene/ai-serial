@@ -107,7 +107,8 @@ label.check input { width: auto; }
 .cal-num { font-weight: 700; font-size: 13px; cursor: pointer; width: fit-content; padding: 0 4px; border-radius: 4px; }
 .cal-num:hover { background: var(--panel2); }
 .cal-ev { font-size: 11px; color: var(--warn); }
-.cal-ev.own { color: var(--accent2); }
+.cal-ev.own { --ec: #7c5cff; color: var(--ec); font-weight: 600; background: color-mix(in srgb, var(--ec) 14%, transparent);
+  border-left: 3px solid var(--ec); border-radius: 6px; padding: 1px 6px; }
 .cal-ev span { cursor: pointer; color: var(--muted); }
 .cal-ep { font-size: 12px; border-radius: 7px; padding: 4px 6px; cursor: pointer; border-left: 3px solid var(--c);
   background: color-mix(in srgb, var(--c) 14%, var(--panel2)); overflow: hidden; }
@@ -540,12 +541,21 @@ select option { background: var(--panel); color: var(--text); }
 
 /* свои события календаря на несколько дней */
 .cal-ev.own { cursor: pointer; }
-.cal-ev.own.multi { background: color-mix(in srgb, var(--accent2) 12%, transparent); padding: 1px 4px; margin: 0 -6px; border-radius: 0; }
+.cal-ev.own.multi { padding: 1px 4px; margin: 0 -6px; border-radius: 0; border-left: 0; }
+.cal-ev.own.multi.first { border-left: 3px solid var(--ec); }
 .cal-ev.own.multi.first { margin-left: 0; border-radius: 6px 0 0 6px; }
 .cal-ev.own.multi.last { margin-right: 0; border-radius: 0 6px 6px 0; }
 .cal-ev.own.multi.first.last { border-radius: 6px; }
 .cal-ev .ev-cont { cursor: pointer; color: inherit; opacity: .7; }
-.cal-ev .ev-grow { float: right; cursor: ew-resize; color: var(--accent2); padding: 0 2px; user-select: none; }
+.cal-ev .ev-grow { float: right; cursor: ew-resize; color: var(--ec, var(--accent2)); padding: 0 2px; user-select: none; }
+.ev-colors { display: flex; gap: 8px; margin: 4px 0 8px; }
+.ev-color { width: 28px; height: 28px; padding: 0; border-radius: 50%; background: var(--ec); border: 2px solid transparent; }
+.ev-color.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--ec); }
+.ev-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.ev-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; border-left: 4px solid var(--ec);
+  background: color-mix(in srgb, var(--ec) 8%, transparent); }
+.ev-row .ev-main { flex: 1; min-width: 0; }
+.ev-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ec); flex: none; }
 
 /* мобильная версия: меню сверху полосой, страницы в одну колонку */
 @media (max-width: 800px) {

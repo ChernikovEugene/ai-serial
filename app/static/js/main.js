@@ -51,15 +51,15 @@ async function route() {
   } catch (e) { console.error(e); }
 }
 
-// Оформление: «Старый» — исходный дизайн, «Тёмный» и «Светлый» — «Графит» (static/themes.css).
-const THEMES = [["old", "Старый"], ["dark", "Тёмный"], ["light", "Светлый"]];
-function currentTheme() { return document.documentElement.classList.contains("grafit") ? document.documentElement.dataset.theme : "old"; }
+// Оформление «Графит» (static/themes.css): тёмная и светлая тема. По умолчанию светлая.
+const THEMES = [["dark", "Тёмный"], ["light", "Светлый"]];
+function currentTheme() { return document.documentElement.dataset.theme === "dark" ? "dark" : "light"; }
 function markTheme() { $$("[data-theme-set]").forEach((b) => b.classList.toggle("on", b.dataset.themeSet === currentTheme())); }
 function setTheme(t) {
   const html = document.documentElement;
-  html.classList.toggle("grafit", t !== "old");
-  if (t === "old") delete html.dataset.theme; else html.dataset.theme = t;
-  try { localStorage.setItem("theme", t); } catch {}
+  html.classList.add("grafit");
+  html.dataset.theme = t === "dark" ? "dark" : "light";
+  try { localStorage.setItem("theme", html.dataset.theme); } catch {}
   markTheme();
 }
 
@@ -84,7 +84,6 @@ function drawNav(section) {
     <div class="nav-foot">
       <div class="theme-switch" title="Оформление студии (запоминается в этом браузере)">
         ${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
-      Veo: ${state.meta.veo_provider === "gemini" ? `<span class="badge ok">API</span>` : `<span class="badge warn">заглушка</span>`}
       <div class="me"><b>${esc(u.name)}</b><br><span class="muted small">${esc(state.meta.roles[u.role])}</span></div>
       <button class="ghost small" id="logout">Выйти</button>
     </div>`;
