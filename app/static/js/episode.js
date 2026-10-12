@@ -120,7 +120,7 @@ export function drawHeader() {
       <div class="summary">
         <span><b>${ep.shots.length}</b> шотов</span>
         <span>хронометраж <b>${fmtDur(ep.total_seconds)}</b> <span class="muted">(по тексту ~${fmtDur(ep.est_seconds)})</span></span>
-        ${ep.over_limit ? `<span class="warn-t">⚠ не влезают в ${max} с: <b>${ep.over_limit}</b></span>` : `<span class="ok-t">✓ все шоты влезают в клип</span>`}
+        ${ep.over_limit ? `<span class="warn-t">⚠ не влезают в клип: <b>${ep.over_limit}</b></span>` : `<span class="ok-t">✓ все шоты влезают в клип</span>`}
         ${ep.shots.length ? (ep.incomplete
           ? `<span class="warn-t" title="Согласовать сценарий можно, когда у каждого шота выбрана локация, заполнены реплики и текст влезает в лимит">заполнено <b>${filled}/${ep.shots.length}</b> шотов</span>`
           : `<span class="ok-t">✓ все шоты заполнены</span>`) : ""}
@@ -376,7 +376,7 @@ async function analyze(text) {
     <table class="atable"><thead><tr><th>Шот</th><th>Клип</th><th>Нужно</th><th>Речь</th><th></th></tr></thead><tbody>
     ${a.shots.map((s) => `<tr class="${s.over ? "over" : ""}" title="${esc(s.warnings.join("\n"))}">
       <td>${esc(s.label)}</td><td>${s.duration} с</td><td>${s.est_seconds} с</td>
-      <td>${s.speech_seconds ? `${s.speech_seconds} с · ${s.words} сл.` : "—"}</td><td style="width:90px">${fitMeter(s.est_seconds, max)}</td></tr>`).join("")}
+      <td>${s.speech_seconds ? `${s.speech_seconds} с · ${s.words} сл.` : "—"}</td><td style="width:90px">${fitMeter(s.est_seconds, s.max_seconds || max)}</td></tr>`).join("")}
     </tbody></table>
     ${a.notes.length ? `<ul class="warnings">${a.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
     <div class="muted small" style="margin-top:6px">Речь ≈ ${state.meta.words_per_second} слова/с (меняется в настройках). Клип Veo — 4, 6 или 8 с.</div>`;
@@ -454,7 +454,7 @@ function shotHtml(s) {
   <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
     <div class="side">
       <div class="shot-no">Шот ${esc(s.label)}</div>
-      <div>${fitMeter(s.est_seconds, max)}
+      <div>${fitMeter(s.est_seconds, s.max_seconds || max)}
         <div class="small ${s.over_limit ? "warn-t" : "muted"}">нужно ~${s.est_seconds} с${s.speech_seconds ? ` · речь ${s.speech_seconds} с · ${s.words} сл.` : ""}</div></div>
       ${s.missing.length ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
       <ul class="checks ${s.ready ? "all" : ""}" title="Когда все пункты отмечены, рамка шота становится зелёной">${s.checks.map((c) => `<li class="${c.ok ? "ok" : ""}">${c.ok ? "✓" : "○"} ${esc(c.label)}</li>`).join("")}</ul>

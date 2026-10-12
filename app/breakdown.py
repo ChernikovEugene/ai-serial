@@ -40,6 +40,13 @@ def engine_durations(engine: str | None) -> tuple:
     return ENGINE_DURATIONS.get(engine or "veo", ENGINE_DURATIONS["other"])
 
 
+def engine_max_seconds(engine: str | None, veo_max: int) -> int:
+    """Сколько секунд максимум влезает в один клип нейросети. Для Veo — из настроек (лимит модели и разбивки сценария)."""
+    if (engine or "veo") == "veo":
+        return veo_max
+    return max(engine_durations(engine))
+
+
 def snap_duration(engine: str | None, duration: int, est: float = 0) -> int:
     """Длина, которую умеет нейросеть: прежняя, если подходит, иначе ближайшая, в которую влезает шот."""
     allowed = engine_durations(engine)
@@ -516,7 +523,7 @@ def _handle_inline(line: str, idx: AssetIndex, add_dialogue) -> bool:
 def shot_warnings(shot: dict, max_s: int) -> list[str]:
     w = []
     if shot["est_seconds"] > max_s:
-        w.append(f"Не влезает в Veo: ~{shot['est_seconds']:.1f} с при лимите {max_s} с "
+        w.append(f"Не влезает в клип: ~{shot['est_seconds']:.1f} с при лимите {max_s} с "
                  f"(речь {shot['speech_seconds']:.1f} с, {shot['words']} слов). Сократите реплики или разбейте шот.")
     elif shot["est_seconds"] > max_s - 0.8:
         w.append(f"Впритык: ~{shot['est_seconds']:.1f} с из {max_s} с — актёр может не успеть договорить")

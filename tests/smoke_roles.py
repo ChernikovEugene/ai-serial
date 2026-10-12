@@ -304,12 +304,14 @@ else:
 # длина клипа по нейросети
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling"})
 check("kling: duration snapped to 5/10", st == 200 and r["duration"] in (5, 10), (st, r.get("duration")))
+check("kling: clip limit is 10 s", st == 200 and r["max_seconds"] == 10, (st, r.get("max_seconds")))
 st, _ = editor.call("PUT", f"/api/shots/{s4['id']}", {"duration": 6})
 check("kling: 6 s rejected", st == 400, st)
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "sora", "duration": 12})
 check("sora: 12 s accepted", st == 200 and r["duration"] == 12, (st, r.get("duration")))
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "veo"})
 check("back to veo: duration fits 4/6/8", st == 200 and r["duration"] in (4, 6, 8), (st, r.get("duration")))
+check("veo: clip limit from settings", st == 200 and r["max_seconds"] == 8, (st, r.get("max_seconds")))
 st, meta = editor.call("GET", "/api/meta")
 check("meta: engines carry durations and notes", all(e["durations"] and e["duration_note"] for e in meta["engines"]), meta["engines"])
 

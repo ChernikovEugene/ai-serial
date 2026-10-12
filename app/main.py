@@ -284,15 +284,17 @@ def shot_checks(s: dict) -> list[dict]:
 
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     _, refs, warns = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
-    w = breakdown.shot_warnings(s, ctx.max_s)
+    max_s = breakdown.engine_max_seconds(s.get("engine"), ctx.max_s)  # лимит клипа выбранной нейросети
+    s["max_seconds"] = max_s
+    w = breakdown.shot_warnings(s, max_s)
     if not breakdown.has_location(s) and s.get("scene") and not breakdown.location_text_mode(s):
         w.append(f"Локация «{s['scene']}» не найдена в библиотеке")
     s["warnings"] = w + warns
-    s["missing"] = breakdown.shot_missing(s, ctx.max_s)
+    s["missing"] = breakdown.shot_missing(s, max_s)
     s["checks"] = shot_checks(s)
     s["ready"] = all(c["ok"] for c in s["checks"])
     s["revisions"] = max(0, len(takes) - 1)  # how many times this shot was re-generated
-    s["over_limit"] = s["est_seconds"] > ctx.max_s
+    s["over_limit"] = s["est_seconds"] > max_s
     s["forced_8"] = bool(breakdown.forced_duration(refs, s, ctx.settings))
     s["references"] = refs
     s["takes"] = takes
