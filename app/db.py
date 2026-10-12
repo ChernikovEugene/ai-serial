@@ -1,5 +1,6 @@
 """SQLite storage. Plain sqlite3, JSON stored in TEXT columns, additive migrations on startup."""
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -8,7 +9,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
+# На хостинге папку данных задаёт STUDIO_DATA_DIR (постоянный диск); локально — data/ рядом с кодом.
+DATA_DIR = Path(os.environ.get("STUDIO_DATA_DIR") or ROOT / "data")
 MEDIA_DIR = DATA_DIR / "media"
 DB_PATH = DATA_DIR / "studio.db"
 
@@ -159,6 +161,7 @@ TABLES = {
         title TEXT NOT NULL,
         yearly INTEGER NOT NULL DEFAULT 0,
         end_date TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '',
         created_by INTEGER""",
     "arcs": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -249,7 +252,7 @@ def _columns(spec: str) -> list[tuple[str, str]]:
 
 
 def init():
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     MEDIA_DIR.mkdir(exist_ok=True)
     with connect() as c:
         # v1 had episodes.number NOT NULL; v2 needs it nullable (backlog) -> rebuild keeping data

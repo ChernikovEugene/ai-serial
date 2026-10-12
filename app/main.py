@@ -199,7 +199,8 @@ def meta(request: Request):
         "max_shot_seconds": int(s["max_shot_seconds"]), "words_per_second": float(s["words_per_second"]),
         "anchor_number": int(s["anchor_number"]), "anchor_date": s["anchor_date"],
         "today": date.today().isoformat(),
-        "engines": [{"key": k, "name": n} for k, n in ENGINES],
+        "engines": [{"key": k, "name": n, "durations": list(breakdown.engine_durations(k)),
+                     "duration_note": breakdown.ENGINE_DURATION_NOTES.get(k, "")} for k, n in ENGINES],
         "series_title": s.get("series_title") or "Сериал",
     }
 
@@ -255,6 +256,7 @@ def refresh_shot(s: dict, ctx: Ctx) -> dict:
     """Recompute estimate, Veo-forced duration and (unless locked) the prompt."""
     s["est_seconds"], s["speech_seconds"] = breakdown.estimate(s["action"], s["dialogue"], ctx.wps)
     s["words"] = sum(breakdown.words(d["text"]) for d in s["dialogue"])
+    s["duration"] = breakdown.snap_duration(s.get("engine"), s["duration"], s["est_seconds"])
     prompt, refs, _ = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
     forced = breakdown.forced_duration(refs, s, ctx.settings)
     if forced and s["duration"] != forced:
@@ -282,15 +284,16 @@ def shot_checks(s: dict) -> list[dict]:
 
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     _, refs, warns = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
-    w = breakdown.shot_warnings(s, ctx.max_s)
+    s["max_s"] = max_s = breakdown.engine_limit(s.get("engine"), ctx.settings)  # лимит шота у каждой нейросети свой
+    w = breakdown.shot_warnings(s, max_s)
     if not breakdown.has_location(s) and s.get("scene") and not breakdown.location_text_mode(s):
         w.append(f"Локация «{s['scene']}» не найдена в библиотеке")
     s["warnings"] = w + warns
-    s["missing"] = breakdown.shot_missing(s, ctx.max_s)
+    s["missing"] = breakdown.shot_missing(s, max_s)
     s["checks"] = shot_checks(s)
     s["ready"] = all(c["ok"] for c in s["checks"])
     s["revisions"] = max(0, len(takes) - 1)  # how many times this shot was re-generated
-    s["over_limit"] = s["est_seconds"] > ctx.max_s
+    s["over_limit"] = s["est_seconds"] > max_s
     s["forced_8"] = bool(breakdown.forced_duration(refs, s, ctx.settings))
     s["references"] = refs
     s["takes"] = takes
@@ -356,6 +359,19 @@ def incomplete_shots(eid: int) -> list[str]:
     if not ep["shots"]:
         return ["В серии нет ни одного шота"]
     return [f"Шот {s['label']}: {'; '.join(s['missing'])}" for s in ep["shots"] if s["missing"]]
+
+
+def promote_if_ready(eid: int, user_id) -> None:
+    """Серия в «Пишется ТЗ» сама переходит в «ТЗ готово», как только все её шоты заполнены, чтобы монтажёр её увидел.
+    Из «ТЗ на проверке» не переводим: туда серию возвращает монтажёр, и решать, что ТЗ исправлено, должен человек."""
+    if load_episode_row(eid)["status"] != "dev":
+        return
+    shots = get_episode(eid)["shots"]
+    if not shots or any(s["missing"] or not s["ready"] for s in shots):  # все шоты заполнены и все галочки зелёные
+        return
+    with db.connect() as c:
+        c.execute("UPDATE episodes SET status='approved', updated_at=? WHERE id=? AND status='dev'", (db.now(), eid))
+    db.log(eid, user_id, "Все шоты заполнены: статус «Пишется ТЗ» → «ТЗ готово» (автоматически)")
 
 
 def user_names() -> dict:
@@ -920,7 +936,8 @@ def get_schedule(start: str, end: str, request: Request):
                 first, span = hit
                 events.append({"id": ev["id"], "date": d.isoformat(), "title": ev["title"], "builtin": False,
                                "first": first == d, "last": (d - first).days == span, "occ_start": first.isoformat(),
-                               "ev_date": ev["date"], "ev_end": ev["end_date"] or ev["date"], "yearly": bool(ev["yearly"])})
+                               "ev_date": ev["date"], "ev_end": ev["end_date"] or ev["date"], "yearly": bool(ev["yearly"]),
+                               "color": ev["color"]})
         d += timedelta(days=1)
     arcs = [a for a in list_arcs() if a["start_date"] and start <= a["start_date"] <= end]
     return {"episodes": eps, "events": events, "arcs": arcs}
@@ -946,6 +963,12 @@ class CalendarEventIn(BaseModel):
     title: str
     yearly: bool = False
     end_date: str = ""
+    color: str = ""  # цвет своего события в календаре, «#rrggbb» (пусто — цвет по умолчанию)
+
+
+def _event_color(v: str) -> str:
+    v = (v or "").strip()
+    return v if re.fullmatch(r"#[0-9a-fA-F]{6}", v) else ""
 
 
 def _event_values(e: CalendarEventIn) -> tuple:
@@ -963,16 +986,24 @@ def _event_values(e: CalendarEventIn) -> tuple:
 def add_calendar_event(e: CalendarEventIn, request: Request):
     d, title, yearly, end = _event_values(e)
     with db.connect() as c:
-        c.execute("INSERT INTO calendar_events(date, title, yearly, end_date, created_by) VALUES (?,?,?,?,?)",
-                  (d, title, yearly, end, uid(request)))
+        c.execute("INSERT INTO calendar_events(date, title, yearly, end_date, color, created_by) VALUES (?,?,?,?,?,?)",
+                  (d, title, yearly, end, _event_color(e.color), uid(request)))
     return {"ok": True}
+
+
+@app.get("/api/calendar-events")
+def list_calendar_events():
+    """Все свои события для меню «Свои события» в календаре (ближайшие сверху)."""
+    with db.connect() as c:
+        return db.rows(c.execute("SELECT id, date, title, yearly, end_date, color FROM calendar_events ORDER BY date, id"))
 
 
 @app.put("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.writer)])
 def update_calendar_event(ev_id: int, e: CalendarEventIn):
     d, title, yearly, end = _event_values(e)
     with db.connect() as c:
-        c.execute("UPDATE calendar_events SET date=?, title=?, yearly=?, end_date=? WHERE id=?", (d, title, yearly, end, ev_id))
+        c.execute("UPDATE calendar_events SET date=?, title=?, yearly=?, end_date=?, color=? WHERE id=?",
+                  (d, title, yearly, end, _event_color(e.color), ev_id))
     return {"ok": True}
 
 
@@ -1035,6 +1066,7 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
     db.log(eid, user_id, "Серия создана")
     if e.script.strip():
         apply_breakdown(eid)
+        promote_if_ready(eid, user_id)
     return eid
 
 
@@ -1133,6 +1165,7 @@ def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = 
         db.log(eid, uid(request), "Сценарий изменён")
         if reparse:
             apply_breakdown(eid)
+            promote_if_ready(eid, uid(request))
     return get_episode(eid)
 
 
@@ -1296,6 +1329,7 @@ def apply_breakdown(eid: int):
 def breakdown_episode(eid: int, request: Request):
     writer_may_edit(request, load_episode_row(eid)["status"])
     apply_breakdown(eid)
+    promote_if_ready(eid, uid(request))
     return get_episode(eid)
 
 
@@ -1315,6 +1349,7 @@ def set_cast(eid: int, body: CastIn, request: Request):
                 c.execute("DELETE FROM episode_cast WHERE episode_id=? AND asset_id=?", (eid, item["asset_id"]))
     db.log(eid, uid(request), "Изменены версии персонажей/локаций для серии")
     apply_breakdown(eid)
+    promote_if_ready(eid, uid(request))
     return get_episode(eid)
 
 
@@ -1425,10 +1460,12 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
             writer_may_edit(request, load_episode_row(s["episode_id"])["status"])
     if data.pop("clear_location", False):
         s["location_version_id"] = None
-    if "duration" in data and data["duration"] not in breakdown.ALLOWED_DURATIONS:
-        raise HTTPException(400, "Veo поддерживает длительность 4, 6 или 8 секунд")
     if data.get("engine") not in (None, *ENGINE_NAMES):
         raise HTTPException(400, "Неизвестная нейросеть")
+    engine = data.get("engine") or s.get("engine")
+    if "duration" in data and data["duration"] not in breakdown.engine_durations(engine):
+        raise HTTPException(400, f"«{ENGINE_NAMES.get(engine, engine)}» поддерживает длительность: "
+                                 + ", ".join(str(d) for d in breakdown.engine_durations(engine)) + " с")
     if data.get("location_mode") not in (None, "library", "text"):
         raise HTTPException(400, "Неизвестный способ задать локацию")
     if data.get("composition_mode") not in (None, "reference", "first_frame"):
@@ -1444,7 +1481,8 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
     refresh_shot(s, ctx)
     with db.connect() as c:
         save_shot(c, s)
-    return shot_response(sid)
+    promote_if_ready(s["episode_id"], uid(request))
+    return {**shot_response(sid), "episode_status": load_episode_row(s["episode_id"])["status"]}
 
 
 def shot_texts(s: dict) -> str:

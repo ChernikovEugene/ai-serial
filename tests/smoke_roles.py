@@ -218,6 +218,11 @@ check("shot has checks", [c["key"] for c in s4["checks"]] == ["characters", "loc
 check("veo shot without replica: sound check open", not s4["ready"] and not s4["checks"][3]["ok"], s4["checks"])
 st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"sound_off": True})
 check("writer ticks sound_off -> ready", st == 200 and r["sound_off"] and r["ready"], (st, r.get("checks")))
+# все шоты заполнены и зелёные -> серия сама переходит в «ТЗ готово»; вернуть в «Пишется ТЗ», чтобы проверять дальше
+check("all shots green -> episode auto-moves to approved", st == 200 and r.get("episode_status") == "approved", (st, r.get("episode_status")))
+st, _ = writer.call("PUT", f"/api/shots/{s4['id']}", {"camera": "Slow push-in"})
+check("writer locked after auto approve", st == 403, st)
+admin.call("POST", f"/api/episodes/{ep4['id']}/status", {"status": "dev"})
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling", "voiceover": True, "sound_off": False})
 check("editor sets voiceover; replica required again", st == 200 and r["voiceover"] and not r["ready"], (st, r.get("checks")))
 # --- камера по умолчанию статичная ---
@@ -295,6 +300,41 @@ if ffm:
     check("archive video is 1080x1920 at 60 fps", "1080x1920" in info and "60 fps" in info, info[-400:])
 else:
     print("  (ffmpeg не найден: проверка архива пропущена)")
+
+# длина клипа по нейросети
+st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling"})
+check("kling: duration snapped to 5/10", st == 200 and r["duration"] in (5, 10), (st, r.get("duration")))
+st, _ = editor.call("PUT", f"/api/shots/{s4['id']}", {"duration": 6})
+check("kling: 6 s rejected", st == 400, st)
+st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "sora", "duration": 12})
+check("sora: 12 s accepted", st == 200 and r["duration"] == 12, (st, r.get("duration")))
+st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "veo"})
+check("back to veo: duration fits 4/6/8", st == 200 and r["duration"] in (4, 6, 8), (st, r.get("duration")))
+st, meta = editor.call("GET", "/api/meta")
+check("meta: engines carry durations and notes", all(e["durations"] and e["duration_note"] for e in meta["engines"]), meta["engines"])
+
+# свои события календаря: цвет, список, удаление
+st, _ = writer.call("POST", "/api/calendar-events", {"date": "2030-05-01", "title": "Съёмка", "color": "#e0457b", "end_date": "2030-05-03"})
+st, evs = writer.call("GET", "/api/calendar-events")
+ev = next((e for e in evs if e["title"] == "Съёмка"), None) if st == 200 else None
+check("calendar event saved with color", ev and ev["color"] == "#e0457b" and ev["end_date"] == "2030-05-03", evs)
+st, sched = writer.call("GET", "/api/schedule?start=2030-05-01&end=2030-05-03")
+check("schedule events carry color", st == 200 and [e["color"] for e in sched["events"] if not e["builtin"]] == ["#e0457b"] * 3, sched.get("events"))
+writer.call("PUT", f"/api/calendar-events/{ev['id']}", {"date": "2030-05-01", "title": "Съёмка", "color": "javascript:x"})
+st, evs = writer.call("GET", "/api/calendar-events")
+check("bad color ignored", next(e for e in evs if e["id"] == ev["id"])["color"] == "", evs)
+st, _ = writer.call("DELETE", f"/api/calendar-events/{ev['id']}")
+st, evs = writer.call("GET", "/api/calendar-events")
+check("calendar event deleted", all(e["id"] != ev["id"] for e in evs), evs)
+
+# лимит «не влезает» зависит от нейросети шота
+st, longp = writer.call("POST", "/api/episodes", {"title": "Длинный шот", "script": "Шот 1\nЛОКАЦИЯ: @Лофт\nМаша идёт по комнате, останавливается у окна, долго смотрит на улицу, потом медленно возвращается к дивану и садится, не отводя взгляда от двери.\n"})
+ls = longp["shots"][0]
+st, r = admin.call("PUT", f"/api/shots/{ls['id']}", {"engine": "veo"})
+veo_max = r["max_s"]
+st, r = admin.call("PUT", f"/api/shots/{ls['id']}", {"engine": "kling"})
+check("per-engine limit: kling shot limit is 10 s, veo 8 s", st == 200 and r["max_s"] == 10 and veo_max == 8, (st, r.get("max_s"), veo_max))
+check("kling limit: est within 10 s is not over", r["over_limit"] == (r["est_seconds"] > 10), (r["est_seconds"], r["over_limit"]))
 
 # описание поста по соцсетям
 st, e0 = writer.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_text": "общее описание"})
