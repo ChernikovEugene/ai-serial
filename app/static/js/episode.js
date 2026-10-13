@@ -226,7 +226,7 @@ function titleRow(ep) {
     <div style="flex:1;min-width:220px">
       <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
     </div>
-    ${canWrite() || can.admin() ? `<button class="ghost urgent-btn ${ep.urgent ? "on" : ""}" id="ep-urgent" title="Срочная серия: наверх в «Продакшне» и значок в меню">🔥 ${ep.urgent ? "Срочно" : "Не срочно"}</button>`
+    ${canWrite() || can.admin() ? `<button class="ghost urgent-btn ${ep.urgent ? "on" : ""}" id="ep-urgent" title="${ep.urgent ? "Серия срочная. Нажмите, чтобы снять отметку" : "Срочная серия: на выбранный день, наверх в «Продакшне» и значок в меню"}">🔥 ${ep.urgent ? "Срочно" : "Сделать срочной"}</button>`
       : ep.urgent ? `<span class="badge urgent-badge">🔥 Срочно</span>` : ""}
     ${statusSelect(ep.status, 'id="ep-status"')}`;
 }

@@ -731,3 +731,12 @@ textarea.need { border-color: var(--warn); }
 .unready { padding-left: 18px; } .unready li { margin: 4px 0; }
 .nq-when.off { opacity: .4; pointer-events: none; }
 .urgent-day { margin: 4px 0 0 26px; } .urgent-day label { margin-top: 4px; }
+
+/* «Просмотр и правки» на узком экране: одна колонка, рамка ролика не шире экрана */
+@media (max-width: 1200px) { .review { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 800px) {
+  .review > * { min-width: 0; }
+  .review > .review-left { max-width: min(360px, 100%); }
+  .phone { border-radius: 28px; padding: 8px; }
+  .ph-screen { border-radius: 21px; }
+}
