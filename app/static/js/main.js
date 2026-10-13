@@ -17,6 +17,14 @@ let lastHash = location.hash;
 /** Стартовая страница роли: сценарист — «Серии», монтажёр — «Продакшн», остальные — «Статус». */
 const homeFor = (role) => ({ writer: "#/series", editor: "#/production" }[role] || "#/status");
 
+/** Разделы, которых нет в меню роли: «Команда», «Настройки», «Заявки» — только админу; сценаристу не нужны
+ * «Статус», «Продакшн» и «Публикация» (это доска нейронщика и отчётность продюсера). */
+const HIDDEN = { writer: ["status", "production", "publish"] };
+function hidden(section) {
+  const role = state.meta?.user?.role;
+  return (["team", "settings", "reports"].includes(section) && role !== "admin") || (HIDDEN[role] || []).includes(section);
+}
+
 async function route() {
   if (window.__scriptDirty?.() && !confirm("Сценарий не сохранён. Уйти без сохранения?")) {
     history.replaceState(null, "", lastHash);
@@ -35,6 +43,7 @@ async function route() {
   drawNav(section || "status");
   try {
     if (!section) { location.replace(homeFor(state.meta.user.role)); return; }
+    if (hidden(section)) { location.replace(homeFor(state.meta.user.role)); return; }
     if (section === "status") return await renderStatus();
     if (section === "production") return await renderProduction();
     if (section === "queue") { location.replace("#/series"); return; }
@@ -45,7 +54,6 @@ async function route() {
     if (section === "library") return await renderAssets("character");
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
-    if (["team", "settings", "reports"].includes(section) && !can.admin()) { location.replace(homeFor(state.meta.user.role)); return; }
     if (section === "team") return await renderTeam();
     if (section === "tech") return await renderTech();
     if (section === "settings") return await renderSettings();
@@ -77,10 +85,10 @@ function drawNav(section) {
     <div class="brand"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04221e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="logo-text"><b>Студия</b><small>PARI · сериал</small></span></div>
     <button class="burger ghost" id="burger" aria-label="Меню" aria-expanded="false">☰</button>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
-    <a href="#/status" data-nav="status">Статус</a>
+    ${hidden("status") ? "" : `<a href="#/status" data-nav="status">Статус</a>`}
     <a href="#/series" data-nav="series">Серии</a>
-    <a href="#/production" data-nav="production">Продакшн</a>
-    <a href="#/publish" data-nav="publish">Публикация</a>
+    ${hidden("production") ? "" : `<a href="#/production" data-nav="production">Продакшн</a>`}
+    ${hidden("publish") ? "" : `<a href="#/publish" data-nav="publish">Публикация</a>`}
     <a href="#/characters" data-nav="library">Библиотека</a>
     <a href="#/tech" data-nav="tech">Тех. требования</a>
     ${can.admin() ? `<a href="#/team" data-nav="team">Команда</a>
