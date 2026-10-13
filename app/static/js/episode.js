@@ -6,10 +6,24 @@ import {
 import { attachMentions } from "./mention.js";
 import { attachHighlight } from "./highlight.js";
 import { drawReview, stopReview } from "./review.js";
+import { seenEpisode } from "./notify.js";
 
 export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "" };
 export const TAKE_STATUS = { queued: ["в очереди", "run"], running: ["генерация…", "run"], done: ["готово", "ok"],
-  stub: ["заглушка", "warn"], error: ["ошибка", "err"], idle: ["не создано", ""] };
+  stub: ["заглушка", "warn"], error: ["ошибка", "err"], cancelled: ["отменено", ""], idle: ["не создано", ""] };
+
+/** Режим звука шота: «речь и звук» / «только естественный фон» / «без звука». */
+export const soundMode = (s) => s.sound_mode || (s.sound_off ? "off" : "full");
+
+/** Отмена генерации дубля, который ещё в очереди или генерируется. */
+export async function cancelTake(s) {
+  const t = s.takes.at(-1);
+  if (!t || !["queued", "running"].includes(t.status)) return;
+  if (!confirm(`Отменить генерацию шота ${s.label}? Если нейросеть уже начала работу, кредиты могут списаться.`)) return;
+  await api(`/api/takes/${t.id}/cancel`, { json: {} });
+  toast(`Шот ${s.label}: генерация отменена`);
+  renderEpisode(E.id);
+}
 
 export const SCRIPT_HELP = `<details class="help script-help" open><summary>Формат сценария</summary>
   <code>Шот 1</code>, <code>Шот 2</code>… — каждый шот отдельным блоком. Всё, что ниже пометки, относится к этому шоту.<br>
@@ -28,6 +42,7 @@ export async function renderEpisode(id, tab) {
   if (tab) E.tab = ["script", "shots", "review", "main", "history"].includes(tab) ? tab : "script";
   const [ep] = await Promise.all([api(`/api/episodes/${id}`), loadAssets()]);
   E.ep = ep;
+  seenEpisode(id); // уведомление «серия сгенерировалась» прочитано
   if (!E.sel || !ep.shots.some((s) => s.id === E.sel)) E.sel = ep.shots[0]?.id ?? null;
   E.sig = signature(ep);
   draw();
@@ -156,7 +171,14 @@ export function drawHeader() {
     $("#gen").onclick = async () => {
       const mode = $("#gen-mode").value;
       if (mode === "all" && !confirm("Сгенерировать заново все шоты? Каждый шот получит новый дубль (это платно при работе через API).")) return;
-      const r = await api(`/api/episodes/${E.id}/generate`, { json: { mode } });
+      let r = await api(`/api/episodes/${E.id}/generate`, { json: { mode } });
+      if (r.unready?.length) {
+        const go = await unreadyDialog(r.unready, r.started);
+        if (go) {
+          const f = await api(`/api/episodes/${E.id}/generate`, { json: { mode, force: true } });
+          r = { ...f, started: r.started + f.started };
+        }
+      }
       const rest = (r.skipped ? ` Ещё ${r.skipped} шотов делаются в других нейросетях: загрузите готовые видео в карточках шотов.` : "")
         + (r.uploaded ? ` Шотов с загруженным видео пропущено: ${r.uploaded}.` : "");
       toast(r.started ? `Отправлено в генерацию: ${r.started} шотов.${rest}` : `Через API нечего отправлять.${rest || " У всех шотов уже есть видео."}`);
@@ -171,6 +193,25 @@ export function drawHeader() {
   }));
 }
 
+/** Защита от пустых шотов: что не заполнено. Продюсер может отправить и их — «под свою ответственность». */
+function unreadyDialog(list, started) {
+  return new Promise((done) => {
+    const m = modal(`<h1>Не все шоты заполнены</h1>
+      <p>${started ? `Заполненные шоты (${started}) ушли в генерацию. ` : ""}Эти шоты не отправлены: заполните пункты ниже.
+        Если пункт не нужен, закройте его явно: в действии или локации текстом поставьте «-», в персонажах выберите «без персонажей».</p>
+      <ul class="unready">${list.map((s) => `<li><a href="#" data-goshot="${s.id}"><b>Шот ${esc(s.label)}</b></a>: ${s.items.map(esc).join("; ")}</li>`).join("")}</ul>
+      <div class="row" style="margin-top:14px">${can.admin() ? `<button class="ghost danger" id="ur-force">Отправить всё равно (под мою ответственность)</button>` : ""}
+        <div class="spacer"></div><button class="primary" id="ur-ok">Понятно</button></div>`);
+    $("#ur-ok", m).onclick = () => { closeModal(); done(false); };
+    $("#ur-force", m) && ($("#ur-force", m).onclick = () => { closeModal(); done(true); });
+    $$("[data-goshot]", m).forEach((a) => (a.onclick = (e) => {
+      e.preventDefault(); closeModal(); done(false);
+      E.sel = +a.dataset.goshot; E.tab = "shots"; draw();
+      setTimeout(() => $(`#shot-${E.sel}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    }));
+  });
+}
+
 /** Назад, номер, название и статус серии: общая строка обеих шапок. */
 function titleRow(ep) {
   return `<button class="ghost" id="ep-back" title="Назад">←</button>
@@ -178,11 +219,18 @@ function titleRow(ep) {
     <div style="flex:1;min-width:220px">
       <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
     </div>
+    ${canWrite() || can.admin() ? `<button class="ghost urgent-btn ${ep.urgent ? "on" : ""}" id="ep-urgent" title="Срочная серия: наверх в «Продакшне» и значок в меню">🔥 ${ep.urgent ? "Срочно" : "Не срочно"}</button>`
+      : ep.urgent ? `<span class="badge urgent-badge">🔥 Срочно</span>` : ""}
     ${statusSelect(ep.status, 'id="ep-status"')}`;
 }
 
 function bindTitleRow(ep) {
   $("#ep-back").onclick = () => goBack(`#/series/${ep.arc_id ?? "none"}`);
+  $("#ep-urgent") && ($("#ep-urgent").onclick = async () => {
+    await api(`/api/episodes/${E.id}`, { method: "PUT", json: { urgent: !E.ep.urgent } });
+    toast(E.ep.urgent ? "Отметка «срочно» снята" : "Серия отмечена как срочная");
+    renderEpisode(E.id);
+  });
   $("#ep-status").onchange = async (e) => {
     const status = e.target.value;
     try {
@@ -482,7 +530,8 @@ function shotHtml(s) {
         ${engineHelp(s)}</div>` : ""}
       <div><label>Длина клипа</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${engineInfo(s.engine).durations.map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
         <div class="muted small">${s.forced_8 ? "8 с: с референсами Veo 3.1 делает только 8 с" : esc(engineInfo(s.engine).duration_note)}</div></div>
-      <div>${takeBadge(s)} ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span>` : ""}
+      <div>${takeBadge(s)} ${can.gen() && ["queued", "running"].includes(s.gen_status) ? `<button class="ghost small danger" data-act="cancel">Отменить</button>` : ""}
+        ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span>` : ""}
         ${s.needs_redo ? `<span class="badge warn">нужна перегенерация</span>` : ""}</div>
       ${s.takes.at(-1)?.error ? `<div class="small err-t">${esc(s.takes.at(-1).error)}</div>` : ""}
       ${sel?.video_path ? `<video src="${media(sel.video_path)}" controls preload="metadata"></video>` : ""}
@@ -507,8 +556,9 @@ function shotHtml(s) {
         return `<span class="chip" style="--c:${a ? assetColor(a) : "var(--line)"}">${esc(c.name)}
           <select data-char="${i}" ${roW}>${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
           ${canWrite() ? `<button data-rmchar="${i}" title="Убрать">✕</button>` : ""}</span>`;
-      }).join("") || `<span class="muted small">никого (например, макро или пейзаж)</span>`}
+      }).join("") || (s.no_characters ? `<span class="chip">без персонажей ${canWrite() ? `<button data-nochar="0" title="Убрать">✕</button>` : ""}</span>` : `<span class="muted small need-t">не выбраны</span>`)}
         ${canWrite() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>
+          ${s.characters.length || s.no_characters ? "" : `<option value="none">— без персонажей (пейзаж, макро)</option>`}
           ${chars.filter((a) => !s.characters.some((c) => c.asset_id === a.id)).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>` : ""}
       </div>
       <label>Действие</label><textarea data-f="action" rows="3" ${roW}>${esc(s.action)}</textarea>
@@ -518,8 +568,10 @@ function shotHtml(s) {
           <option value="" ${camCustom ? "selected" : ""}>свой вариант…</option></select>
         ${camCustom ? `<input data-f="camera" value="${esc(CAMERA_PRESETS.some(([, v]) => v === s.camera) ? "" : s.camera)}" placeholder="Опишите камеру: например, медленный облёт вокруг героини" ${roW}>` : ""}
       </div>
-      <fieldset class="sound-zone" ${s.sound_off ? "disabled" : ""}>
-        <legend>Звук</legend>
+      <label>Звук</label>
+      <div class="seg sound-mode">${Object.entries(state.meta.sound_modes).map(([k, n]) => `<button data-sound="${k}" class="${soundMode(s) === k ? "on" : ""}" ${canWrite() || can.gen() ? "" : "disabled"}>${n}</button>`).join("")}</div>
+      <fieldset class="sound-zone" ${soundMode(s) === "full" ? "" : "disabled"}>
+        <legend>Речь</legend>
         ${engineInfo(s.engine).audio
           ? `<div class="muted small">${esc(engineName(s.engine))} сразу генерирует звук вместе с видео: речь и шумы.</div>`
           : `<label class="check"><input type="checkbox" data-f="voiceover" ${s.voiceover ? "checked" : ""}> Озвучить реплики в ElevenLabs</label>`}
@@ -533,7 +585,6 @@ function shotHtml(s) {
           ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
       ${canWrite() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
       </fieldset>
-      <label class="check no-sound"><input type="checkbox" data-f="sound_off" ${s.sound_off ? "checked" : ""} ${canWrite() || can.gen() ? "" : "disabled"}> Звук не нужен (зона звука отключается, проверка пройдена)</label>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     </div>
@@ -625,8 +676,11 @@ function bindShot(s) {
   if (locVer) locVer.onchange = () => save({ location_version_id: +locVer.value });
   $$("[data-char]", el).forEach((sel) => (sel.onchange = () => save({ characters: s.characters.map((c, i) => (i === +sel.dataset.char ? { ...c, version_id: +sel.value } : c)) })));
   $$("[data-rmchar]", el).forEach((b) => (b.onclick = () => save({ characters: s.characters.filter((_, i) => i !== +b.dataset.rmchar) })));
+  $$("[data-sound]", el).forEach((b) => (b.onclick = () => save({ sound_mode: b.dataset.sound })));
+  $("[data-nochar]", el) && ($("[data-nochar]", el).onclick = () => save({ no_characters: false }));
   const add = $("[data-addchar]", el);
   if (add) add.onchange = () => {
+    if (add.value === "none") return save({ no_characters: true });
     const a = state.assets.find((x) => x.id === +add.value);
     if (a) save({ characters: [...s.characters, { asset_id: a.id, name: a.name, version_id: E.ep.cast[a.id] || a.active_version_id }] });
   };
@@ -660,6 +714,7 @@ function bindShot(s) {
     if (act === "rebuild") return replaceShot(await api(`/api/shots/${s.id}/rebuild-prompt`, { json: {} }));
     if (act === "rmcomp") return replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "DELETE" }));
     if (act === "copyprompt") return copyText(s.prompt);
+    if (act === "cancel") return cancelTake(s);
   }));
 }
 
@@ -688,6 +743,7 @@ export function newEpisodeDialog(opts = {}) {
     </div>
     <label>Арка</label><select id="ne-arc"><option value="">— без арки —</option></select>
     <label class="check"><input type="checkbox" id="ne-backlog"> пока без даты (в черновики)</label>
+    <label class="check urgent-check"><input type="checkbox" id="ne-urgent"> 🔥 Срочная серия <span class="muted small">— сразу наверх в «Продакшне» и значок в меню</span></label>
     <label>Сценарий — вставьте текст или загрузите файл (можно и позже)</label>
     <div class="editor-wrap"><textarea id="ne-script" rows="12" placeholder="Шот 1&#10;..."></textarea></div>
     <input id="ne-file" type="file" accept=".txt,.md,.fountain,text/plain" style="margin-top:6px">
@@ -706,7 +762,7 @@ export function newEpisodeDialog(opts = {}) {
   $("#create", m).onclick = async () => {
     const ep = await api("/api/episodes", { json: {
       title: $("#ne-title", m).value.trim(), script: $("#ne-script", m).value, arc_id: +$("#ne-arc", m).value || null,
-      date: $("#ne-backlog", m).checked ? null : $("#ne-date", m).value || null, backlog: $("#ne-backlog", m).checked } });
+      date: $("#ne-backlog", m).checked ? null : $("#ne-date", m).value || null, backlog: $("#ne-backlog", m).checked, urgent: $("#ne-urgent", m).checked } });
     closeModal();
     location.hash = `#/episodes/${ep.id}/script`;
   };

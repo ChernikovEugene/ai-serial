@@ -119,6 +119,20 @@ check("editor cannot change shot content", st == 403, st)
 st, _ = writer.call("PUT", f"/api/shots/{s1['id']}", {"prompt": "x"})
 check("writer cannot change prompt", st == 403, st)
 
+# защита от пустых шотов: незаполненный шот в генерацию не уходит, пункты закрываются явно
+st, cur = editor.call("GET", f"/api/episodes/{eid}")
+cur1 = next(x for x in cur["shots"] if x["id"] == s1["id"])
+if not cur1["ready"]:
+    st, _ = editor.call("POST", f"/api/shots/{s1['id']}/generate", {"reason": "проверка"})
+    check("unready shot is not generated", st == 400, st)
+    admin.call("PUT", f"/api/shots/{s1['id']}", {"sound_mode": "ambient", **({} if cur1["characters"] else {"no_characters": True}),
+                                                 **({} if cur1["action"].strip() else {"action": "-"})})
+st, cur = editor.call("GET", f"/api/episodes/{eid}")
+check("shot closed explicitly -> ready", next(x for x in cur["shots"] if x["id"] == s1["id"])["ready"],
+      next(x for x in cur["shots"] if x["id"] == s1["id"])["checks"])
+st, r = editor.call("POST", f"/api/shots/{s1['id']}/generate", {"reason": "длина", "duration": 7})
+check("regenerate: duration outside the model is rejected", st == 400, st)
+
 # re-generation with edited prompt
 st, shot = editor.call("POST", f"/api/shots/{s1['id']}/generate", {"prompt": "Better prompt v2", "reason": "лицо поплыло"})
 check("editor regenerates with new prompt", st == 200 and shot["prompt"] == "Better prompt v2", f"{st} {shot if st != 200 else ''}")
@@ -214,8 +228,8 @@ check("character without image keeps the name", "Character Костя" in ep3["s
 
 # --- готовность шота, звук, архив, ключи нейросетей ---
 s4 = ep4["shots"][0]
-check("shot has checks", [c["key"] for c in s4["checks"]] == ["characters", "location", "prompt", "sound"], s4.get("checks"))
-check("veo shot without replica: sound check open", not s4["ready"] and not s4["checks"][3]["ok"], s4["checks"])
+check("shot has checks", [c["key"] for c in s4["checks"]] == ["characters", "location", "action", "duration", "prompt", "sound"], s4.get("checks"))
+check("veo shot without replica: sound check open", not s4["ready"] and not s4["checks"][-1]["ok"], s4["checks"])
 st, r = writer.call("PUT", f"/api/shots/{s4['id']}", {"sound_off": True})
 check("writer ticks sound_off -> ready", st == 200 and r["sound_off"] and r["ready"], (st, r.get("checks")))
 # все шоты заполнены и зелёные -> серия сама переходит в «ТЗ готово»; вернуть в «Пишется ТЗ», чтобы проверять дальше
@@ -384,6 +398,62 @@ st, e1 = writer.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_s
 check("post: per-network texts saved", st == 200 and e1["post_same"] == 0 and e1["post_text_tiktok"] == "для тикток" and e1["post_text_reels"] == "для рилс" and e1["post_text"] == "общее описание", e1.get("post_same"))
 st, _ = editor.call("PUT", f"/api/episodes/{ep4['id']}?reparse=false", {"post_text_shorts": "x"})
 check("post: editor cannot write descriptions", st == 403, st)
+
+# --- «Сообщить о проблеме»: заявки видит только админ, снимок не публичный ---
+st, r = writer.call("POST", "/api/reports", form={"kind": "bug", "text": "Не сохраняется синопсис", "page": "#/series", "viewport": "1440×900",
+                                                  "image": ("s.png", PNG)})
+check("report: writer sends a report with screenshot", st == 200 and r.get("id"), (st, r))
+st, _ = writer.call("POST", "/api/reports", form={"kind": "bug", "text": "  "})
+check("report: empty text rejected", st == 400, st)
+st, _ = writer.call("GET", "/api/reports")
+check("report: writer cannot read reports", st == 403, st)
+st, rl = admin.call("GET", "/api/reports")
+mine = next((x for x in rl["reports"] if x["id"] == r["id"]), {}) if st == 200 else {}
+check("report: admin sees it with author and screenshot", mine.get("author") == "wr" and mine.get("has_shot") and mine.get("shot_path") is None, mine)
+st, _ = writer.call("GET", f"/api/reports/{r['id']}/shot")
+check("report: screenshot closed for writer", st == 403, st)
+st, _ = admin.call("PUT", f"/api/reports/{r['id']}", {"status": "rejected"})
+check("report: admin changes status", st == 200, st)
+st, b = admin.call("GET", "/api/badges")
+check("badges: admin sees new reports count", st == 200 and "reports" in b, b)
+
+# --- срочная серия ---
+st, ue = writer.call("POST", "/api/episodes", {"title": "Срочная", "synopsis": "к событию", "urgent": True})
+check("urgent: writer creates urgent episode", st == 200 and ue["urgent"] == 1, (st, ue.get("urgent") if st == 200 else ue))
+st, b = editor.call("GET", "/api/badges")
+check("urgent: badge counts it", st == 200 and b["urgent"] >= 1, b)
+st, prod = editor.call("GET", "/api/production")
+check("urgent: production carries the flag", any(e["id"] == ue["id"] and e["urgent"] for e in prod))
+st, ue2 = writer.call("PUT", f"/api/episodes/{ue['id']}?reparse=false", {"urgent": False})
+check("urgent: writer unchecks it", st == 200 and ue2["urgent"] == 0, st)
+
+# --- отмена генерации и уведомление «серия сгенерировалась» нейронщику ---
+admin.call("POST", f"/api/episodes/{eid}/status", {"status": "approved", "force": True})  # серия на этапе нейронщика
+for _ in range(30):  # дождаться, пока закончатся прошлые генерации этой серии
+    st, sh = editor.call("GET", f"/api/episodes/{eid}")
+    if not any(x["gen_status"] in ("queued", "running") for x in sh["shots"]):
+        break
+    time.sleep(1)
+s1r = next(x for x in sh["shots"] if x["ready"])
+st, gs = editor.call("POST", f"/api/shots/{s1r['id']}/generate", {"reason": "отмена"})
+tk = gs["takes"][-1] if st == 200 else {}
+st, c1 = editor.call("POST", f"/api/takes/{tk.get('id')}/cancel", {})
+check("cancel: queued take is cancelled", st == 200 and c1["takes"][-1]["status"] == "cancelled", (st, c1 if st != 200 else c1["takes"][-1]))
+st, _ = editor.call("POST", f"/api/takes/{tk.get('id')}/cancel", {})
+check("cancel: second cancel refused", st == 400, st)
+st, _ = writer.call("POST", f"/api/takes/{tk.get('id')}/cancel", {})
+check("cancel: writer cannot cancel", st == 403, st)
+st, gen = editor.call("POST", f"/api/episodes/{eid}/generate", {"mode": "all"})
+check("generate: unready shots listed, not sent", st == 200 and "unready" in gen, gen)
+time.sleep(4)
+st, b = editor.call("GET", "/api/badges")
+note = next((n for n in b.get("notifications", []) if n["episode_id"] == eid), None)
+check("notify: editor gets «серия сгенерировалась»", note is not None, b)
+st, bw = writer.call("GET", "/api/badges")
+check("notify: writer does not get it", not bw.get("notifications"), bw)
+editor.call("POST", "/api/notifications/seen", {"episode_id": eid})
+st, b = editor.call("GET", "/api/badges")
+check("notify: opened episode clears it", not any(n["episode_id"] == eid for n in b["notifications"]), b)
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

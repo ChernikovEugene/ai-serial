@@ -9,7 +9,8 @@ import { renderAssets, renderAsset } from "./assets.js";
 import { renderSettings, renderPublish } from "./settings.js";
 import { renderStatus, stopStatusPolling } from "./status.js";
 import { renderTeam } from "./team.js";
-import { initFeedback, stopFeedback } from "./feedback.js";
+import { openReport, renderReports } from "./report.js";
+import { drawBadges, startBadges, stopBadges } from "./notify.js";
 
 let lastHash = location.hash;
 
@@ -44,9 +45,11 @@ async function route() {
     if (section === "library") return await renderAssets("character");
     if (section === "characters") return id ? await renderAsset(+id) : await renderAssets("character");
     if (section === "locations") return id ? await renderAsset(+id) : await renderAssets("location");
+    if (["team", "settings", "reports"].includes(section) && !can.admin()) { location.replace(homeFor(state.meta.user.role)); return; }
     if (section === "team") return await renderTeam();
     if (section === "tech") return await renderTech();
     if (section === "settings") return await renderSettings();
+    if (section === "reports") return await renderReports();
     if (section === "publish") return renderPublish();
   } catch (e) { console.error(e); }
 }
@@ -63,6 +66,8 @@ function setTheme(t) {
   markTheme();
 }
 
+const FLAG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4"/><path d="M4 4h12l-2 4 2 4H4"/></svg>`;
+
 function drawNav(section) {
   const active = section === "episodes" || section === "archive" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
@@ -78,10 +83,13 @@ function drawNav(section) {
     <a href="#/publish" data-nav="publish">Публикация</a>
     <a href="#/characters" data-nav="library">Библиотека</a>
     <a href="#/tech" data-nav="tech">Тех. требования</a>
-    <a href="#/team" data-nav="team">Команда</a>
+    ${can.admin() ? `<a href="#/team" data-nav="team">Команда</a>
     <a href="#/settings" data-nav="settings">Настройки</a>
+    <a href="#/reports" data-nav="reports">Заявки</a>` : ""}
+    <button class="ghost report-btn mob" data-report>${FLAG}Сообщить о проблеме</button>
     <div class="theme-switch mob">${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
     <div class="nav-foot">
+      <button class="ghost small report-btn" data-report>${FLAG}Сообщить о проблеме</button>
       <div class="theme-switch" title="Оформление студии (запоминается в этом браузере)">
         ${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
       <div class="me"><b>${esc(u.name)}</b><br><span class="muted small">${esc(state.meta.roles[u.role])}</span></div>
@@ -94,10 +102,12 @@ function drawNav(section) {
   $("#logout").onclick = async () => {
     await api("/api/auth/logout", { json: {} });
     state.meta = null;
-    stopFeedback();
+    stopBadges();
     location.hash = "#/login";
   };
-  initFeedback();
+  $$("[data-report]").forEach((b) => (b.onclick = openReport));
+  drawBadges();
+  startBadges();
 }
 
 async function renderLogin() {

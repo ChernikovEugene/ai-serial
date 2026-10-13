@@ -1,6 +1,6 @@
 // «Просмотр и правки»: вся серия одним роликом в рамке соцсети, указатель шота на таймлайне, правки по точкам времени.
 import { $, $$, api, can, engineName, postTextFor, esc, fmtDateTime, media, state, toast } from "./core.js";
-import { E, TAKE_STATUS, archiveButton, drawHeader, renderEpisode, takeBadge } from "./episode.js";
+import { E, TAKE_STATUS, archiveButton, cancelTake, drawHeader, renderEpisode, soundMode, takeBadge } from "./episode.js";
 
 const FEEDS = [["none", "Без ленты"], ["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
 const FEED_KEY = "reviewFeed";
@@ -322,11 +322,18 @@ function bindChrome() {
 // ---------------- дубли и перегенерация выбранного шота (монтажёр) ----------------
 
 const engineOf = (s) => state.meta.engines.find((e) => e.key === s.engine) || {};
+const durText = (ds) => {
+  const a = [...ds].sort((x, y) => x - y);
+  return a.length > 3 && a.at(-1) - a[0] === a.length - 1 ? `от ${a[0]} до ${a.at(-1)} с` : `${a.join(", ")} с`;
+};
 
 /** Как нейросеть связана со звуком шота: Veo, Kling Omni и Seedance делают звук сами, у остальных реплики озвучиваются отдельно. */
 function soundNote(s) {
+  const mode = soundMode(s);
+  if (mode === "off") return "Звук: в шоте выбрано «без звука».";
+  if (!engineOf(s).audio && engineOf(s).api) return `⚠ ${engineName(s.engine)} не делает звук: видео придёт без звука, ${mode === "ambient" ? "фон" : "речь и фон"} добавьте на монтаже.`;
+  if (mode === "ambient") return `Звук: только естественный фон, без речи и музыки (${engineName(s.engine)} делает его сам).`;
   if (engineOf(s).audio) return `Звук: ${engineName(s.engine)} сразу генерирует звук вместе с видео.`;
-  if (s.sound_off) return "Звук: в шоте отмечено «звук не нужен».";
   return s.voiceover ? "Звук: реплики озвучиваются в ElevenLabs (галочка в карточке шота)." : "Звук: озвучка реплик выключена (включается в карточке шота).";
 }
 
@@ -347,13 +354,20 @@ function drawShotTools() {
       <label>Нейросеть для нового дубля <span class="muted small">(выбор запоминается в шоте: от неё зависят промпт и звук)</span></label>
       <select id="r-engine" style="width:auto">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
       <div class="muted small" style="margin-top:4px">${soundNote(s)}</div>
+      ${veo ? `<label>Длина клипа, секунд <span class="muted small">(введите вручную; сохранится в шот)</span></label>
+      <div class="row"><input id="r-dur" type="number" inputmode="numeric" min="${Math.min(...engineOf(s).durations)}" max="${Math.max(...engineOf(s).durations)}"
+        value="${draft.duration ?? s.duration}" style="width:90px" ${s.forced_8 ? "disabled" : ""}>
+        <span class="muted small">${s.forced_8 ? "8 с: с референсами Veo 3.1 делает только 8 с" : `${esc(engineName(s.engine))}: ${durText(engineOf(s).durations)}`}</span></div>
+      ${s.ready ? "" : `<div class="small warn-t" style="margin-top:6px">⚠ Шот заполнен не до конца: ${s.checks.filter((c) => !c.ok).map((c) => esc(c.label)).join("; ")}. Заполните его в карточке шота.</div>`}` : ""}
       <label>Промпт для нового дубля</label>
       <textarea id="r-prompt" rows="8" class="prompt">${esc(draft.prompt ?? s.prompt)}</textarea>
       ${veo ? `<label>Что не так с прошлым дублем <span class="muted small">(запишется в историю шота)</span></label>
       <input id="r-reason" placeholder="например: лицо поплыло, камера слишком далеко" value="${esc(draft.reason || "")}">` : `<div class="muted small" style="margin-top:6px">«Другая» нейросеть не подключена к API. Скопируйте промпт, сделайте видео в «${esc(engineName(s.engine))}» и загрузите готовый файл кнопкой «Загрузить видео» выше.</div>`}
       <div class="row" style="margin-top:10px"><button class="ghost small" id="r-reset" title="Вернуть промпт из карточки шота">↻ как в карточке</button>
         <div class="spacer"></div>${veo
-          ? `<button class="primary" id="r-go" ${["queued", "running"].includes(s.gen_status) ? "disabled" : ""}>▶ Сгенерировать дубль ${s.takes.length + 1}</button>`
+          ? (["queued", "running"].includes(s.gen_status)
+            ? `<button class="ghost danger" id="r-cancel">Отменить генерацию</button><button class="primary" disabled>▶ Генерируется…</button>`
+            : `<button class="primary" id="r-go">▶ Сгенерировать дубль ${s.takes.length + 1}</button>`)
           : `<button class="primary" id="r-copy">Скопировать промпт</button>`}</div>
     </details>` : ""}
     <div class="takes">${s.takes.length ? [...s.takes].reverse().map((t) => {
@@ -380,7 +394,7 @@ function drawShotTools() {
   const eng = $("#r-engine", box);
   if (eng) {
     eng.onchange = async () => {
-      R.draft = { shot: s.id, prompt: $("#r-prompt").value === s.prompt ? undefined : $("#r-prompt").value, reason: $("#r-reason")?.value };
+      R.draft = { shot: s.id, prompt: $("#r-prompt").value === s.prompt ? undefined : $("#r-prompt").value, reason: $("#r-reason")?.value };  // длина у другой нейросети своя
       await api(`/api/shots/${s.id}`, { method: "PUT", json: { engine: eng.value } });
       await renderEpisode(E.id);
     };
@@ -394,14 +408,30 @@ function drawShotTools() {
       toast(`Промпт дубля ${t.take_no} подставлен: отредактируйте и запускайте`);
     }));
   }
+  $("#r-cancel", box) && ($("#r-cancel", box).onclick = () => cancelTake(s));
   const go = $("#r-go", box);
   if (go) {
     go.onclick = async () => {
       const prompt = $("#r-prompt").value.trim();
       if (!prompt) return toast("Промпт не может быть пустым", true);
+      const durEl = $("#r-dur");
+      const duration = durEl && !durEl.disabled ? +durEl.value : undefined;
+      if (duration !== undefined && !engineOf(s).durations.includes(duration)) {
+        durEl.focus();
+        return toast(`${engineName(s.engine)} делает клипы ${durText(engineOf(s).durations)}: введите подходящую длину`, true);
+      }
       go.disabled = true;
+      const body = { prompt, reason: $("#r-reason").value, duration };
+      try {
+        await api(`/api/shots/${s.id}/generate`, { json: body, quiet: true });
+      } catch (err) {
+        go.disabled = false;
+        if (err.message === "auth") return;
+        if (can.admin() && err.message.includes("не заполнен") && confirm(`${err.message}\n\nОтправить всё равно, под вашу ответственность?`)) {
+          await api(`/api/shots/${s.id}/generate`, { json: { ...body, force: true } });
+        } else return toast(err.message, true);
+      }
       R.draft = null;
-      await api(`/api/shots/${s.id}/generate`, { json: { prompt, reason: $("#r-reason").value } });
       toast(`Шот ${s.label}: новый дубль отправлен в ${engineName(s.engine)}`);
       renderEpisode(E.id);
     };

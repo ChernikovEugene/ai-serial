@@ -60,28 +60,52 @@ def _http(method: str, url: str, key: str, body: dict | None = None, raw=False):
     return data if raw else json.loads(data)
 
 
+def _cancelled(take_id: int) -> bool:
+    with db.connect() as c:
+        row = c.execute("SELECT status FROM takes WHERE id=?", (take_id,)).fetchone()
+    return not row or row["status"] == "cancelled"
+
+
+def _remember(take_id: int, remote_id: str, remote_path: str):
+    with db.connect() as c:
+        c.execute("UPDATE takes SET remote_id=?, remote_path=? WHERE id=?", (remote_id, remote_path, take_id))
+
+
 def _finish(take_id: int, shot_id: int, status: str, error="", video="", request=""):
     with db.connect() as c:
+        if c.execute("SELECT status FROM takes WHERE id=?", (take_id,)).fetchone()["status"] == "cancelled":
+            return  # отменённый дубль не оживает, даже если нейросеть всё-таки прислала ролик
         c.execute("UPDATE takes SET status=?, error=?, video_path=COALESCE(NULLIF(?, ''), video_path),"
                   " request_path=COALESCE(NULLIF(?, ''), request_path), finished_at=? WHERE id=?",
                   (status, error, video, request, db.now(), take_id))
-        if status in ("done", "stub"):
-            c.execute("UPDATE shots SET selected_take_id=?, needs_redo=0 WHERE id=?", (take_id, shot_id))
-        ep = c.execute("SELECT e.id, e.status FROM shots s JOIN episodes e ON e.id=s.episode_id WHERE s.id=?",
-                       (shot_id,)).fetchone()
-        busy = c.execute("SELECT COUNT(*) FROM takes t JOIN shots s ON s.id=t.shot_id WHERE s.episode_id=? "
-                         "AND t.status IN ('queued','running')", (ep["id"],)).fetchone()[0]
-        if not busy and ep["status"] == "generating":
-            c.execute("UPDATE episodes SET status='fixes', updated_at=? WHERE id=?", (db.now(), ep["id"]))
-            c.execute("INSERT INTO events(episode_id, user_id, text, created_at) VALUES (?,?,?,?)",
-                      (ep["id"], None, "Генерация завершена — статус «На правках визуала»", db.now()))
+        _after_take(c, take_id, shot_id, status)
+
+
+def _after_take(c, take_id: int, shot_id: int, status: str):
+    """Дубль закончился (готов, ошибка или отменён): если в серии больше ничего не генерируется — серия на монтаж
+    и уведомление нейронщику «серия сгенерировалась»."""
+    if status in ("done", "stub"):
+        c.execute("UPDATE shots SET selected_take_id=?, needs_redo=0 WHERE id=?", (take_id, shot_id))
+    ep = c.execute("SELECT e.id, e.status FROM shots s JOIN episodes e ON e.id=s.episode_id WHERE s.id=?",
+                   (shot_id,)).fetchone()
+    busy = c.execute("SELECT COUNT(*) FROM takes t JOIN shots s ON s.id=t.shot_id WHERE s.episode_id=? "
+                     "AND t.status IN ('queued','running')", (ep["id"],)).fetchone()[0]
+    if not busy and ep["status"] == "generating":
+        c.execute("UPDATE episodes SET status='fixes', updated_at=? WHERE id=?", (db.now(), ep["id"]))
+        c.execute("INSERT INTO events(episode_id, user_id, text, created_at) VALUES (?,?,?,?)",
+                  (ep["id"], None, "Генерация завершена — статус «На правках визуала»", db.now()))
+        t = c.execute("SELECT title FROM episodes WHERE id=?", (ep["id"],)).fetchone()["title"] or "Без названия"
+        c.execute("INSERT INTO notifications(role, kind, episode_id, text, created_at) VALUES ('editor','generated',?,?,?)",
+                  (ep["id"], f"Серия «{t}» сгенерировалась", db.now()))
 
 
 def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
     shot_id = shot["id"]
     try:
+        if _cancelled(take_id):
+            return
         with db.connect() as c:
-            c.execute("UPDATE takes SET status='running' WHERE id=?", (take_id,))
+            c.execute("UPDATE takes SET status='running' WHERE id=? AND status='queued'", (take_id,))
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         base = f"ep{shot['episode_id']}_shot{shot['label'] or shot['idx']}_take{take_id}"
         req_rel = f"renders/{base}.request.json"
@@ -93,9 +117,9 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
             _finish(take_id, shot_id, "stub", "Заглушка: запрос сохранён, видео не создавалось", request=req_rel)
             return
         if where == "magnific":
-            video = models.generate(shot, refs, settings)
-            (OUTPUT_DIR / f"{base}.mp4").write_bytes(video)
-            _finish(take_id, shot_id, "done", video=f"renders/{base}.mp4", request=req_rel)
+            tid, path = models.create(shot, refs, settings)
+            _remember(take_id, tid, path)
+            _wait_magnific(take_id, shot_id, base, tid, path, settings, req_rel)
             return
 
         key = settings.get("veo_api_key", "").strip()
@@ -104,24 +128,40 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
         model = settings.get("veo_model", "veo-3.1-generate-preview")
         op = _http("POST", f"{API_BASE}/models/{model}:predictLongRunning", key,
                    build_request(shot, refs, settings, inline_images=True))
-        name = op["name"]
-        deadline = time.time() + 20 * 60
-        while not op.get("done"):
-            if time.time() > deadline:
-                raise RuntimeError("Veo не ответил за 20 минут")
-            time.sleep(10)
-            op = _http("GET", f"{API_BASE}/{name}", key)
-        if "error" in op:
-            raise RuntimeError(json.dumps(op["error"], ensure_ascii=False))
-        samples = op.get("response", {}).get("generateVideoResponse", {}).get("generatedSamples", [])
-        if not samples:
-            raise RuntimeError("Veo не вернул видео (возможно, сработал фильтр безопасности): "
-                               + json.dumps(op.get("response", {}), ensure_ascii=False)[:500])
-        video = _http("GET", samples[0]["video"]["uri"], key, raw=True)
-        (OUTPUT_DIR / f"{base}.mp4").write_bytes(video)
-        _finish(take_id, shot_id, "done", video=f"renders/{base}.mp4", request=req_rel)
+        _remember(take_id, op["name"], "google")
+        _wait_google(take_id, shot_id, base, op["name"], key, req_rel)
     except Exception as e:  # noqa: BLE001 - surface any failure in the UI
         _finish(take_id, shot_id, "error", str(e))
+
+
+def _wait_magnific(take_id, shot_id, base, tid, path, settings, req_rel, minutes=30):
+    video = models.wait(tid, path, settings, stop=lambda: _cancelled(take_id), minutes=minutes)
+    if video is None:
+        return  # отменили
+    (OUTPUT_DIR / f"{base}.mp4").write_bytes(video)
+    _finish(take_id, shot_id, "done", video=f"renders/{base}.mp4", request=req_rel)
+
+
+def _wait_google(take_id, shot_id, base, name, key, req_rel):
+    op: dict = {}
+    deadline = time.time() + 20 * 60
+    while not op.get("done"):
+        if _cancelled(take_id):
+            return
+        if time.time() > deadline:
+            raise RuntimeError("Veo не ответил за 20 минут")
+        if op:
+            time.sleep(10)
+        op = _http("GET", f"{API_BASE}/{name}", key)
+    if "error" in op:
+        raise RuntimeError(json.dumps(op["error"], ensure_ascii=False))
+    samples = op.get("response", {}).get("generateVideoResponse", {}).get("generatedSamples", [])
+    if not samples:
+        raise RuntimeError("Veo не вернул видео (возможно, сработал фильтр безопасности): "
+                           + json.dumps(op.get("response", {}), ensure_ascii=False)[:500])
+    video = _http("GET", samples[0]["video"]["uri"], key, raw=True)
+    (OUTPUT_DIR / f"{base}.mp4").write_bytes(video)
+    _finish(take_id, shot_id, "done", video=f"renders/{base}.mp4", request=req_rel)
 
 
 def start(shot: dict, refs: list[dict], settings: dict, user_id: int | None, reason: str = "") -> int:
@@ -153,7 +193,40 @@ def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
 
 
 def recover():
-    """Takes left 'running' by a closed app can never finish — mark them as errors on startup."""
+    """Студия перезапустилась (например, после обновления на сервере), а дубли ещё генерировались.
+    Задачи, уже отправленные в нейросеть, ждём дальше и забираем готовые ролики. Дубли, которые не успели уйти,
+    помечаем ошибкой: их надо отправить ещё раз."""
     with db.connect() as c:
-        c.execute("UPDATE takes SET status='error', error='Приложение было закрыто во время генерации' "
-                  "WHERE status IN ('queued','running')")
+        rows = db.rows(c.execute(
+            "SELECT t.id, t.shot_id, t.take_no, t.remote_id, t.remote_path, t.request_path, s.episode_id, s.label, s.idx "
+            "FROM takes t JOIN shots s ON s.id=t.shot_id WHERE t.status IN ('queued','running')"))
+    settings = db.get_settings()
+    for r in rows:
+        if not r["remote_id"]:
+            _finish(r["id"], r["shot_id"], "error", "Студия перезапускалась до отправки в нейросеть: отправьте шот ещё раз")
+            continue
+        base = f"ep{r['episode_id']}_shot{r['label'] or r['idx']}_take{r['id']}"
+        pool().submit(_resume, r, base, settings)
+
+
+def _resume(r: dict, base: str, settings: dict):
+    try:
+        if r["remote_path"] == "google":
+            _wait_google(r["id"], r["shot_id"], base, r["remote_id"], settings.get("veo_api_key", "").strip(), r["request_path"])
+        else:
+            _wait_magnific(r["id"], r["shot_id"], base, r["remote_id"], r["remote_path"], settings, r["request_path"])
+    except Exception as e:  # noqa: BLE001
+        _finish(r["id"], r["shot_id"], "error", str(e))
+
+
+def cancel(take_id: int) -> bool:
+    """Отмена дубля: студия перестаёт ждать результат. Задачу, которая уже ушла в нейросеть, та может всё равно
+    доделать (и списать кредиты), но в студию такой ролик уже не попадёт."""
+    with db.connect() as c:
+        t = c.execute("SELECT shot_id, status FROM takes WHERE id=?", (take_id,)).fetchone()
+        if not t or t["status"] not in ("queued", "running"):
+            return False
+        c.execute("UPDATE takes SET status='cancelled', error='Генерация отменена', finished_at=? WHERE id=?",
+                  (db.now(), take_id))
+        _after_take(c, take_id, t["shot_id"], "cancelled")
+    return True

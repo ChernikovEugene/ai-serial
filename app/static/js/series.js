@@ -179,6 +179,7 @@ function newEpisodeQuick(arcs, rerender, date = "") {
       <label class="check"><input type="radio" name="nq-when" value="queue" ${date ? "" : "checked"}> В конец очереди (арки или общей)</label>
       <label class="check"><input type="radio" name="nq-when" value="draft"> В черновики</label>
     </div>
+    <label class="check urgent-check"><input type="checkbox" id="nq-urgent"> 🔥 Срочная серия <span class="muted small">— сразу наверх в «Продакшне» и значок в меню</span></label>
     <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="nq-cancel">Отмена</button><button class="primary" id="nq-save">Создать</button></div>`);
   $("#nq-cancel", m).onclick = closeModal;
   $("#nq-date", m).onfocus = () => ($("input[value=date]", m).checked = true);
@@ -188,7 +189,7 @@ function newEpisodeQuick(arcs, rerender, date = "") {
     if (when === "date" && !d) return toast("Выберите день", true);
     await api("/api/episodes", { json: {
       title: $("#nq-title", m).value.trim(), synopsis: $("#nq-syn", m).value, arc_id: +$("#nq-arc", m).value || null,
-      date: when === "date" ? d : null, backlog: when === "draft" } });
+      date: when === "date" ? d : null, backlog: when === "draft", urgent: $("#nq-urgent", m).checked } });
     closeModal();
     toast("Серия создана");
     rerender();

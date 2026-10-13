@@ -3,6 +3,7 @@
 // Серии без готового ТЗ видны в «Ждёт ТЗ» (название, дата, арка), но не открываются и не двигаются.
 import { $$, api, can, esc, fmtDate, postTextAll, state, STATUS_COLORS, toast, view } from "./core.js";
 import { copyText } from "./episode.js";
+import { generatedIds } from "./notify.js";
 
 const COLUMNS = [
   { key: "wait", name: "Ждёт ТЗ", hint: "сценарист ещё пишет", statuses: ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review"] },
@@ -27,7 +28,7 @@ export async function renderProduction() {
       <span class="muted small">Все арки. В колонке сверху — самое срочное по дню выхода.${canMove() ? " Перетащите карточку в другую колонку, чтобы сменить этап." : ""}</span></div>
     <div class="prod-board">
       ${COLUMNS.map((col) => {
-        const items = eps.filter((e) => col.statuses.includes(e.status)).sort((a, b) => a.number - b.number);
+        const items = eps.filter((e) => col.statuses.includes(e.status)).sort((a, b) => (b.urgent || 0) - (a.urgent || 0) || a.number - b.number); // срочные — первыми
         return `<section class="prod-col ${col.narrow ? "narrow" : ""}" data-drop="${col.drop || ""}" style="--c:${STATUS_COLORS[col.statuses.at(-1)]}">
           <header><b>${col.name}</b><span class="muted small">${col.narrow ? "" : `${items.length}${col.hint ? " · " : ""}`}${col.hint || ""}</span></header>
           ${items.map((e) => card(e, today)).join("") || `<p class="muted small prod-empty">${col.narrow ? "Перетащите сюда выложенное" : "Пусто"}</p>`}
@@ -55,8 +56,11 @@ function card(e, today) {
   const dl = deadline(e, today);
   const arc = e.arc_id ? `${esc(e.arc_title)} · серия ${e.arc_number}` : "Вне арки";
   const movable = canMove() && !e.locked;
+  const justGen = generatedIds().has(e.id);
   const body = `<div class="row"><span class="muted small">${fmtDate(e.date)}${e.pinned ? " 📌" : ""}</span><div class="spacer"></div>
+      ${e.urgent ? `<span class="urgent-tag">🔥 срочно</span>` : ""}
       <span class="sm-flag ${dl.cls}">${dl.text}</span></div>
+    ${justGen ? `<span class="gen-ready" style="--c:${STATUS_COLORS[e.status]}">● сгенерировалась</span>` : ""}
     <b>${esc(e.title || "Без названия")}</b>
     <span class="arc-label">${arc}</span>
     ${e.locked ? `<span class="muted small">Ждёт ТЗ от сценариста</span>`
@@ -64,8 +68,8 @@ function card(e, today) {
     ${movable && e.status === "ready" ? `<div class="row prod-actions"><button class="ghost small" data-post-text="${e.id}" title="${postTextAll(e) ? "Скопировать описание для поста" : "Сценарист ещё не написал описание"}">📋 Текст поста</button>
       <button class="small prod-posted-btn" data-posted="${e.id}">Выложено ✓</button></div>` : ""}`;
   return e.locked
-    ? `<div class="prod-card locked" style="--c:${STATUS_COLORS[e.status]}">${body}</div>`
-    : `<a class="prod-card" href="#/episodes/${e.id}/shots" data-card="${e.id}" data-status="${e.status}" draggable="${movable}" style="--c:${STATUS_COLORS[e.status]}">${body}</a>`;
+    ? `<div class="prod-card locked ${e.urgent ? "urgent" : ""}" style="--c:${STATUS_COLORS[e.status]}">${body}</div>`
+    : `<a class="prod-card ${e.urgent ? "urgent" : ""}" href="#/episodes/${e.id}/shots" data-card="${e.id}" data-status="${e.status}" draggable="${movable}" style="--c:${STATUS_COLORS[e.status]}">${body}</a>`;
 }
 
 async function setStatus(id, status) {

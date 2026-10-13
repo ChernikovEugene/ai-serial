@@ -224,9 +224,10 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
     ratio = _ratio(settings)
     res = settings.get("magnific_resolution") or "720p"
     body: dict = {"prompt": prompt}
+    audio = shot.get("sound_mode") != "off"  # «без звука»: просим модель не делать звук вовсе
 
     if engine == "veo":
-        common = {"negative_prompt": neg, "aspect_ratio": ratio, "resolution": res, "generate_audio": True}
+        common = {"negative_prompt": neg, "aspect_ratio": ratio, "resolution": res, "generate_audio": audio}
         if first:
             path = "/v1/ai/image-to-video/veo-3-1"
             body.update(image=img(paths[0], False), duration=dur, **common)
@@ -239,7 +240,7 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
         status = path
     elif engine == "kling":
         path, status = "/v1/ai/video/kling-v3-omni-pro", "/v1/ai/video/kling-v3-omni"
-        body.update(aspect_ratio=ratio, duration=str(dur), generate_audio=True)
+        body.update(aspect_ratio=ratio, duration=str(dur), generate_audio=audio)
         if first:
             body["start_image_url"] = img(paths[0])
         elif paths:
@@ -247,7 +248,7 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
     elif engine == "seedance":
         res = res if res in ("480p", "720p", "1080p") else "720p"
         path, status = f"/v1/ai/video/seedance-2-pro-{res}", "/v1/ai/video/seedance-2-pro"
-        body.update(duration=dur, aspect_ratio=SOCIAL.get(ratio, "social_story_9_16"), sound_effects=True, no_music=True)
+        body.update(duration=dur, aspect_ratio=SOCIAL.get(ratio, "social_story_9_16"), sound_effects=audio, no_music=True)
         if first:
             body["image"] = img(paths[0])
         elif paths:
@@ -296,20 +297,34 @@ def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=
     return data if raw else json.loads(data)
 
 
-def generate(shot: dict, refs: list[dict], settings: dict) -> bytes:
-    """Создаёт задачу, опрашивает её каждые 10 с (до 30 минут) и сразу скачивает mp4: ссылка живёт 30 минут."""
+def _key(settings: dict) -> str:
     key = (settings.get("magnific_api_key") or "").strip()
     if not key:
         raise RuntimeError("Не указан API-ключ Magnific в настройках")
+    return key
+
+
+def create(shot: dict, refs: list[dict], settings: dict) -> tuple[str, str]:
+    """Создаёт задачу в Magnific и возвращает (task_id, адрес опроса): их хранит дубль, чтобы после перезапуска
+    студии продолжить ждать ту же задачу, а не терять уже оплаченный ролик."""
     req = build(shot, refs, settings, inline=True)
-    task = _http("POST", API_BASE + req["path"], key, req["body"])["data"]
-    tid = task["task_id"]
-    deadline = time.time() + 30 * 60
+    task = _http("POST", API_BASE + req["path"], _key(settings), req["body"])["data"]
+    return task["task_id"], req["status_path"]
+
+
+def wait(tid: str, status_path: str, settings: dict, stop=lambda: False, minutes: int = 30) -> bytes | None:
+    """Опрашивает задачу каждые 10 с и сразу скачивает mp4 (ссылка живёт 30 минут). None — если stop() сказал прекратить."""
+    key = _key(settings)
+    task: dict = {}
+    deadline = time.time() + minutes * 60
     while task.get("status") not in ("COMPLETED", "FAILED"):
+        if stop():
+            return None
         if time.time() > deadline:
-            raise RuntimeError(f"Magnific не закончил за 30 минут (задача {tid})")
-        time.sleep(10)
-        task = _http("GET", f"{API_BASE}{req['status_path']}/{tid}", key)["data"]
+            raise RuntimeError(f"Magnific не закончил за {minutes} минут (задача {tid})")
+        if task:
+            time.sleep(10)
+        task = _http("GET", f"{API_BASE}{status_path}/{tid}", key)["data"]
     if task["status"] == "FAILED" or not task.get("generated"):
         raise RuntimeError("Magnific не сделал видео: " + json.dumps(task, ensure_ascii=False)[:500])
     return _http("GET", task["generated"][0], None, raw=True)

@@ -14,6 +14,24 @@ from . import auth, breakdown, db, exporter, feedback, models, schedule, veo
 from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+REPORTS_DIR = db.DATA_DIR / "reports"  # снимки «Сообщить о проблеме»: не в media, отдаются только админу
+
+
+def _site_version() -> str:
+    """Версия сайта для заявок: коммит, с которого запущен сервер (git или переменная хостинга)."""
+    import os
+    import subprocess
+    for k in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION"):
+        if os.environ.get(k):
+            return os.environ[k][:7]
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parent.parent,
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+SITE_VERSION = _site_version()
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
 # В какой нейросети делается шот: выбирает монтажёр. Все, кроме «Другой», уходят через Magnific API (app/models.py).
@@ -37,7 +55,7 @@ app = FastAPI(title="Студия сериала")
 # ---------- auth middleware ----------
 
 OPEN_PATHS = ("/api/auth/",)
-VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+|auth/.*)$")
+VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+|auth/.*|reports|notifications/seen)$")
 
 
 @app.middleware("http")
@@ -205,6 +223,8 @@ def meta(request: Request):
                      "ref_example": models.token(k, 1) if m["ref_token"] else ""}
                     for k, m in models.MODELS.items()],
         "series_title": s.get("series_title") or "Сериал",
+        "version": SITE_VERSION,
+        "sound_modes": SOUND_MODES,
     }
 
 
@@ -270,19 +290,33 @@ def refresh_shot(s: dict, ctx: Ctx) -> dict:
     return s
 
 
+SOUND_MODES = {"full": "речь и звук", "ambient": "только естественный фон", "off": "без звука"}
+
+
+def sound_mode(s: dict) -> str:
+    return s.get("sound_mode") if s.get("sound_mode") in SOUND_MODES else ("off" if s.get("sound_off") else "full")
+
+
 def shot_checks(s: dict) -> list[dict]:
-    """Готовность шота к генерации: персонаж, локация, промпт и (если звук нужен) реплика. Отдельно от shot_missing,
-    который решает, можно ли утверждать сценарий."""
+    """Готовность шота к генерации (защита от пустых шотов): без всех зелёных пунктов шот не уходит в нейросеть,
+    отправить его всё равно может только продюсер. Если пункт не нужен, его закрывают явно: «без персонажей»,
+    локация текстом «-», действие «-». Отдельно от shot_missing, который решает, можно ли утверждать сценарий."""
     has_text = any((d.get("text") or "").strip() for d in s.get("dialogue") or [])
-    has_sound = models.spec(s.get("engine"))["audio"] or bool(s.get("voiceover"))
-    sound_ok = bool(s.get("sound_off")) or not has_sound or has_text
+    mode = sound_mode(s)
     return [
-        {"key": "characters", "label": "Выбраны персонажи", "ok": bool(s.get("characters"))},
-        {"key": "location", "label": "Выбрана локация", "ok": breakdown.has_location(s)},
-        {"key": "prompt", "label": "Прописан промпт", "ok": bool((s.get("prompt") or "").strip())},
-        {"key": "sound", "label": "Звук: «звук не нужен» или прописана реплика" if has_sound else "Звук не требуется",
-         "ok": sound_ok},
+        {"key": "characters", "label": "Персонажи: выбраны или «без персонажей»",
+         "ok": bool(s.get("characters")) or bool(s.get("no_characters"))},
+        {"key": "location", "label": "Локация: выбрана или описана текстом (можно «-»)", "ok": breakdown.has_location(s)},
+        {"key": "action", "label": "Действие: прописано (если нечего — «-»)", "ok": bool((s.get("action") or "").strip())},
+        {"key": "duration", "label": "Длина клипа выбрана", "ok": bool(s.get("duration"))},
+        {"key": "prompt", "label": "Промпт собран", "ok": bool((s.get("prompt") or "").strip())},
+        {"key": "sound", "label": "Звук: есть реплика или выбран «только фон» / «без звука»" if mode == "full"
+         else f"Звук: {SOUND_MODES[mode]}", "ok": mode != "full" or has_text},
     ]
+
+
+def unready_items(s: dict) -> list[str]:
+    return [c["label"] for c in s["checks"] if not c["ok"]]
 
 
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
@@ -301,6 +335,9 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
                          "«↻ пересобрать» соберёт его заново")
     if link := models.link_warning(s, refs, ctx.settings):
         warns.append(link)
+    if not m["audio"] and sound_mode(s) != "off" and models.has_api(s.get("engine")):
+        warns.append(f"{m['name']} не делает звук: видео придёт без звука, "
+                     + ("фон" if sound_mode(s) == "ambient" else "речь и фон") + " придётся добавить на монтаже")
     s["warnings"] = w + warns + models.image_warnings(s.get("engine"), refs)
     s["missing"] = breakdown.shot_missing(s, max_s)
     s["checks"] = shot_checks(s)
@@ -319,7 +356,7 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
 
 SHOT_COLS = ["idx", "label", "scene", "duration", "est_seconds", "speech_seconds", "words", "camera", "action",
              "dialogue", "characters", "location_version_id", "location_mode", "location_text", "composition_image",
-             "composition_mode", "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "voiceover"]
+             "composition_mode", "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "sound_mode", "no_characters", "voiceover"]
 
 
 def save_shot(c, s: dict):
@@ -528,7 +565,7 @@ def episode_summaries(role: str = "admin") -> list[dict]:
     max_s = int(settings.get("max_shot_seconds") or 8)
     with db.connect() as c:
         eps = db.rows(c.execute("SELECT id, number, pinned, planned_date, title, status, posted_at, updated_at, "
-                                "arc_id, position, synopsis, post_text, post_same, post_text_tiktok, post_text_reels, post_text_shorts FROM episodes ORDER BY number IS NULL, number, position, id"))
+                                "arc_id, position, synopsis, post_text, post_same, post_text_tiktok, post_text_reels, post_text_shorts, urgent FROM episodes ORDER BY number IS NULL, number, position, id"))
         stats = {r["episode_id"]: dict(r) for r in c.execute(
             "SELECT episode_id, COUNT(*) AS shots, COALESCE(SUM(duration),0) AS seconds, "
             "COALESCE(SUM(est_seconds),0) AS est, SUM(est_seconds > ?) AS over, "
@@ -1056,6 +1093,7 @@ class EpisodeIn(BaseModel):
     number: int | None = None
     date: str | None = None
     backlog: bool = False
+    urgent: bool = False  # «срочная серия»: наверх в «Продакшне» и значок в меню
 
 
 def create_episode_row(e: EpisodeIn, user_id) -> int:
@@ -1065,9 +1103,9 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
             arc = c.execute("SELECT status FROM arcs WHERE id=?", (e.arc_id,)).fetchone()
             status = db.ARC_TO_EPISODE.get(arc["status"], status) if arc else status
         pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM episodes WHERE arc_id IS ?", (e.arc_id,)).fetchone()[0]
-        eid = c.execute("INSERT INTO episodes(title, script, synopsis, status, arc_id, position, created_by, created_at, "
-                        "updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (e.title.strip(), e.script, e.synopsis.strip(), status, e.arc_id, pos, user_id,
+        eid = c.execute("INSERT INTO episodes(title, script, synopsis, status, arc_id, position, urgent, created_by, "
+                        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (e.title.strip(), e.script, e.synopsis.strip(), status, e.arc_id, pos, int(e.urgent), user_id,
                          db.now(), db.now())).lastrowid
     if e.date:
         schedule.move(eid, schedule.number_for(e.date))
@@ -1076,7 +1114,7 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
         schedule.move(eid, e.number)
     elif not e.backlog:
         schedule.append_to_arc(eid, e.arc_id)
-    db.log(eid, user_id, "Серия создана")
+    db.log(eid, user_id, "Серия создана" + (" — срочная" if e.urgent else ""))
     if e.script.strip():
         apply_breakdown(eid)
         promote_if_ready(eid, user_id)
@@ -1157,23 +1195,27 @@ class EpisodePatch(BaseModel):
     post_text_tiktok: str | None = None
     post_text_reels: str | None = None
     post_text_shorts: str | None = None
+    urgent: bool | None = None
 
 
 POST_FIELDS = {"post_text", "post_same", "post_text_tiktok", "post_text_reels", "post_text_shorts"}
+ANY_STAGE_FIELDS = POST_FIELDS | {"urgent"}  # описание поста и «срочно» сценарист меняет на любом этапе
 
 
 @app.put("/api/episodes/{eid}", dependencies=[Depends(auth.writer)])
 def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = True):
     ep = load_episode_row(eid)
     changes = p.model_dump(exclude_unset=True)
-    if set(changes) - POST_FIELDS:  # описание для поста сценарист правит на любом этапе
+    if set(changes) - ANY_STAGE_FIELDS:  # описание для поста и «срочно» сценарист правит на любом этапе
         writer_may_edit(request, ep["status"])
     with db.connect() as c:
         for k, v in changes.items():
             if v is not None:
-                if k == "post_same":
+                if k in ("post_same", "urgent"):
                     v = int(v)
                 c.execute(f"UPDATE episodes SET {k}=?, updated_at=? WHERE id=?", (v, db.now(), eid))
+    if p.urgent is not None and bool(p.urgent) != bool(ep.get("urgent")):
+        db.log(eid, uid(request), "Отмечена как срочная" if p.urgent else "Снята отметка «срочно»")
     if p.script is not None and p.script != ep["script"]:
         db.log(eid, uid(request), "Сценарий изменён")
         if reparse:
@@ -1326,7 +1368,8 @@ def apply_breakdown(eid: int):
                                            "composition_note": "", "prompt": "", "prompt_locked": 0,
                                            "negative_prompt": ctx.settings.get("negative_prompt", ""),
                                            "selected_take_id": None, "needs_redo": 0, "engine": "veo",
-                                           "sound_off": 0, "voiceover": 0, "location_mode": "library", "location_text": ""}
+                                           "sound_off": 0, "sound_mode": "full", "no_characters": 0, "voiceover": 0,
+                                           "location_mode": "library", "location_text": ""}
             s.update({k: n[k] for k in ("idx", "label", "scene", "duration", "camera", "action", "dialogue",
                                         "characters", "location_version_id")})
             refresh_shot(s, ctx)
@@ -1368,6 +1411,7 @@ def set_cast(eid: int, body: CastIn, request: Request):
 
 class GenerateIn(BaseModel):
     mode: str = "missing"  # missing | redo | all
+    force: bool = False    # только продюсер: отправить и незаполненные шоты «под свою ответственность»
 
 
 @app.post("/api/episodes/{eid}/generate", dependencies=[Depends(auth.editor)])
@@ -1376,7 +1420,9 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
     if not ep["shots"]:
         raise HTTPException(400, "В серии нет шотов")
     settings = db.get_settings()
+    force = g.force and request.state.user["role"] == "admin"
     started = skipped = uploaded = 0
+    unready = []
     for s in ep["shots"]:
         busy = s["gen_status"] in ("queued", "running")
         if busy:
@@ -1392,13 +1438,16 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
             continue
         if g.mode == "redo" and not (s["needs_redo"] or s["open_fixes"]):
             continue
-        veo.start(s, s["references"], settings, uid(request))
+        if not s["ready"] and not force:  # защита от пустых шотов: незаполненное в нейросеть не уходит
+            unready.append({"id": s["id"], "label": s["label"], "items": unready_items(s)})
+            continue
+        veo.start(s, s["references"], settings, uid(request), "отправлено продюсером с незаполненными пунктами" if not s["ready"] else "")
         started += 1
     if started:
         with db.connect() as c:
             c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=?", (db.now(), eid))
         db.log(eid, uid(request), f"Отправлено в генерацию шотов: {started}")
-    return {"started": started, "skipped": skipped, "uploaded": uploaded}
+    return {"started": started, "skipped": skipped, "uploaded": uploaded, "unready": unready}
 
 
 @app.get("/api/episodes/{eid}/export")
@@ -1430,6 +1479,8 @@ class ShotPatch(BaseModel):
     needs_redo: bool | None = None
     engine: str | None = None
     sound_off: bool | None = None
+    sound_mode: str | None = None
+    no_characters: bool | None = None
     voiceover: bool | None = None
 
 
@@ -1452,8 +1503,8 @@ def shot_response(sid: int) -> dict:
 
 # Content belongs to the writer, generation settings to the editor (the producer may touch both).
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
-                       "location_mode", "location_text", "sound_off", "voiceover"}
-EDITOR_SHOT_FIELDS = {"sound_off", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
+                       "location_mode", "location_text", "sound_off", "sound_mode", "no_characters", "voiceover"}
+EDITOR_SHOT_FIELDS = {"sound_off", "sound_mode", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
                       "prompt_locked", "needs_redo", "engine"}
 
 
@@ -1479,6 +1530,14 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
     if "duration" in data and data["duration"] not in breakdown.engine_durations(engine):
         raise HTTPException(400, f"«{ENGINE_NAMES.get(engine, engine)}» поддерживает длительность: "
                                  + ", ".join(str(d) for d in breakdown.engine_durations(engine)) + " с")
+    if data.get("sound_mode") not in (None, *SOUND_MODES):
+        raise HTTPException(400, "Неизвестный режим звука")
+    if "sound_mode" in data:
+        data["sound_off"] = data["sound_mode"] == "off"
+    elif data.get("sound_off") is not None:  # старая галочка «звук не нужен»
+        data["sound_mode"] = "off" if data["sound_off"] else "full"
+    if data.get("characters"):
+        data["no_characters"] = False  # выбрали персонажа — «без персонажей» снимается само
     if data.get("location_mode") not in (None, "library", "text"):
         raise HTTPException(400, "Неизвестный способ задать локацию")
     if data.get("composition_mode") not in (None, "reference", "first_frame"):
@@ -1563,6 +1622,8 @@ def shot_request(sid: int):
 class RegenerateIn(BaseModel):
     prompt: str | None = None   # improved prompt for this attempt; saved to the shot
     reason: str = ""            # what was wrong with the previous take
+    duration: int | None = None  # длина клипа для нового дубля (вводится вручную, сохраняется в шот)
+    force: bool = False          # только продюсер: отправить незаполненный шот
 
 
 @app.post("/api/shots/{sid}/generate", dependencies=[Depends(auth.editor)])
@@ -1574,12 +1635,28 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
         raise HTTPException(400, f"Этот шот делается в «{ENGINE_NAMES.get(s['engine'], s['engine'])}»: через API он не уходит. "
                                  "Сделайте видео там и загрузите готовый файл.")
     g = g or RegenerateIn()
+    if g.duration is not None and g.duration != s["duration"]:
+        allowed = breakdown.engine_durations(s["engine"])
+        if g.duration not in allowed:
+            raise HTTPException(400, f"«{ENGINE_NAMES.get(s['engine'], s['engine'])}» делает клипы длиной "
+                                     + _durations_text(allowed) + ", а введено " + str(g.duration) + " с")
+        if s["forced_8"] and g.duration != 8:
+            raise HTTPException(400, "С референсами Veo 3.1 делает только 8 с")
+        raw = load_shot(sid)
+        raw["duration"] = g.duration
+        refresh_shot(raw, Ctx())
+        with db.connect() as c:
+            save_shot(c, raw)
+        s = shot_response(sid)
     if g.prompt is not None and g.prompt.strip() and g.prompt.strip() != s["prompt"].strip():
         raw = load_shot(sid)
         raw["prompt"], raw["prompt_locked"] = g.prompt.strip(), 1
         with db.connect() as c:
             save_shot(c, raw)
         s = shot_response(sid)
+    if not s["ready"] and not (g.force and request.state.user["role"] == "admin"):
+        raise HTTPException(400, f"Шот {s['label']} не заполнен: " + "; ".join(unready_items(s))
+                                 + ". Если пункт не нужен, закройте его явно («-», «без персонажей»).")
     veo.start(s, s["references"], db.get_settings(), uid(request), g.reason)
     with db.connect() as c:
         c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=? AND status NOT IN ('posted')",
@@ -1587,6 +1664,26 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     note = f" — причина: {g.reason.strip()}" if g.reason.strip() else ""
     db.log(s["episode_id"], uid(request), f"Шот {s['label']}: новый дубль (№{len(s['takes']) + 1}) отправлен в {ENGINE_NAMES.get(s['engine'], s['engine'])}{note}")
     return shot_response(sid)
+
+
+def _durations_text(ds) -> str:
+    ds = sorted(ds)
+    if len(ds) > 3 and ds == list(range(ds[0], ds[-1] + 1)):
+        return f"от {ds[0]} до {ds[-1]} с"
+    return ", ".join(str(d) for d in ds) + " с"
+
+
+@app.post("/api/takes/{tid}/cancel", dependencies=[Depends(auth.editor)])
+def cancel_take(tid: int, request: Request):
+    with db.connect() as c:
+        t = c.execute("SELECT t.shot_id, t.take_no, s.episode_id, s.label FROM takes t JOIN shots s ON s.id=t.shot_id "
+                      "WHERE t.id=?", (tid,)).fetchone()
+    if not t:
+        raise HTTPException(404, "Дубль не найден")
+    if not veo.cancel(tid):
+        raise HTTPException(400, "Этот дубль уже не генерируется")
+    db.log(t["episode_id"], uid(request), f"Шот {t['label']}: генерация дубля {t['take_no']} отменена")
+    return shot_response(t["shot_id"])
 
 
 class SelectTakeIn(BaseModel):
@@ -1834,6 +1931,155 @@ def feedback_shot(path: str):
                     headers={"Cache-Control": "max-age=86400"})
 
 
+# ---------- «Сообщить о проблеме»: заявки команды, видит их админ ----------
+
+REPORT_KINDS = {"bug": "Что-то сломалось", "ux": "Неудобно или криво", "idea": "Есть идея"}
+REPORT_STATUSES = {"new": "Новая", "work": "В работе", "done": "Сделано", "rejected": "Отклонена"}
+
+
+def _report_out(r: dict, names: dict) -> dict:
+    return {**r, "author": names.get(r["created_by"], "—"), "kind_name": REPORT_KINDS.get(r["kind"], r["kind"]),
+            "has_shot": bool(r["shot_path"]), "shot_path": None}
+
+
+@app.post("/api/reports")
+async def report_create(request: Request, kind: str = Form("bug"), text: str = Form(""), page: str = Form(""),
+                        viewport: str = Form(""), image: UploadFile | None = File(default=None)):
+    if kind not in REPORT_KINDS:
+        raise HTTPException(400, "Неизвестный тип заявки")
+    if not text.strip():
+        raise HTTPException(400, "Напишите, что случилось")
+    data = await image.read() if image else b""
+    ext = ""
+    if data:
+        ext = Path(image.filename or "").suffix.lower()
+        if ext not in IMAGE_EXT:
+            ext = "." + (image.content_type or "image/png").split("/")[-1].replace("jpeg", "jpg")
+        if ext not in IMAGE_EXT:
+            raise HTTPException(400, "Снимок должен быть картинкой PNG, JPG или WEBP")
+        if len(data) > 15 * 1024 * 1024:
+            raise HTTPException(400, "Снимок больше 15 МБ")
+    with db.connect() as c:
+        rid = c.execute("INSERT INTO reports(kind, text, page, version, viewport, created_by, created_at, updated_at) "
+                        "VALUES (?,?,?,?,?,?,?,?)", (kind, text.strip(), page[:300], SITE_VERSION, viewport[:40],
+                                                     uid(request), db.now(), db.now())).lastrowid
+        if data:
+            REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            name = f"report{rid}{ext}"
+            (REPORTS_DIR / name).write_bytes(data)
+            c.execute("UPDATE reports SET shot_path=? WHERE id=?", (name, rid))
+    return {"ok": True, "id": rid}
+
+
+def _sync_reports(rows: list[dict]) -> None:
+    """Заявки, отправленные в правки: закрытая на GitHub задача = «Сделано»."""
+    linked = [r for r in rows if r["issue_number"] and r["status"] == "work"]
+    if not linked:
+        return
+    try:
+        done = {n["number"] for n in feedback.list_notes() if n["status"] in ("done", "closed")}
+    except GitHubError:
+        return
+    with db.connect() as c:
+        for r in linked:
+            if r["issue_number"] in done:
+                r["status"] = "done"
+                c.execute("UPDATE reports SET status='done', updated_at=? WHERE id=?", (db.now(), r["id"]))
+
+
+@app.get("/api/reports", dependencies=[Depends(auth.admin)])
+def report_list():
+    with db.connect() as c:
+        rows = db.rows(c.execute("SELECT * FROM reports ORDER BY id DESC LIMIT 300"))
+        names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM users")}
+    _sync_reports(rows)
+    return {"reports": [_report_out(r, names) for r in rows], "kinds": REPORT_KINDS, "statuses": REPORT_STATUSES}
+
+
+@app.get("/api/reports/{rid}/shot", dependencies=[Depends(auth.admin)])
+def report_shot(rid: int):
+    with db.connect() as c:
+        r = c.execute("SELECT shot_path FROM reports WHERE id=?", (rid,)).fetchone()
+    if not r or not r["shot_path"] or not (REPORTS_DIR / r["shot_path"]).is_file():
+        raise HTTPException(404, "Снимка нет")
+    return FileResponse(REPORTS_DIR / r["shot_path"])
+
+
+class ReportPatch(BaseModel):
+    status: str
+
+
+@app.put("/api/reports/{rid}", dependencies=[Depends(auth.admin)])
+def report_update(rid: int, p: ReportPatch):
+    if p.status not in REPORT_STATUSES:
+        raise HTTPException(400, "Неизвестный статус")
+    with db.connect() as c:
+        c.execute("UPDATE reports SET status=?, updated_at=? WHERE id=?", (p.status, db.now(), rid))
+    return {"ok": True}
+
+
+class ReportForward(BaseModel):
+    with_shot: bool = False
+
+
+@app.post("/api/reports/{rid}/forward", dependencies=[Depends(auth.admin)])
+def report_forward(rid: int, f: ReportForward, request: Request):
+    """Админ отправляет заявку в правки: она становится задачей на GitHub с меткой «правка», её подхватывает Claude.
+    Репозиторий публичный, поэтому снимок уходит только по галочке."""
+    with db.connect() as c:
+        r = db.row(c.execute("SELECT * FROM reports WHERE id=?", (rid,)).fetchone())
+        if not r:
+            raise HTTPException(404, "Заявка не найдена")
+        author = (c.execute("SELECT name FROM users WHERE id=?", (r["created_by"],)).fetchone() or {"name": "—"})["name"]
+    if r["issue_number"]:
+        raise HTTPException(400, f"Заявка уже в правках: задача #{r['issue_number']}")
+    shots = []
+    if f.with_shot and r["shot_path"] and (REPORTS_DIR / r["shot_path"]).is_file():
+        shots.append(((REPORTS_DIR / r["shot_path"]).read_bytes(), r["shot_path"].rsplit(".", 1)[-1]))
+    text = f"[{REPORT_KINDS.get(r['kind'], r['kind'])}] {r['text']}\n\n(Заявка #{rid} из «Сообщить о проблеме», версия сайта {r['version'] or '—'})"
+    note = _gh(feedback.create, text, r["page"], r["viewport"], author, shots)
+    with db.connect() as c:
+        c.execute("UPDATE reports SET issue_number=?, status='work', updated_at=? WHERE id=?", (note["number"], db.now(), rid))
+    return {"ok": True, "number": note["number"], "url": note.get("url", "")}
+
+
+# ---------- значки в меню: срочные серии, уведомления, новые заявки ----------
+
+@app.get("/api/badges")
+def badges(request: Request):
+    user = request.state.user
+    me = user["id"]
+    with db.connect() as c:
+        urgent = c.execute("SELECT COUNT(*) FROM episodes WHERE urgent=1 AND status!='posted' AND number IS NOT NULL").fetchone()[0]
+        notes = []
+        if user["role"] == "editor":  # «серия сгенерировалась» — нейронщику
+            for n in db.rows(c.execute("SELECT n.*, e.status AS ep_status FROM notifications n LEFT JOIN episodes e "
+                                       "ON e.id=n.episode_id WHERE n.role=? AND n.created_at >= ? ORDER BY n.id DESC LIMIT 50",
+                                       (user["role"], (date.today() - timedelta(days=14)).isoformat()))):
+                if me not in (n["seen_by"] or []):
+                    notes.append({k: n[k] for k in ("id", "kind", "episode_id", "text", "created_at", "ep_status")})
+        new_reports = c.execute("SELECT COUNT(*) FROM reports WHERE status='new'").fetchone()[0] if user["role"] == "admin" else 0
+    return {"urgent": urgent, "notifications": notes, "reports": new_reports}
+
+
+class SeenIn(BaseModel):
+    ids: list[int] = []
+    episode_id: int | None = None
+
+
+@app.post("/api/notifications/seen")
+def notifications_seen(p: SeenIn, request: Request):
+    me = uid(request)
+    with db.connect() as c:
+        q, args = ("SELECT id, seen_by FROM notifications WHERE episode_id=?", (p.episode_id,)) if p.episode_id \
+            else (f"SELECT id, seen_by FROM notifications WHERE id IN ({','.join('?' * len(p.ids)) or 'NULL'})", tuple(p.ids))
+        for n in db.rows(c.execute(q, args)):
+            seen = n["seen_by"] or []
+            if me not in seen:
+                c.execute("UPDATE notifications SET seen_by=? WHERE id=?", (db.dumps([*seen, me]), n["id"]))
+    return {"ok": True}
+
+
 # ---------- «Тех. требования»: шаблоны ТТ ----------
 
 class TemplateIn(BaseModel):
@@ -1986,6 +2232,11 @@ def public_media(sig: str, rel: str):
             or f.suffix.lower() not in IMAGE_EXT:
         raise HTTPException(404, "Не найдено")
     return FileResponse(f)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
 app.mount("/media", StaticFiles(directory=db.MEDIA_DIR), name="media")

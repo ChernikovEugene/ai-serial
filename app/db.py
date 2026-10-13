@@ -77,6 +77,7 @@ TABLES = {
         approved_at TEXT NOT NULL DEFAULT '',
         export_status TEXT NOT NULL DEFAULT '',
         export_error TEXT NOT NULL DEFAULT '',
+        urgent INTEGER NOT NULL DEFAULT 0,
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT ''""",
@@ -113,6 +114,8 @@ TABLES = {
         needs_redo INTEGER NOT NULL DEFAULT 0,
         engine TEXT NOT NULL DEFAULT 'veo',
         sound_off INTEGER NOT NULL DEFAULT 0,
+        sound_mode TEXT NOT NULL DEFAULT '',
+        no_characters INTEGER NOT NULL DEFAULT 0,
         voiceover INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL DEFAULT ''""",
     "integrations": """
@@ -133,6 +136,8 @@ TABLES = {
         duration INTEGER NOT NULL DEFAULT 8,
         source TEXT NOT NULL DEFAULT 'veo',
         provider TEXT NOT NULL DEFAULT '',
+        remote_id TEXT NOT NULL DEFAULT '',
+        remote_path TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT '',
@@ -184,12 +189,33 @@ TABLES = {
         in_prompt INTEGER NOT NULL DEFAULT 0,
         position INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT ''""",
+    "reports": """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL DEFAULT 'bug',
+        text TEXT NOT NULL DEFAULT '',
+        page TEXT NOT NULL DEFAULT '',
+        version TEXT NOT NULL DEFAULT '',
+        viewport TEXT NOT NULL DEFAULT '',
+        shot_path TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'new',
+        issue_number INTEGER,
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''""",
+    "notifications": """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role TEXT NOT NULL DEFAULT 'editor',
+        kind TEXT NOT NULL DEFAULT '',
+        episode_id INTEGER,
+        text TEXT NOT NULL DEFAULT '',
+        seen_by TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT ''""",
     "settings": """
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL""",
 }
 
-JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members"}
+JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members", "seen_by"}
 
 DEFAULT_SETTINGS = {
     "veo_provider": "stub",          # устарело: было stub | gemini, теперь gen_mode + veo_route
@@ -289,6 +315,8 @@ def init():
             if live:
                 c.execute("UPDATE settings SET value='google' WHERE key='veo_route'")
         c.execute("UPDATE shots SET engine='other' WHERE engine='sora'")  # Sora закрыта, в Magnific её нет
+        # звук шота: раньше была одна галочка «звук не нужен», теперь три режима (full | ambient | off)
+        c.execute("UPDATE shots SET sound_mode = CASE WHEN sound_off=1 THEN 'off' ELSE 'full' END WHERE sound_mode=''")
         c.execute("UPDATE settings SET value=? WHERE key='anchor_date' AND value=''",
                   (datetime.now().date().isoformat(),))
         _migrate_arcs_v2(c)

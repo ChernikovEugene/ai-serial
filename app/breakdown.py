@@ -730,8 +730,13 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
     if shot.get("camera"):
         parts.append(_sent(f"Camera: {text(shot['camera'])}"))
 
+    mode = shot.get("sound_mode") or ("off" if shot.get("sound_off") else "full")
     on_screen = [d for d in shot.get("dialogue", []) if d.get("voice") != VOICE_OVER]
-    if on_screen:
+    if mode == "off":
+        parts.append("Silent video: no sound at all, nobody speaks, no music.")
+    elif mode == "ambient":
+        parts.append("Nobody speaks, lips closed. Natural ambient background sound only, no music.")
+    elif on_screen:
         for d in on_screen:
             v = next((v for c, v in char_vs if c["asset_id"] == d.get("asset_id")), None)
             how = f", {d['parenthetical']}" if d.get("parenthetical") else ""

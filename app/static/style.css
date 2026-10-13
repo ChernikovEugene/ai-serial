@@ -702,3 +702,56 @@ fieldset.sound-zone:disabled { opacity: .45; }
 textarea.need { border-color: var(--warn); }
 .loc-head .check { margin: 0; font-size: 12px; }
 .cam-pick { display: flex; flex-direction: column; gap: 6px; }
+
+/* ---------- «Сообщить о проблеме» и «Заявки» ---------- */
+.report-btn { display: inline-flex; align-items: center; gap: 7px; width: 100%; justify-content: flex-start; padding: 6px 8px; font-size: 13px; }
+.report-btn svg { width: 15px; height: 15px; flex: none; }
+.report-btn.mob { display: none; }
+.rp-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.rp-head h1 { margin: 0; }
+.rp-flag { width: 22px; height: 22px; }
+.rp-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+.rp-kind { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; white-space: normal; padding: 14px; border-radius: 10px; }
+.rp-kind .muted { font-size: 13px; font-weight: 400; }
+.rp-kind.on { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+.rp-ico { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err); }
+.rp-kind[data-kind="ux"] .rp-ico, .rp-ux .rp-ico { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.rp-kind[data-kind="idea"] .rp-ico, .rp-idea .rp-ico { background: color-mix(in srgb, var(--orange) 16%, transparent); color: var(--orange); }
+.rp-ico svg { width: 20px; height: 20px; }
+.rp-ico.small { width: 26px; height: 26px; } .rp-ico.small svg { width: 15px; height: 15px; }
+.rp-label { font-size: 14px; font-weight: 600; color: var(--text); margin: 14px 0 8px; }
+.rp-shot { display: flex; gap: 16px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.rp-shot img, .rp-noshot { width: 220px; max-height: 140px; object-fit: cover; object-position: top; border-radius: 6px; border: 1px solid var(--line); flex: none; }
+.rp-noshot { height: 110px; display: grid; place-items: center; }
+.rp-note { margin: 10px 0 0; }
+.rp-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+.rp-card { margin-bottom: 12px; }
+.rp-text { white-space: pre-wrap; margin: 10px 0 6px; }
+.rp-thumb img { max-width: 360px; max-height: 220px; border-radius: 6px; border: 1px solid var(--line); margin-top: 8px; object-fit: cover; object-position: top; }
+.rp-past { margin-top: 16px; }
+@media (max-width: 800px) {
+  .rp-kinds { grid-template-columns: 1fr; }
+  .rp-shot { flex-direction: column; } .rp-shot img, .rp-noshot { width: 100%; }
+  .nav-foot .report-btn { display: none; }
+  .report-btn.mob { order: 4; flex: 1 0 100%; margin-top: 6px; }
+  .nav.open .report-btn.mob { display: inline-flex; }
+}
+
+/* ---------- значки в меню: срочные серии, «сгенерировалась», новые заявки ---------- */
+@media (min-width: 801px) { .nav a { display: flex; align-items: center; } .nav a .nav-badges { margin-left: auto; } }
+.nav-badges { margin-left: 8px; display: inline-flex; gap: 5px; align-items: center; }
+.nav-dot { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--c); color: #fff; font-size: 11px; font-weight: 700;
+  display: inline-grid; place-items: center; line-height: 1; }
+.nav-urgent { font-size: 12px; }
+.urgent-tag { font-size: 11px; font-weight: 700; color: var(--err); }
+.prod-card.urgent { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 55%, transparent); }
+.gen-ready { font-size: 12px; font-weight: 600; color: var(--c); }
+.urgent-btn.on { border-color: var(--err); color: var(--err); }
+.urgent-badge { color: var(--err); }
+.urgent-check { margin-top: 12px; }
+
+/* ---------- шот: режим звука, незаполненные пункты ---------- */
+.sound-mode { margin-bottom: 8px; flex-wrap: wrap; }
+.sound-mode button { font-size: 12px; padding: 5px 10px; }
+.need-t { color: var(--warn); }
+.unready { padding-left: 18px; } .unready li { margin: 4px 0; }
