@@ -71,6 +71,14 @@ def move(eid: int, number: int | None):
         normalize(c, first=eid)
 
 
+def place(eid: int, day: str):
+    """Поставить серию на конкретный день и закрепить 📌 (срочная серия, серия к событию). Она забирает этот день
+    у любой другой, даже закреплённой: та и следующие за ней сдвигаются на день вперёд (одна серия в день)."""
+    with db.connect() as c:
+        c.execute("UPDATE episodes SET number=?, pinned=1, planned_date=? WHERE id=?", (number_for(day), day, eid))
+        normalize(c, first=eid)
+
+
 def set_pinned(eid: int, pinned: bool):
     with db.connect() as c:
         e = c.execute("SELECT number FROM episodes WHERE id=?", (eid,)).fetchone()

@@ -424,6 +424,19 @@ st, b = editor.call("GET", "/api/badges")
 check("urgent: badge counts it", st == 200 and b["urgent"] >= 1, b)
 st, prod = editor.call("GET", "/api/production")
 check("urgent: production carries the flag", any(e["id"] == ue["id"] and e["urgent"] for e in prod))
+# срочная на конкретный день: встаёт на него и закрепляется, остальные сдвигаются (одна серия в день)
+def day_of(i):
+    return next(e["date"] for e in admin.call("GET", "/api/episodes")[1] if e["id"] == i)
+q = [writer.call("POST", "/api/episodes", {"title": f"Очередь {i}"})[1]["id"] for i in range(3)]
+d1, d2 = day_of(q[1]), day_of(q[2])
+st, u2 = writer.call("POST", "/api/episodes", {"title": "Срочная к событию", "urgent": True, "date": d1})
+check("urgent day: takes the chosen day, pinned", st == 200 and day_of(u2["id"]) == d1 and u2["pinned"] == 1, (st, d1, day_of(u2["id"]) if st == 200 else u2))
+check("urgent day: the episode of that day moved one day later", day_of(q[1]) == d2, (day_of(q[1]), d2))
+check("urgent day: one episode per day", len({day_of(i) for i in [*q, u2["id"]]}) == 4, [day_of(i) for i in [*q, u2["id"]]])
+st, u3 = writer.call("POST", "/api/episodes", {"title": "Ещё срочная", "urgent": True})
+st, _ = writer.call("POST", f"/api/episodes/{u3['id']}/move", {"date": d1, "pin": True})
+check("urgent day: wins a day taken by a pinned episode", st == 200 and day_of(u3["id"]) == d1 and day_of(u2["id"]) != d1, (st, day_of(u3["id"]), day_of(u2["id"])))
+
 st, ue2 = writer.call("PUT", f"/api/episodes/{ue['id']}?reparse=false", {"urgent": False})
 check("urgent: writer unchecks it", st == 200 and ue2["urgent"] == 0, st)
 

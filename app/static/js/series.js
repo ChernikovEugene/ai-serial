@@ -180,16 +180,24 @@ function newEpisodeQuick(arcs, rerender, date = "") {
       <label class="check"><input type="radio" name="nq-when" value="draft"> В черновики</label>
     </div>
     <label class="check urgent-check"><input type="checkbox" id="nq-urgent"> 🔥 Срочная серия <span class="muted small">— сразу наверх в «Продакшне» и значок в меню</span></label>
+    <div class="urgent-day" id="nq-uday" hidden><label>День выхода срочной серии</label>
+      <div class="row"><input id="nq-udate" type="date" value="${date || state.meta.today}" style="width:180px">
+        <span class="muted small">Встанет на этот день и закрепится 📌. Серия, которая стояла на нём, и следующие сдвинутся на день вперёд.</span></div></div>
     <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="nq-cancel">Отмена</button><button class="primary" id="nq-save">Создать</button></div>`);
   $("#nq-cancel", m).onclick = closeModal;
+  $("#nq-urgent", m).onchange = (e) => {
+    $("#nq-uday", m).hidden = !e.target.checked;
+    $(".nq-when", m).classList.toggle("off", e.target.checked); // у срочной день выбирается ниже
+  };
   $("#nq-date", m).onfocus = () => ($("input[value=date]", m).checked = true);
   $("#nq-save", m).onclick = async () => {
-    const when = $("input[name=nq-when]:checked", m).value;
-    const d = $("#nq-date", m).value;
+    const urgent = $("#nq-urgent", m).checked;
+    const when = urgent ? "date" : $("input[name=nq-when]:checked", m).value; // у срочной — свой день
+    const d = urgent ? $("#nq-udate", m).value : $("#nq-date", m).value;
     if (when === "date" && !d) return toast("Выберите день", true);
     await api("/api/episodes", { json: {
       title: $("#nq-title", m).value.trim(), synopsis: $("#nq-syn", m).value, arc_id: +$("#nq-arc", m).value || null,
-      date: when === "date" ? d : null, backlog: when === "draft", urgent: $("#nq-urgent", m).checked } });
+      date: when === "date" ? d : null, backlog: when === "draft", urgent } });
     closeModal();
     toast("Серия создана");
     rerender();

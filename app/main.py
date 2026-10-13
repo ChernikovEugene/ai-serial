@@ -1108,8 +1108,7 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
                         (e.title.strip(), e.script, e.synopsis.strip(), status, e.arc_id, pos, int(e.urgent), user_id,
                          db.now(), db.now())).lastrowid
     if e.date:
-        schedule.move(eid, schedule.number_for(e.date))
-        schedule.set_pinned(eid, True)
+        schedule.place(eid, e.date)
     elif e.number:
         schedule.move(eid, e.number)
     elif not e.backlog:
@@ -1274,6 +1273,7 @@ def set_status(eid: int, s: StatusIn, request: Request):
 class MoveIn(BaseModel):
     number: int | None = None
     date: str | None = None
+    pin: bool = False  # поставить на этот день и закрепить (срочная серия): занятый день освобождается сдвигом
 
 
 @app.post("/api/episodes/{eid}/move", dependencies=[Depends(auth.writer)])
@@ -1282,6 +1282,10 @@ def move_episode(eid: int, m: MoveIn, request: Request):
     number = schedule.number_for(m.date) if m.date else m.number
     if number is not None and number < 1:
         raise HTTPException(400, "Эта дата раньше старта сериала. Поменяйте точку отсчёта в очереди")
+    if m.pin and m.date:
+        schedule.place(eid, m.date)
+        db.log(eid, uid(request), f"Поставлена на {m.date} и закреплена, остальные сдвинуты")
+        return {"ok": True}
     schedule.move(eid, number)
     if ep["number"] != number:
         db.log(eid, uid(request), f"Перенесена: {'в бэклог' if number is None else f'на {schedule.date_for(number)}'}")

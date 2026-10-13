@@ -227,9 +227,12 @@ function titleRow(ep) {
 function bindTitleRow(ep) {
   $("#ep-back").onclick = () => goBack(`#/series/${ep.arc_id ?? "none"}`);
   $("#ep-urgent") && ($("#ep-urgent").onclick = async () => {
-    await api(`/api/episodes/${E.id}`, { method: "PUT", json: { urgent: !E.ep.urgent } });
-    toast(E.ep.urgent ? "Отметка «срочно» снята" : "Серия отмечена как срочная");
-    renderEpisode(E.id);
+    if (E.ep.urgent) {
+      await api(`/api/episodes/${E.id}`, { method: "PUT", json: { urgent: false } });
+      toast("Отметка «срочно» снята");
+      return renderEpisode(E.id);
+    }
+    urgentDialog();
   });
   $("#ep-status").onchange = async (e) => {
     const status = e.target.value;
@@ -303,6 +306,31 @@ function bindResult(ep) {
   };
   bindVideoFallback();
   if (canResult()) { $("#res-note").onchange = save; $("#res-url").onchange = save; }
+}
+
+/** Отметить серию срочной и поставить на конкретный день: она закрепляется, остальные сдвигаются (1 серия в день). */
+function urgentDialog() {
+  const ep = E.ep;
+  const m = modal(`<h1>🔥 Срочная серия</h1>
+    <label>День выхода</label><input id="ur-date" type="date" value="${ep.date || state.meta.today}" style="width:200px">
+    <p class="muted small">Серия встанет на этот день и закрепится 📌. Серия, которая стояла на нём, и следующие сдвинутся на день вперёд. Закреплённые 📌 серии на других днях не двигаются.</p>
+    <label class="check"><input type="checkbox" id="ur-keep"> день не менять, только отметить срочной</label>
+    <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="ur-cancel">Отмена</button>
+      <button class="primary" id="ur-go">Отметить срочной</button></div>`);
+  $("#ur-keep", m).onchange = (e) => { $("#ur-date", m).disabled = e.target.checked; };
+  $("#ur-cancel", m).onclick = closeModal;
+  $("#ur-go", m).onclick = async () => {
+    const day = $("#ur-date", m).value;
+    const keep = $("#ur-keep", m).checked;
+    if (!keep && !day) return toast("Выберите день", true);
+    await api(`/api/episodes/${E.id}`, { method: "PUT", json: { urgent: true } });
+    if (!keep) {
+      await api(`/api/episodes/${E.id}/move`, { json: { date: day, pin: true } });
+    }
+    closeModal();
+    toast(keep ? "Серия отмечена как срочная" : `Срочная серия стоит на ${fmtDate(day)}, остальные сдвинуты`);
+    renderEpisode(E.id);
+  };
 }
 
 function moveDialog() {
@@ -744,6 +772,7 @@ export function newEpisodeDialog(opts = {}) {
     <label>Арка</label><select id="ne-arc"><option value="">— без арки —</option></select>
     <label class="check"><input type="checkbox" id="ne-backlog"> пока без даты (в черновики)</label>
     <label class="check urgent-check"><input type="checkbox" id="ne-urgent"> 🔥 Срочная серия <span class="muted small">— сразу наверх в «Продакшне» и значок в меню</span></label>
+    <div class="muted small" id="ne-uhint" hidden>Срочная встанет в «Дату выхода» выше (закрепится 📌), серия на этом дне и следующие сдвинутся на день вперёд.</div>
     <label>Сценарий — вставьте текст или загрузите файл (можно и позже)</label>
     <div class="editor-wrap"><textarea id="ne-script" rows="12" placeholder="Шот 1&#10;..."></textarea></div>
     <input id="ne-file" type="file" accept=".txt,.md,.fountain,text/plain" style="margin-top:6px">
@@ -752,6 +781,11 @@ export function newEpisodeDialog(opts = {}) {
   attachMentions($("#ne-script", m));
   api("/api/arcs").then((arcs) => { $("#ne-arc", m).innerHTML += arcs.map((a) => `<option value="${a.id}" ${a.id === opts.arcId ? "selected" : ""}>${esc(a.title)}</option>`).join(""); });
   $("#cancel", m).onclick = closeModal;
+  $("#ne-urgent", m).onchange = (e) => {
+    $("#ne-uhint", m).hidden = !e.target.checked;
+    if (e.target.checked && !$("#ne-date", m).value) $("#ne-date", m).value = state.meta.today;
+    if (e.target.checked) $("#ne-backlog", m).checked = false;
+  };
   $("#ne-file", m).onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
     const fd = new FormData(); fd.append("file", f);
