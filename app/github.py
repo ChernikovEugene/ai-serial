@@ -49,8 +49,8 @@ def call(method: str, path: str, body: dict | None = None, raw: bool = False):
     """`path` is relative to the repo (e.g. "/issues") unless it starts with "//" (e.g. "//user")."""
     tok = token()
     if not tok:
-        raise GitHubError("Нет доступа к GitHub: войдите через GitHub CLI (gh auth login) "
-                          "или вставьте токен в «Настройки»")
+        raise GitHubError("Сайт не подключён к GitHub, поэтому заявку нельзя отправить в правки. "
+                          "Админу: вставьте токен GitHub в «Настройки» → «GitHub»")
     url = "https://api.github.com" + (path[1:] if path.startswith("//") else f"/repos/{repo_slug()}{path}")
     req = urllib.request.Request(
         url, method=method, data=json.dumps(body).encode() if body is not None else None,

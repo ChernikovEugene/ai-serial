@@ -55,10 +55,11 @@ export async function renderSettings() {
           ссылка Magnific на ролик живёт 30 минут.</p>
     </div>
     <div class="card" style="margin-top:14px">
-      <h2 style="margin-top:0">GitHub (кнопка «Правка»)</h2>
-      <p class="muted small">Правки хранятся в задачах (Issues) репозитория на GitHub. Если на компьютере выполнен вход в GitHub CLI
-        (<code>gh auth login</code>), токен не нужен.</p>
-      ${field("github_token", "Токен GitHub (хранится только у вас в data/studio.db)", "input", `type="password" placeholder="ghp_…" autocomplete="off"`)}
+      <h2 style="margin-top:0">GitHub (отправка заявок в правки Claude)</h2>
+      <p class="muted small">Кнопка «Отправить в правки Claude» на вкладке «Заявки» создаёт задачу в репозитории на GitHub.
+        Для этого сайту нужен токен с доступом только к этому репозиторию: на GitHub → Settings → Developer settings →
+        Fine-grained tokens, репозиторий ai-serial, права Issues и Contents — «Read and write».</p>
+      ${field("github_token", "Токен GitHub (хранится только на сервере студии)", "input", `type="password" placeholder="github_pat_…" autocomplete="off"`)}
     </div>
     ${admin ? `<div class="card" style="margin-top:14px" id="integrations"></div>` : ""}
     ${admin ? `<div class="row" style="margin-top:14px"><div class="spacer"></div><button class="primary" id="save">Сохранить настройки</button></div>` : ""}`;
