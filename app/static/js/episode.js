@@ -78,7 +78,7 @@ function refTag(s, r, i) {
 function engineHelp(s) {
   const e = engineInfo(s.engine);
   const facts = [
-    e.api ? (e.max_refs ? `референсов до ${e.max_refs}${e.ref_example ? `, в промпте «${e.ref_example}»` : ""}` : "без референсов") : "вручную, не через API",
+    e.api ? (e.max_refs ? `референсов до ${e.max_refs}${e.ref_example ? `, в промпте «${e.ref_example}»` : ""}` : "референсы не принимает") : "вручную, не через API",
     e.audio ? "звук делает сама" : "звук отдельно (ElevenLabs)",
     e.prompt_max ? `промпт до ${e.prompt_max} знаков` : "",
   ].filter(Boolean);

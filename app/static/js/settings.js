@@ -86,8 +86,8 @@ export function renderPublish() {
     <p class="muted">Сейчас готовые видео лежат в папке <code>data/media/renders</code>, а серию целиком можно посмотреть во вкладке «Просмотр и правки».</p></div>`;
 }
 
-const KINDS = [["veo", "Veo 3"], ["kling", "Kling"], ["runway", "Runway"], ["seedance", "Seedance"],
-  ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
+const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance", "Seedance 2.0"], ["hailuo", "Hailuo 3"],
+  ["wan", "WAN 2.7"], ["runway", "Runway Gen-4.5"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
 
 async function drawIntegrations() {
   const box = $("#integrations");
