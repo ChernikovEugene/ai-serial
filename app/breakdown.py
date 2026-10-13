@@ -15,27 +15,13 @@ Recognised inside the text (all optional):
 """
 import re
 
+from . import models
+
 ALLOWED_DURATIONS = (4, 6, 8)
-# Какие длины клипа умеет каждая нейросеть (секунды) и подсказка под выбором длины в карточке шота.
-# Данные по открытым описаниям API на октябрь 2026, при смене версий моделей сверять с документацией.
-# Длины клипа по нейросетям (проверено в октябре 2026: документация Veo 3.1, fal.ai для Kling 2.5/2.6,
-# Magnific для Runway Gen-4.5, Segmind для Seedance 2.0). Если нейросеть обновится, поправьте здесь.
-ENGINE_DURATIONS = {
-    "veo": (4, 6, 8),
-    "kling": (5, 10),
-    "sora": (4, 8, 12),
-    "runway": (5, 8, 10),
-    "seedance": (4, 5, 6, 8, 10, 12, 15),
-    "other": (4, 5, 6, 8, 10, 12, 15),
-}
-ENGINE_DURATION_NOTES = {
-    "veo": "Veo 3 / 3.1: 4, 6 или 8 с. С референсами на Veo 3.1 только 8 с.",
-    "kling": "Kling 2.5 Turbo и 2.6: только 5 или 10 с за одну генерацию.",
-    "sora": "Sora закрыта OpenAI (API отключён 24.09.2026). Длины 4, 8, 12 с даны по прежним данным.",
-    "runway": "Runway Gen-4.5: 5, 8 или 10 с (Gen-4: 5 или 10 с).",
-    "seedance": "Seedance 2.0: 4, 5, 6, 8, 10, 12 или 15 с.",
-    "other": "Другая нейросеть: выберите длину по её документации.",
-}
+# Какие длины клипа умеет каждая нейросеть и подсказка под выбором длины: берутся из описаний моделей в app/models.py
+# (сверено с документацией Magnific в октябре 2026).
+ENGINE_DURATIONS = {k: m["durations"] for k, m in models.MODELS.items()}
+ENGINE_DURATION_NOTES = {k: m["duration_note"] for k, m in models.MODELS.items()}
 
 
 def engine_durations(engine: str | None) -> tuple:
@@ -630,14 +616,17 @@ def _cap(text: str) -> str:
 def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tuple[str, list[dict], list[str]]:
     """Returns (prompt, references, warnings). references: [{"path", "kind": composition|character|location, ...}].
 
-    Герои и локации, у которых есть картинка, в тексте идут не по имени, а как «персонаж с референса N»: имя из сценария
+    Герои и локации, у которых есть картинка, в тексте идут не по имени, а ссылкой на картинку по правилам выбранной
+    нейросети: «@Image1» (Kling 3 Omni, Seedance, Hailuo), «Image 1» (WAN), «reference image 1» (Veo). Имя из сценария
     видеомодели ничего не говорит, а картинка говорит всё. Нумерация совпадает с порядком картинок в `references`
-    (так же они уходят в Veo и показываются на карточке шота), поэтому промпт можно целиком использовать и в другой нейросети."""
+    (так же они уходят в запрос и показываются на карточке шота)."""
     lang = settings.get("dialogue_language") or "Russian"
-    model = settings.get("veo_model", "")
     engine = shot.get("engine") or "veo"
+    m = models.spec(engine)
     comp = shot.get("composition_image")
     mode = shot.get("composition_mode") or "reference"
+    if comp and mode == "first_frame" and not m["first_frame"]:
+        mode = "reference"
     loc_text = (shot.get("location_text") or "").strip() if location_text_mode(shot) else ""
     loc_v = None if location_text_mode(shot) else versions.get(shot.get("location_version_id"))
     char_vs = [(c, versions.get(c.get("version_id"))) for c in shot.get("characters", [])]
@@ -656,20 +645,34 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
                      "asset_id": loc_v["asset_id"]})
     if comp and mode == "first_frame":
         if len(refs) > 1:
-            warns.append("В режиме «первый кадр» фото персонажей и локации не отправляются — Veo берёт всё из кадра")
+            warns.append(f"В режиме «первый кадр» фото персонажей и локации не отправляются — {m['name']} берёт всё из кадра")
         refs = refs[:1]
-    elif refs and engine == "veo" and "3.1" not in model:
-        warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
-    if len(refs) > MAX_REFERENCE_IMAGES:
-        dropped = ", ".join(r.get("name") or "композиция" for r in refs[MAX_REFERENCE_IMAGES:])
-        warns.append(f"Veo принимает до {MAX_REFERENCE_IMAGES} референсов — не отправятся: {dropped}")
-        refs = refs[:MAX_REFERENCE_IMAGES]
+    elif refs and not models.accepts_refs(engine, settings):
+        if engine == "veo":
+            warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
+        else:
+            warns.append(f"{m['name']} не принимает референсы: героев и локацию держит только описание. "
+                         "Чтобы сохранить внешность, дайте кадр как «первый кадр видео»")
+        refs = []
+    else:
+        skipped = [r for r in refs if r["kind"] not in m["ref_kinds"]]
+        if skipped and refs:
+            warns.append(f"{m['name']} принимает в референсы только персонажей: "
+                         + ", ".join(r.get("name") or "композиция" for r in skipped) + " описаны словами")
+        refs = [r for r in refs if r["kind"] in m["ref_kinds"]]
+    if len(refs) > m["max_refs"] and not (comp and mode == "first_frame"):
+        dropped = ", ".join(r.get("name") or "композиция" for r in refs[m["max_refs"]:])
+        warns.append(f"{m['name']} принимает до {m['max_refs']} референсов — не отправятся: {dropped}")
+        refs = refs[:m["max_refs"]]
 
-    # номера картинок, на которые можно ссылаться в тексте (Veo без 3.1 картинки не получает: там остаются имена)
-    attached = refs if (engine != "veo" or "3.1" in model) else []
+    # номера картинок, на которые можно ссылаться в тексте (в режиме «первый кадр» картинка одна, на неё не ссылаются)
+    attached = [] if comp and mode == "first_frame" else refs
     num = {(r["kind"], r.get("asset_id")): i for i, r in enumerate(attached, 1) if r["kind"] != "composition"}
     comp_n = next((i for i, r in enumerate(attached, 1) if r["kind"] == "composition"), None)
-    label = {a_id: f"the character from reference image {n}" for (kind, a_id), n in num.items() if kind == "character"}
+    tok = lambda n: models.token(engine, n)  # noqa: E731
+    natural = m["ref_token"] == "natural"
+    label = {a_id: (f"the character from {tok(n)}" if natural else tok(n))
+             for (kind, a_id), n in num.items() if kind == "character"}
     swaps = [(rx, label[a["id"]]) for rx, a in AssetIndex(list(assets.values())).patterns
              if a["kind"] == "character" and a["id"] in label]
 
@@ -686,12 +689,10 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
         parts.append(_sent(settings["tt_prompt"]))
     parts.append(f"Vertical {settings.get('aspect_ratio', '9:16')} video, {shot['duration']} seconds, one continuous shot.")
 
-    if comp:
-        where = f" (reference image {comp_n})" if comp_n else ""
-        if mode == "first_frame":
-            parts.append(f"The video starts exactly from the provided first-frame image{where}; keep its composition, framing and camera angle.")
-        else:
-            parts.append(f"Composition: match the framing, camera angle, blocking and layout of the composition reference image{where}.")
+    if comp and mode == "first_frame":
+        parts.append("The video starts exactly from the provided first-frame image; keep its composition, framing and camera angle.")
+    elif comp and comp_n:
+        parts.append(f"Composition: match the framing, camera angle, blocking and layout of {tok(comp_n)}.")
     if shot.get("composition_note"):
         parts.append(_sent("Composition notes: " + text(shot["composition_note"])))
 
@@ -700,7 +701,7 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
         desc = loc_v["description"].strip()
         name = assets[loc_v["asset_id"]]["name"]
         if loc_n:
-            parts.append(_sent(f"Location: {name}, shown in reference image {loc_n}" + (f". Details: {desc}" if desc else "")))
+            parts.append(_sent(f"Location: {name}, shown in {tok(loc_n)}" + (f". Details: {desc}" if desc else "")))
         else:
             parts.append(_sent(f"Location: {name}" + (f" — {desc}" if desc else "")))
     elif loc_text:
@@ -713,7 +714,8 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
         outfit = f" (look: {v['label']})" if v and v["label"] else ""
         if c["asset_id"] in label:
             n = num[("character", c["asset_id"])]
-            parts.append(_sent(f"Character in reference image {n}{outfit}" + (f". Details: {desc}" if desc else "")))
+            where = f"Character in {tok(n)}" if natural else f"Character {tok(n)}"
+            parts.append(_sent(f"{where}{outfit}" + (f". Details: {desc}" if desc else "")))
         else:
             parts.append(_sent(f"Character {c['name']}{outfit}" + (f": {desc}" if desc else "")))
 
@@ -746,10 +748,9 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
 
 
 def forced_duration(refs: list[dict], shot: dict, settings: dict) -> int | None:
-    """Veo 3.1 only renders 8 s clips when reference images are attached."""
+    """Veo 3.1 only renders 8 s clips when reference images are attached (build_prompt already dropped them where unsupported)."""
     if (shot.get("engine") or "veo") != "veo":
         return None
-    if refs and (shot.get("composition_mode") != "first_frame" or not shot.get("composition_image")) \
-            and "3.1" in settings.get("veo_model", ""):
+    if refs and (shot.get("composition_mode") != "first_frame" or not shot.get("composition_image")):
         return 8
     return None

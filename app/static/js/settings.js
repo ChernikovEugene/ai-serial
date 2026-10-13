@@ -1,4 +1,4 @@
-// Settings (Veo, breakdown, GitHub) and the publish stub. The team lives in team.js.
+// Settings (video generation via Magnific, breakdown, GitHub) and the publish stub. The team lives in team.js.
 import { $, $$, api, can, esc, state, toast, view } from "./core.js";
 
 /** День выхода серии № 1 по точке отсчёта (anchor_number выходит anchor_date). */
@@ -27,15 +27,32 @@ export async function renderSettings() {
         <span class="muted small">дальше по одной серии в день; закреплённые за датой (📌) серии не сдвигаются</span></div>
     </div>
     <div class="card">
-        <h2 style="margin-top:0">Подключение к нейросети (Veo)</h2>
-        <p class="muted small">Формат, модель, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
+        <h2 style="margin-top:0">Генерация видео (Magnific API)</h2>
+        <p class="muted small">Все нейросети, кроме «Другой», уходят через Magnific (бывший Freepik API): Veo 3.1, Kling 3 Omni, Seedance 2.0,
+          Hailuo 3, WAN 2.7, Runway Gen-4.5. Нейросеть выбирается в карточке шота. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
         <label>Режим</label>
-        <select data-k="veo_provider" ${ro}>
-          <option value="stub" ${s.veo_provider === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
-          <option value="gemini" ${s.veo_provider === "gemini" ? "selected" : ""}>Gemini API — реальная генерация (платно)</option></select>
-        ${field("veo_api_key", "API-ключ Google AI Studio (хранится только у вас в data/studio.db)", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
+        <select data-k="gen_mode" ${ro}>
+          <option value="stub" ${s.gen_mode === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
+          <option value="live" ${s.gen_mode === "live" ? "selected" : ""}>Реальная генерация (платно, тратит кредиты)</option></select>
+        ${field("magnific_api_key", "API-ключ Magnific (кабинет Magnific → API Keys; хранится только у вас в data/studio.db)", "input", `type="password" placeholder="FPSX…" autocomplete="off"`)}
+        <label>Разрешение</label>
+        <select data-k="magnific_resolution" ${ro} style="max-width:260px">
+          <option value="480p" ${s.magnific_resolution === "480p" ? "selected" : ""}>480p</option>
+          <option value="720p" ${s.magnific_resolution === "720p" ? "selected" : ""}>720p</option>
+          <option value="1080p" ${s.magnific_resolution === "1080p" ? "selected" : ""}>1080p</option>
+          <option value="4k" ${s.magnific_resolution === "4k" ? "selected" : ""}>4k</option></select>
+        <p class="muted small">720p дешевле и подходит для черновиков. Если модель не умеет выбранное, берётся ближайшее (Hailuo 3 всегда 768p).</p>
+        ${field("public_base_url", "Публичный адрес студии (например, https://studio.onrender.com)", "input", `placeholder="пусто: студия на ноутбуке"`)}
+        <p class="muted small">Kling 3 Omni, WAN 2.7 и Veo 3.1 с референсами принимают картинки только ссылкой. Когда студия доступна из интернета,
+          укажите её адрес: картинки уйдут по защищённой ссылке. Без адреса с ноутбука работают Seedance 2.0, Hailuo 3, Runway и Veo без референсов.</p>
+        <label>Veo 3.1 отправлять</label>
+        <select data-k="veo_route" ${ro}>
+          <option value="magnific" ${s.veo_route === "magnific" ? "selected" : ""}>через Magnific (ключ выше)</option>
+          <option value="google" ${s.veo_route === "google" ? "selected" : ""}>напрямую через Google (Gemini API, свой ключ)</option></select>
+        ${field("veo_api_key", "API-ключ Google AI Studio (только для Veo напрямую через Google)", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
         <div style="max-width:260px">${field("veo_parallel", "Одновременных генераций")}</div>
-        <p class="muted small">Число одновременных генераций применяется после перезапуска приложения.</p>
+        <p class="muted small">Число одновременных генераций применяется после перезапуска приложения. Готовое видео скачивается в студию сразу:
+          ссылка Magnific на ролик живёт 30 минут.</p>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">GitHub (кнопка «Правка»)</h2>
@@ -69,15 +86,15 @@ export function renderPublish() {
     <p class="muted">Сейчас готовые видео лежат в папке <code>data/media/renders</code>, а серию целиком можно посмотреть во вкладке «Просмотр и правки».</p></div>`;
 }
 
-const KINDS = [["veo", "Veo 3"], ["kling", "Kling"], ["sora", "Sora"], ["runway", "Runway"], ["seedance", "Seedance"],
-  ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
+const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance", "Seedance 2.0"], ["hailuo", "Hailuo 3"],
+  ["wan", "WAN 2.7"], ["runway", "Runway Gen-4.5"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
 
 async function drawIntegrations() {
   const box = $("#integrations");
   const list = await api("/api/integrations");
   const opts = (sel) => KINDS.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${n}</option>`).join("");
   box.innerHTML = `<h2 style="margin-top:0">Нейросети и API-ключи</h2>
-    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Сейчас через API работает только Veo (ключ выше); остальные ключи сохраняются до подключения.</p>
+    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше); здесь можно хранить ключи других сервисов, например ElevenLabs.</p>
     ${list.map((i) => `<div class="int-row" data-id="${i.id}">
       <input data-i="name" value="${esc(i.name)}" style="width:200px" placeholder="Имя">
       <select data-i="kind" style="width:auto">${opts(i.kind)}</select>

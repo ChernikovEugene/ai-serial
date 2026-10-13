@@ -1,6 +1,6 @@
 """Video generation. Every run creates a take (дубль) for the shot.
-`stub` provider writes the exact request to disk instead of calling Veo;
-`gemini` calls the Gemini API (Veo 3 / 3.1) with the key from settings."""
+Where the shot goes is decided by models.route(): `stub` writes the exact request to disk and calls nothing;
+`magnific` sends it to Magnific API (all models, see app/models.py); `google` calls the Gemini API (Veo 3 / 3.1)."""
 import base64
 import json
 import mimetypes
@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from . import db
+from . import db, models
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 OUTPUT_DIR = db.MEDIA_DIR / "renders"
@@ -85,12 +85,17 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         base = f"ep{shot['episode_id']}_shot{shot['label'] or shot['idx']}_take{take_id}"
         req_rel = f"renders/{base}.request.json"
-        (db.MEDIA_DIR / req_rel).write_text(
-            json.dumps(build_request(shot, refs, settings, inline_images=False), ensure_ascii=False, indent=2), "utf-8")
+        (db.MEDIA_DIR / req_rel).write_text(json.dumps(preview(shot, refs, settings), ensure_ascii=False, indent=2), "utf-8")
+        where = models.route(shot.get("engine"), settings)
 
-        if settings.get("veo_provider") != "gemini":
+        if where in ("stub", "manual"):
             time.sleep(1.5)
             _finish(take_id, shot_id, "stub", "Заглушка: запрос сохранён, видео не создавалось", request=req_rel)
+            return
+        if where == "magnific":
+            video = models.generate(shot, refs, settings)
+            (OUTPUT_DIR / f"{base}.mp4").write_bytes(video)
+            _finish(take_id, shot_id, "done", video=f"renders/{base}.mp4", request=req_rel)
             return
 
         key = settings.get("veo_api_key", "").strip()
@@ -127,13 +132,24 @@ def start(shot: dict, refs: list[dict], settings: dict, user_id: int | None, rea
             "INSERT INTO takes(shot_id, take_no, status, prompt, duration, reason, provider, created_by, created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
             (shot["id"], n, "queued", shot["prompt"], shot["duration"], reason.strip(),
-             settings.get("veo_provider", "stub"), user_id, db.now())).lastrowid
+             models.route(shot.get("engine"), settings), user_id, db.now())).lastrowid
     pool().submit(_run, take_id, shot, refs, settings)
     return take_id
 
 
 def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
-    return build_request(shot, refs, settings, inline_images=False)
+    """Readable request (images as file names, not base64): for Magnific the endpoint and body, for Google the Veo body."""
+    engine = shot.get("engine") or "veo"
+    if engine == "veo" and models.veo_route(settings) == "google":
+        return build_request(shot, refs, settings, inline_images=False)
+    try:
+        req = models.build(shot, refs, settings, inline=False)
+    except RuntimeError as e:
+        return {"model": models.spec(engine)["name"], "error": str(e)}
+    out = {"model": models.spec(engine)["name"], "url": models.API_BASE + req["path"], "body": req["body"]}
+    if warn := models.link_warning(shot, refs, settings):
+        out["warning"] = warn
+    return out
 
 
 def recover():

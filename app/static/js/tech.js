@@ -30,7 +30,7 @@ export async function renderTech() {
     <div class="two-col">
       <div class="card">
         <h3 style="margin-top:0">Формат</h3>
-        ${field("veo_model", "Модель (фото-референсы есть только у Veo 3.1)")}
+        ${field("veo_model", "Модель Veo при отправке напрямую через Google (фото-референсы есть только у Veo 3.1)")}
         <div class="row"><div style="flex:1">${field("aspect_ratio", "Соотношение сторон")}</div>
           <div style="flex:1">${field("resolution", "Разрешение (720p / 1080p)")}</div>
           <div style="flex:1">${field("max_shot_seconds", "Лимит шота, с")}</div></div>
