@@ -110,10 +110,11 @@ function engineHelp(s) {
 }
 
 // The writer cannot touch a script once the producer has approved it.
-const writerLocked = () => state.meta.user.role === "writer" && !["dev", "review"].includes(E.ep.status);
+const writerLocked = () => state.meta.user.role !== "admin" && !["dev", "review"].includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
+const canEp = () => can.episodes() && !writerLocked(); // название и синопсис серии
 
-const canPost = () => can.write(); // описание поста — сценарист и продюсер, на любом этапе
+const canPost = () => can.episodes(); // описание поста — на любом этапе
 
 export async function copyText(text) {
   if (!text.trim()) return toast("Описание для поста пока пустое", true);
@@ -158,7 +159,7 @@ export function drawHeader() {
           <button class="primary" id="gen" title="Через Magnific API уходят шоты всех нейросетей, кроме «Другой»: её монтажёр присылает готовым файлом.">▶ Отправить в генерацию</button>` : ""}
       </div>
       <div class="muted small" style="margin:6px 0 0 2px">${ep.arc_id ? `Арка «${esc(ep.arc_title)}» · ` : ""}${ep.date ? `Выход: ${fmtDate(ep.date)}${ep.pinned ? " 📌 дата закреплена" : ""}` : "Черновик — в очередь не идёт"}
-            · <a href="#" id="move-ep">${ep.number != null ? "перенести" : "назначить дату"}</a></div>
+            ${can.schedule() ? `· <a href="#" id="move-ep">${ep.number != null ? "перенести" : "назначить дату"}</a>` : ""}</div>
       <div class="summary">
         <span><b>${ep.shots.length}</b> шотов</span>
         <span>хронометраж <b>${fmtDur(ep.total_seconds)}</b> <span class="muted">(по тексту ~${fmtDur(ep.est_seconds)})</span></span>
@@ -192,7 +193,7 @@ export function drawHeader() {
       renderEpisode(E.id);
     };
   }
-  $("#move-ep").onclick = (e) => { e.preventDefault(); moveDialog(); };
+  $("#move-ep") && ($("#move-ep").onclick = (e) => { e.preventDefault(); moveDialog(); });
   $$("[data-jump]").forEach((el) => (el.onclick = () => {
     E.sel = +el.dataset.jump;
     drawTab();
@@ -224,9 +225,9 @@ function titleRow(ep) {
   return `<button class="ghost" id="ep-back" title="Назад">←</button>
     <div class="ep-badge" style="--c:${STATUS_COLORS[ep.status]}">${ep.number != null ? `Серия ${ep.arc_number ?? ep.number}` : "черновик"}</div>
     <div style="flex:1;min-width:220px">
-      <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canWrite() ? "" : "disabled"}>
+      <input id="ep-title" class="title-input" value="${esc(ep.title)}" placeholder="Название серии" ${canEp() ? "" : "disabled"}>
     </div>
-    ${canWrite() || can.admin() ? `<button class="ghost urgent-btn ${ep.urgent ? "on" : ""}" id="ep-urgent" title="${ep.urgent ? "Серия срочная. Нажмите, чтобы снять отметку" : "Срочная серия: на выбранный день, наверх в «Продакшне» и значок в меню"}">🔥 ${ep.urgent ? "Срочно" : "Сделать срочной"}</button>`
+    ${can.episodes() ? `<button class="ghost urgent-btn ${ep.urgent ? "on" : ""}" id="ep-urgent" title="${ep.urgent ? "Серия срочная. Нажмите, чтобы снять отметку" : "Срочная серия: на выбранный день, наверх в «Продакшне» и значок в меню"}">🔥 ${ep.urgent ? "Срочно" : "Сделать срочной"}</button>`
       : ep.urgent ? `<span class="badge urgent-badge">🔥 Срочно</span>` : ""}
     ${statusSelect(ep.status, 'id="ep-status"')}`;
 }
@@ -258,7 +259,7 @@ function bindTitleRow(ep) {
     await renderEpisode(E.id);
     toast("Статус изменён");
   };
-  if (canWrite()) {
+  if (canEp()) {
     $("#ep-title").onchange = async (e) => { await api(`/api/episodes/${E.id}`, { method: "PUT", json: { title: e.target.value } }); toast("Название сохранено"); };
   }
 }
@@ -269,7 +270,7 @@ function drawScriptHeader() {
     <div class="ep-head ep-head-min">
       <div class="row">${titleRow(ep)}</div>
       <label>Синопсис <span class="muted small">— коротко о чём серия; из него пишется ТЗ</span></label>
-      <textarea id="ep-synopsis" rows="3" placeholder="О чём серия…" ${canWrite() ? "" : "readonly"}>${esc(ep.synopsis || "")}</textarea>
+      <textarea id="ep-synopsis" rows="3" placeholder="О чём серия…" ${canEp() ? "" : "readonly"}>${esc(ep.synopsis || "")}</textarea>
     </div>`;
   bindTitleRow(ep);
   $("#ep-synopsis").onchange = async (ev) => {
@@ -279,7 +280,7 @@ function drawScriptHeader() {
   };
 }
 
-const canResult = () => can.write() || can.gen(); // итог и ссылку на ролик пишет любой из команды, кроме зрителя
+const canResult = () => can.episodes() || can.gen(); // итог и ссылку на ролик пишет любой из команды, кроме зрителя
 
 /** Превью по ссылке: ролик со ссылки Dropbox (?raw=1) или прямой ссылки на файл — как видео; иначе просто ссылка. */
 function resultPreview(url) {
@@ -321,10 +322,11 @@ function urgentDialog() {
   const m = modal(`<h1>🔥 Срочная серия</h1>
     <label>День выхода</label><input id="ur-date" type="date" value="${ep.date || state.meta.today}" style="width:200px">
     <p class="muted small">Серия встанет на этот день и закрепится 📌. Серия, которая стояла на нём, и следующие сдвинутся на день вперёд. Закреплённые 📌 серии на других днях не двигаются.</p>
-    <label class="check"><input type="checkbox" id="ur-keep"> день не менять, только отметить срочной</label>
+    <label class="check"><input type="checkbox" id="ur-keep" ${can.schedule() ? "" : "checked disabled"}> день не менять, только отметить срочной${can.schedule() ? "" : " <span class=\"muted small\">(менять даты вам не открыто)</span>"}</label>
     <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="ur-cancel">Отмена</button>
       <button class="primary" id="ur-go">Отметить срочной</button></div>`);
   $("#ur-keep", m).onchange = (e) => { $("#ur-date", m).disabled = e.target.checked; };
+  if (!can.schedule()) $("#ur-date", m).disabled = true;
   $("#ur-cancel", m).onclick = closeModal;
   $("#ur-go", m).onclick = async () => {
     const day = $("#ur-date", m).value;

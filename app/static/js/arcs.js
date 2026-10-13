@@ -5,7 +5,7 @@ import { $, $$, api, can, closeModal, esc, fmtDate, loadAssets, modal, state, to
 /** Divider row before the first slot of an arc. `extraCls` lets each page fit it into its own layout. */
 export function arcDivider(arc, extraCls = "") {
   const members = (arc.members || []).map(memberName).filter(Boolean);
-  return `<div class="arc-div ${extraCls}" data-arc="${arc.id}" title="${can.edit() ? "Нажмите, чтобы изменить арку" : ""}">
+  return `<div class="arc-div ${extraCls}" data-arc="${arc.id}" title="${can.arcs() ? "Нажмите, чтобы изменить арку" : ""}">
     <div class="arc-div-head"><span class="arc-tag">Новая арка</span><b>${esc(arc.title)}</b>
       <span class="muted small">${arc.start_date ? `с ${fmtDate(arc.start_date)} · ` : ""}счёт серий начинается заново</span></div>
     ${arc.notes ? `<div class="arc-notes">${esc(arc.notes)}</div>` : ""}
@@ -22,7 +22,7 @@ function memberName(m) {
 
 /** Make dividers clickable (edit) on the current page. */
 export function bindArcDividers(onChange) {
-  if (!can.edit()) return;
+  if (!can.arcs()) return;
   $$("[data-arc]").forEach((el) => (el.onclick = async () => {
     const arcs = await api("/api/arcs");
     const arc = arcs.find((a) => a.id === +el.dataset.arc);

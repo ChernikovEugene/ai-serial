@@ -17,7 +17,7 @@ const COLUMNS = [
 ];
 const FRESH_SECONDS = 4;
 const fresh = new Map(); // id → когда серию выложили: пока не прошло FRESH_SECONDS, карточка остаётся в зоне «Выложено»
-const canMove = () => can.gen(); // продюсер и монтажёр
+const canMove = () => can.status(); // перетаскивание и «Выложено» меняют статус серии
 
 export async function renderProduction() {
   const all = await api("/api/production");

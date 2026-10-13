@@ -16,7 +16,7 @@ export async function renderAssets(kind) {
     <div class="lib-tabs">${Object.entries(KIND).map(([key, v]) => `<a class="${key === kind ? "on" : ""}" href="#/${v.path}">${v.title}</a>`).join("")}</div>
     <div class="row"><h1>${k.title}</h1><div class="spacer"></div>
       <input id="search" placeholder="Поиск" style="width:200px">
-      ${can.edit() ? `<button class="primary" id="new">+ Добавить</button>` : ""}</div>
+      ${can.library() ? `<button class="primary" id="new">+ Добавить</button>` : ""}</div>
     <p class="muted">${k.hint}</p>
     <div class="grid" id="grid"></div>`;
   const draw = (q = "") => {
@@ -40,32 +40,32 @@ export async function renderAsset(id) {
   if (!a) { view().innerHTML = `<p>Не найдено</p>`; return; }
   const k = KIND[a.kind];
   const active = a.versions.find((v) => v.id === a.active_version_id) || a.versions.at(-1);
-  const ro = can.edit() ? "" : "disabled";
+  const ro = can.library() ? "" : "disabled";
   view().innerHTML = `
     <div class="row"><a href="#/${k.path}" class="btn ghost">←</a><h1 style="margin:0">${esc(a.name)}</h1>
       <span class="badge">${k.one}</span><code class="handle" title="Скопировать" id="copy">${esc(handle(a.name))}</code><div class="spacer"></div>
-      ${can.edit() ? `<button class="danger ghost" id="del">Удалить</button>` : ""}</div>
+      ${can.library() ? `<button class="danger ghost" id="del">Удалить</button>` : ""}</div>
     <div class="two-col" style="margin-top:16px">
       <div class="card">
         <label>Название</label><input id="a-name" value="${esc(a.name)}" ${ro}>
         <label>Другие имена через запятую — по ним тоже узнаём в тексте</label>
         <input id="a-aliases" value="${esc(a.aliases.join(", "))}" ${ro}>
-        ${can.edit() ? `<div class="row" style="margin-top:10px"><div class="spacer"></div><button id="save-meta">Сохранить</button></div>` : ""}
+        ${can.library() ? `<div class="row" style="margin-top:10px"><div class="spacer"></div><button id="save-meta">Сохранить</button></div>` : ""}
         <h2>Активная версия: v${active.version_no} ${esc(active.label)}</h2>
         <p class="muted small">Активная версия используется по умолчанию. В конкретной серии можно выбрать другую (вкладка «Сценарий» → «Версии для этой серии»).</p>
         <div class="gallery">${active.images.map((p, i) => `<figure class="ph" data-img="${esc(p)}">
           <a href="${media(p)}" target="_blank"><img src="${media(p)}" draggable="true"></a>${i === 0 ? `<span class="main-ref">главный реф</span>` : ""}
           <figcaption><button class="ghost small" data-copy title="Скопировать фото, чтобы вставить в видеогенератор (Ctrl+V)">Копировать</button>
             <a class="btn ghost small" href="${media(p)}" download title="Скачать файл">Скачать</a>
-            ${can.edit() && i > 0 ? `<button class="ghost small" data-main title="Сделать главным референсом (уходит в видеогенератор первым)">★</button>` : ""}
-            ${can.edit() ? `<button class="ghost small danger" data-rm title="Убрать фото из версии">✕</button>` : ""}</figcaption></figure>`).join("")
+            ${can.library() && i > 0 ? `<button class="ghost small" data-main title="Сделать главным референсом (уходит в видеогенератор первым)">★</button>` : ""}
+            ${can.library() ? `<button class="ghost small danger" data-rm title="Убрать фото из версии">✕</button>` : ""}</figcaption></figure>`).join("")
           || `<span class="muted">Нет фото — нейросеть нарисует по описанию.</span>`}</div>
-        ${can.edit() ? `<div class="dropzone" id="add-photos" style="margin-top:10px"></div>
+        ${can.library() ? `<div class="dropzone" id="add-photos" style="margin-top:10px"></div>
           <div class="muted small" style="margin-top:4px">Добавляйте сколько угодно фото: ракурсы со всех сторон, крупно лицо, в полный рост${a.kind === "location" ? ", разные углы помещения" : ""}. Первое фото — главный референс для видеогенератора, звёздочка ★ делает главным другое.</div>` : ""}
         <label>Описание для промпта</label><div class="pre">${esc(active.description) || `<span class="muted">—</span>`}</div>
         ${a.kind === "character" ? `<label>Голос</label><div>${esc(active.voice) || `<span class="muted">—</span>`}</div>` : ""}
         ${active.notes ? `<label>Заметки</label><div class="pre">${esc(active.notes)}</div>` : ""}
-        ${can.edit() ? `<div class="row" style="margin-top:14px"><button class="primary" id="new-ver">+ Новая версия на основе активной</button></div>` : ""}
+        ${can.library() ? `<div class="row" style="margin-top:14px"><button class="primary" id="new-ver">+ Новая версия на основе активной</button></div>` : ""}
       </div>
       <div>
         <h2 style="margin-top:0">Версии</h2>
@@ -76,14 +76,14 @@ export async function renderAsset(id) {
               <div class="muted small">${fmtDateTime(v.created_at)} · фото: ${v.images.length}${v.parent_version_id ? ` · на основе v${(a.versions.find((x) => x.id === v.parent_version_id) || {}).version_no ?? "?"}` : ""}</div>
               <div class="small">${esc(v.description.slice(0, 160))}${v.description.length > 160 ? "…" : ""}</div></div>
             <div class="col">
-              ${v.id === a.active_version_id ? `<span class="badge ok">активная</span>` : can.edit() ? `<button data-activate="${v.id}">Сделать активной</button>` : ""}
-              ${can.edit() ? `<button class="ghost" data-fork="${v.id}">Изменить → новая</button>` : ""}</div>
+              ${v.id === a.active_version_id ? `<span class="badge ok">активная</span>` : can.library() ? `<button data-activate="${v.id}">Сделать активной</button>` : ""}
+              ${can.library() ? `<button class="ghost" data-fork="${v.id}">Изменить → новая</button>` : ""}</div>
           </div>`).join("")}</div>
       </div>
     </div>`;
   $("#copy").onclick = () => { navigator.clipboard.writeText(handle(a.name)); toast("Скопировано"); };
   $$("[data-copy]").forEach((b) => (b.onclick = () => copyImage(media(b.closest("[data-img]").dataset.img))));
-  if (!can.edit()) return;
+  if (!can.library()) return;
   const setImages = async (images) => {
     await api(`/api/assets/${id}/versions/${active.id}/images`, { method: "PUT", json: { images } });
     renderAsset(id);

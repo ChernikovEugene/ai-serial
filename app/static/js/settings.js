@@ -22,8 +22,8 @@ export async function renderSettings() {
       <h2 style="margin-top:0">Проект</h2>
       ${field("series_title", "Название сериала (стоит в PDF для клиента)")}
       <label>Первая серия сериала выходит</label>
-      <div class="row"><input id="anchor-d" type="date" value="${firstDay(state.meta)}" style="width:180px" ${can.write() ? "" : "disabled"}>
-        ${can.write() ? `<button id="anchor-save">Применить</button>` : ""}
+      <div class="row"><input id="anchor-d" type="date" value="${firstDay(state.meta)}" style="width:180px" ${can.schedule() ? "" : "disabled"}>
+        ${can.schedule() ? `<button id="anchor-save">Применить</button>` : ""}
         <span class="muted small">дальше по одной серии в день; закреплённые за датой (📌) серии не сдвигаются</span></div>
     </div>
     <div class="card">

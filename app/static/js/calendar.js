@@ -30,7 +30,7 @@ export async function renderCalendar() {
 
   view().innerHTML = `
     <div class="row"><h1>Календарь постинга</h1><div class="spacer"></div>
-      ${can.edit() ? `<button id="add-ev">+ Своё событие</button>` : ""}
+      ${can.schedule() ? `<button id="add-ev">+ Своё событие</button>` : ""}
       <button id="my-evs">Свои события</button>
       <a class="btn" href="#/series">Серии</a>
       <div class="row cal-nav"><button id="prev">←</button><b class="month-title">${MONTHS[first.getMonth()]} ${first.getFullYear()}</b><button id="next">→</button>
@@ -49,9 +49,9 @@ export async function renderCalendar() {
           <div class="cal-num" data-addev="${iso}" data-wd="${WEEKDAYS[(d.getDay() + 6) % 7]}" title="Добавить событие">${d.getDate()}</div>
           ${show.arcs && arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
           ${(evs[iso] || []).filter((ev) => (ev.builtin ? show.holidays : show.own)).map((ev) => evChip(ev)).join("")}
-          ${(show.eps ? eps : []).map((e) => `<div class="cal-ep" draggable="${can.edit()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
+          ${(show.eps ? eps : []).map((e) => `<div class="cal-ep" draggable="${can.schedule()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
               <b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
-          ${show.eps && !eps.length && iso >= today && can.edit() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
+          ${show.eps && !eps.length && iso >= today && can.episodes() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
         </div>`;
       }).join("")}
     </div>`;
@@ -74,7 +74,7 @@ export async function renderCalendar() {
     if (!confirm("Удалить событие?")) return;
     await api(`/api/calendar-events/${b.dataset.delev}`, { method: "DELETE" }); renderCalendar();
   }));
-  if (!can.edit()) return;
+  if (!can.schedule()) return;
   $$("[data-addev]").forEach((b) => (b.onclick = () => eventDialog(null, b.dataset.addev, { arcButton: true })));
   // Своё событие: клик — изменить, «⟩» на последнем дне — потянуть на другой день, чтобы растянуть или сжать
   const allEvs = Object.values(evs).flat();
@@ -118,7 +118,7 @@ const addDays = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d
 /** Чип события в ячейке дня. Своё событие на несколько дней показывается в каждом дне; название — в первом (и в первом дне недели). */
 function evChip(ev) {
   if (ev.builtin) return `<div class="cal-ev">🎉 ${esc(ev.title)}</div>`;
-  const edit = can.edit();
+  const edit = can.schedule();
   const multi = ev.ev_end > ev.ev_date;
   const label = ev.first || new Date(ev.date + "T00:00:00").getDay() === 1 ? `${esc(ev.title)}` : `<span class="ev-cont">↳ ${esc(ev.title)}</span>`;
   return `<div style="--ec:${evColor(ev)}" class="cal-ev own ${multi ? "multi" : ""} ${ev.first ? "first" : ""} ${ev.last ? "last" : ""}" ${edit ? `data-evid="${ev.id}" title="Нажмите, чтобы изменить"` : ""}>
@@ -170,7 +170,7 @@ function eventDialog(ev, iso, { arcButton = false } = {}) {
 /** Меню «Свои события»: список всех событий с переходом к месяцу, правкой и удалением. */
 async function eventsListDialog() {
   const list = await api("/api/calendar-events");
-  const edit = can.edit();
+  const edit = can.schedule();
   const m = modal(`<h1>Свои события</h1>
     <p class="muted small">В календаре свои события — цветная плашка, праздники — оранжевый текст с 🎉.</p>
     ${list.length ? `<div class="ev-list">${list.map((ev) => `<div class="ev-row" style="--ec:${evColor(ev)}">

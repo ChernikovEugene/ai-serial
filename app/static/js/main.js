@@ -14,15 +14,21 @@ import { drawBadges, startBadges, stopBadges } from "./notify.js";
 
 let lastHash = location.hash;
 
-/** Стартовая страница роли: сценарист — «Серии», монтажёр — «Продакшн», остальные — «Статус». */
-const homeFor = (role) => ({ writer: "#/series", editor: "#/production" }[role] || "#/status");
 
-/** Разделы, которых нет в меню роли: «Команда», «Настройки», «Заявки» — только админу; сценаристу не нужны
- * «Статус», «Продакшн» и «Публикация» (это доска нейронщика и отчётность продюсера). */
-const HIDDEN = { writer: ["status", "production", "publish"] };
+/** Раздел, которого нет в меню человека: «Команда», «Настройки», «Заявки» — только админу, остальные страницы —
+ * по доступам из «Команды» (по умолчанию как у роли). Страница серии входит в «Серии», персонажи — в «Библиотеку». */
+const PAGE_OF = { episodes: "series", archive: "series", characters: "library", locations: "library", library: "library" };
 function hidden(section) {
-  const role = state.meta?.user?.role;
-  return (["team", "settings", "reports"].includes(section) && role !== "admin") || (HIDDEN[role] || []).includes(section);
+  if (["team", "settings", "reports"].includes(section)) return !can.admin();
+  const page = PAGE_OF[section] || section;
+  return page in (state.meta?.pages || {}) && !can.page(page);
+}
+/** Стартовая страница: первая доступная из привычных для роли. */
+function homeFor(role) {
+  const pref = { writer: ["series"], editor: ["production", "series"] }[role] || ["status"];
+  const order = [...pref, "calendar", "status", "series", "production", "publish", "library", "tech"];
+  const p = order.find((x) => can.page(x));
+  return p === "library" ? "#/characters" : p ? `#/${p}` : "#/calendar";
 }
 
 async function route() {
@@ -84,13 +90,13 @@ function drawNav(section) {
   $("#nav").innerHTML = `
     <div class="brand"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04221e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="logo-text"><b>Студия</b><small>PARI · сериал</small></span></div>
     <button class="burger ghost" id="burger" aria-label="Меню" aria-expanded="false">☰</button>
-    <a href="#/calendar" data-nav="calendar">Календарь</a>
+    ${hidden("calendar") ? "" : `<a href="#/calendar" data-nav="calendar">Календарь</a>`}
     ${hidden("status") ? "" : `<a href="#/status" data-nav="status">Статус</a>`}
-    <a href="#/series" data-nav="series">Серии</a>
+    ${hidden("series") ? "" : `<a href="#/series" data-nav="series">Серии</a>`}
     ${hidden("production") ? "" : `<a href="#/production" data-nav="production">Продакшн</a>`}
     ${hidden("publish") ? "" : `<a href="#/publish" data-nav="publish">Публикация</a>`}
-    <a href="#/characters" data-nav="library">Библиотека</a>
-    <a href="#/tech" data-nav="tech">Тех. требования</a>
+    ${hidden("library") ? "" : `<a href="#/characters" data-nav="library">Библиотека</a>`}
+    ${hidden("tech") ? "" : `<a href="#/tech" data-nav="tech">Тех. требования</a>`}
     ${can.admin() ? `<a href="#/team" data-nav="team">Команда</a>
     <a href="#/settings" data-nav="settings">Настройки</a>
     <a href="#/reports" data-nav="reports">Заявки</a>` : ""}

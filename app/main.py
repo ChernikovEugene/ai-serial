@@ -72,8 +72,9 @@ async def session_guard(request: Request, call_next):
         if not path.startswith(OPEN_PATHS):
             if not user:
                 return JSONResponse({"detail": "Нужно войти"}, status_code=401)
-            if user["role"] == "viewer" and request.method != "GET" and not VIEWER_WRITE_OK.match(path):
-                return JSONResponse({"detail": "Недостаточно прав: роль «Зритель»"}, status_code=403)
+            if (user["role"] in auth.READ_ONLY_ROLES and request.method != "GET" and not VIEWER_WRITE_OK.match(path)
+                    and not auth.access_of(user)["caps"]):
+                return JSONResponse({"detail": f"Недостаточно прав: роль «{auth.ROLES[user['role']]}»"}, status_code=403)
     response = await call_next(request)
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"  # always pick up a new app version
@@ -139,6 +140,7 @@ class UserIn(BaseModel):
     role: str | None = None
     tg: str | None = None      # ник в Telegram для связи
     tasks: str | None = None   # чем занят на проекте (свободный текст)
+    access: dict | None = None  # {"pages": [...], "caps": [...]}; {} — вернуть «как у роли»
 
 
 def _tg(v: str | None) -> str:
@@ -149,7 +151,8 @@ def _tg(v: str | None) -> str:
 @app.get("/api/users")
 def list_users():
     with db.connect() as c:
-        return db.rows(c.execute("SELECT id, login, name, role, created_at, tg, tasks FROM users ORDER BY id"))
+        users = db.rows(c.execute("SELECT id, login, name, role, created_at, tg, tasks, access FROM users ORDER BY id"))
+    return [{**u, "access": auth.access_of(u)} for u in users]
 
 
 @app.post("/api/users", dependencies=[Depends(auth.admin)])
@@ -183,13 +186,21 @@ def update_user(user_id: int, u: UserIn, request: Request):
             if len(u.password) < 4:
                 raise HTTPException(400, "Пароль от 4 символов")
             c.execute("UPDATE users SET pass_hash=? WHERE id=?", (auth.hash_password(u.password), user_id))
+        if u.access is not None and me["role"] == "admin":
+            pages = [x for x in u.access.get("pages", []) if x in auth.PAGES]
+            caps = [x for x in u.access.get("caps", []) if x in auth.CAPS]
+            c.execute("UPDATE users SET access=? WHERE id=?",
+                      (json.dumps({"pages": pages, "caps": caps}) if u.access else "", user_id))
         if u.role is not None and me["role"] == "admin":
             if u.role not in auth.ROLES:
                 raise HTTPException(400, "Неизвестная роль")
             admins = c.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND id<>?", (user_id,)).fetchone()[0]
             if u.role != "admin" and not admins:
                 raise HTTPException(400, "Должен остаться хотя бы один администратор")
+            old = c.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
             c.execute("UPDATE users SET role=? WHERE id=?", (u.role, user_id))
+            if old and old["role"] != u.role and u.access is None:  # новая роль — доступы снова как у неё
+                c.execute("UPDATE users SET access='' WHERE id=?", (user_id,))
     return list_users()
 
 
@@ -211,8 +222,11 @@ def status_flow(role: str) -> dict:
 @app.get("/api/meta")
 def meta(request: Request):
     s = db.get_settings()
+    user = request.state.user
     return {
-        "user": request.state.user,
+        "user": {k: user[k] for k in ("id", "login", "name", "role")},
+        "access": auth.access_of(user),
+        "pages": auth.PAGES, "caps": auth.CAPS, "role_access": auth.ROLE_ACCESS,
         "statuses": [{"key": k, "name": n} for k, n in db.STATUSES],
         "roles": auth.ROLES,
         "role_duties": auth.ROLE_DUTIES,
@@ -415,7 +429,7 @@ def load_episode_row(eid: int) -> dict:
 
 def writer_may_edit(request: Request, status: str) -> None:
     """Once the script is approved only the producer can change it, so the editor works on a stable text."""
-    if request.state.user["role"] == "writer" and status not in auth.WRITER_STATUSES:
+    if request.state.user["role"] != "admin" and status not in auth.WRITER_STATUSES:
         raise HTTPException(403, "ТЗ уже готово — править серию может только продюсер. "
                                  "Верните серию в «Пишется ТЗ» или попросите продюсера")
 
@@ -452,7 +466,7 @@ def list_assets(kind: str | None = None):
     return load_assets(kind)
 
 
-@app.post("/api/assets", dependencies=[Depends(auth.writer)])
+@app.post("/api/assets", dependencies=[Depends(auth.need("library"))])
 def create_asset(request: Request, kind: str = Form(...), name: str = Form(...), aliases: str = Form(""),
                  label: str = Form("Базовый"), description: str = Form(""), voice: str = Form(""),
                  notes: str = Form(""), images: list[UploadFile] = File(default=[])):
@@ -480,7 +494,7 @@ class AssetPatch(BaseModel):
     aliases: list[str] | None = None
 
 
-@app.put("/api/assets/{asset_id}", dependencies=[Depends(auth.writer)])
+@app.put("/api/assets/{asset_id}", dependencies=[Depends(auth.need("library"))])
 def update_asset(asset_id: int, p: AssetPatch):
     with db.connect() as c:
         if p.name is not None and p.name.strip():
@@ -490,7 +504,7 @@ def update_asset(asset_id: int, p: AssetPatch):
     return get_asset(asset_id)
 
 
-@app.delete("/api/assets/{asset_id}", dependencies=[Depends(auth.writer)])
+@app.delete("/api/assets/{asset_id}", dependencies=[Depends(auth.need("library"))])
 def delete_asset(asset_id: int):
     with db.connect() as c:
         c.execute("DELETE FROM assets WHERE id=?", (asset_id,))
@@ -502,7 +516,7 @@ def delete_asset(asset_id: int):
     return {"ok": True}
 
 
-@app.post("/api/assets/{asset_id}/versions", dependencies=[Depends(auth.writer)])
+@app.post("/api/assets/{asset_id}/versions", dependencies=[Depends(auth.need("library"))])
 def create_version(request: Request, asset_id: int, label: str = Form(""), description: str = Form(""),
                    voice: str = Form(""), notes: str = Form(""), keep_images: str = Form("[]"),
                    base_version_id: int | None = Form(None), activate: bool = Form(True),
@@ -523,7 +537,7 @@ def create_version(request: Request, asset_id: int, label: str = Form(""), descr
     return get_asset(asset_id)
 
 
-@app.post("/api/assets/{asset_id}/versions/{version_id}/activate", dependencies=[Depends(auth.writer)])
+@app.post("/api/assets/{asset_id}/versions/{version_id}/activate", dependencies=[Depends(auth.need("library"))])
 def activate_version(asset_id: int, version_id: int):
     with db.connect() as c:
         if not c.execute("SELECT 1 FROM asset_versions WHERE id=? AND asset_id=?", (version_id, asset_id)).fetchone():
@@ -540,7 +554,7 @@ def load_version(asset_id: int, version_id: int) -> tuple[dict, dict]:
     return a, v
 
 
-@app.post("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.writer)])
+@app.post("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.need("library"))])
 def add_version_images(asset_id: int, version_id: int, images: list[UploadFile] = File(default=[])):
     """Догрузить фото в версию (ракурсы со всех сторон). Первое фото версии остаётся главным референсом."""
     a, v = load_version(asset_id, version_id)
@@ -555,7 +569,7 @@ class ImagesIn(BaseModel):
     images: list[str]
 
 
-@app.put("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.writer)])
+@app.put("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.need("library"))])
 def set_version_images(asset_id: int, version_id: int, body: ImagesIn):
     """Порядок фото (первое — главный референс) и удаление лишних. Новые пути сюда не принимаются."""
     _, v = load_version(asset_id, version_id)
@@ -699,7 +713,7 @@ def list_arcs():
              "end_date": schedule.date_for(a["end_number"], settings)} for a in schedule.load_arcs()]
 
 
-@app.post("/api/arcs", dependencies=[Depends(auth.writer)])
+@app.post("/api/arcs", dependencies=[Depends(auth.need("arcs"))])
 def create_arc(a: ArcIn, request: Request):
     title, notes, members = _arc_values(a)
     with db.connect() as c:
@@ -709,7 +723,7 @@ def create_arc(a: ArcIn, request: Request):
     return next(x for x in list_arcs() if x["id"] == arc_id)
 
 
-@app.put("/api/arcs/{arc_id}", dependencies=[Depends(auth.writer)])
+@app.put("/api/arcs/{arc_id}", dependencies=[Depends(auth.need("arcs"))])
 def update_arc(arc_id: int, a: ArcIn):
     title, notes, members = _arc_values(a)
     with db.connect() as c:
@@ -718,7 +732,7 @@ def update_arc(arc_id: int, a: ArcIn):
     return next(x for x in list_arcs() if x["id"] == arc_id)
 
 
-@app.delete("/api/arcs/{arc_id}", dependencies=[Depends(auth.writer)])
+@app.delete("/api/arcs/{arc_id}", dependencies=[Depends(auth.need("arcs"))])
 def delete_arc(arc_id: int):
     """Серии не удаляются: они остаются в очереди «без арки»."""
     with db.connect() as c:
@@ -731,7 +745,7 @@ class ArcArchiveIn(BaseModel):
     archived: bool
 
 
-@app.post("/api/arcs/{arc_id}/archive", dependencies=[Depends(auth.writer)])
+@app.post("/api/arcs/{arc_id}/archive", dependencies=[Depends(auth.need("arcs"))])
 def archive_arc(arc_id: int, a: ArcArchiveIn):
     """Закончившаяся арка уходит в архив: с главной «Серий» пропадает, но остаётся доступной, чтобы вспомнить сюжет."""
     with db.connect() as c:
@@ -744,7 +758,7 @@ class ArcStatusIn(BaseModel):
     status: str
 
 
-@app.post("/api/arcs/{arc_id}/status", dependencies=[Depends(auth.writer)])
+@app.post("/api/arcs/{arc_id}/status", dependencies=[Depends(auth.need("arcs"))])
 def set_arc_status(arc_id: int, s: ArcStatusIn, request: Request):
     """Согласование синопсисов с клиентом идёт по арке целиком: статус переносится на её серии,
     которые ещё на этапе синопсиса (серии, ушедшие дальше, не трогаются)."""
@@ -770,7 +784,7 @@ class CardIn(BaseModel):
     draft: bool = False
 
 
-@app.post("/api/arcs/{arc_id}/episodes", dependencies=[Depends(auth.writer)])
+@app.post("/api/arcs/{arc_id}/episodes", dependencies=[Depends(auth.need("schedule"))])
 def add_arc_episode(arc_id: str, card: CardIn, request: Request):
     """Новая карточка серии в арке: встаёт в очередь в конец арки (или в черновики)."""
     aid = _arc_id(arc_id)
@@ -785,13 +799,13 @@ class OrderIn(BaseModel):
     ids: list[int]
 
 
-@app.post("/api/arcs/{arc_id}/order", dependencies=[Depends(auth.writer)])
+@app.post("/api/arcs/{arc_id}/order", dependencies=[Depends(auth.need("schedule"))])
 def order_arc(arc_id: str, o: OrderIn, request: Request):
     schedule.reorder_arc(_arc_id(arc_id), o.ids)
     return {"ok": True}
 
 
-@app.post("/api/schedule/reorder", dependencies=[Depends(auth.writer)])
+@app.post("/api/schedule/reorder", dependencies=[Depends(auth.need("schedule"))])
 def reorder_schedule(o: OrderIn):
     schedule.reorder_queue(o.ids)
     return {"ok": True}
@@ -812,7 +826,7 @@ class EpisodeArcIn(BaseModel):
     arc_id: int | None = None
 
 
-@app.post("/api/episodes/{eid}/arc", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes/{eid}/arc", dependencies=[Depends(auth.need("schedule"))])
 def move_to_arc(eid: int, a: EpisodeArcIn, request: Request):
     """Перенести серию в другую арку (в конец её очереди)."""
     ep = load_episode_row(eid)
@@ -826,7 +840,7 @@ def move_to_arc(eid: int, a: EpisodeArcIn, request: Request):
     return {"ok": True}
 
 
-@app.post("/api/episodes/{eid}/queue", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes/{eid}/queue", dependencies=[Depends(auth.need("schedule"))])
 def queue_episode(eid: int, request: Request):
     """Из черновиков обратно в очередь — в конец своей арки."""
     ep = load_episode_row(eid)
@@ -1048,7 +1062,7 @@ def _event_values(e: CalendarEventIn) -> tuple:
     return start.isoformat(), title, int(e.yearly), end.isoformat() if end > start else ""
 
 
-@app.post("/api/calendar-events", dependencies=[Depends(auth.writer)])
+@app.post("/api/calendar-events", dependencies=[Depends(auth.need("schedule"))])
 def add_calendar_event(e: CalendarEventIn, request: Request):
     d, title, yearly, end = _event_values(e)
     with db.connect() as c:
@@ -1064,7 +1078,7 @@ def list_calendar_events():
         return db.rows(c.execute("SELECT id, date, title, yearly, end_date, color FROM calendar_events ORDER BY date, id"))
 
 
-@app.put("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.writer)])
+@app.put("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.need("schedule"))])
 def update_calendar_event(ev_id: int, e: CalendarEventIn):
     d, title, yearly, end = _event_values(e)
     with db.connect() as c:
@@ -1073,7 +1087,7 @@ def update_calendar_event(ev_id: int, e: CalendarEventIn):
     return {"ok": True}
 
 
-@app.delete("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.writer)])
+@app.delete("/api/calendar-events/{ev_id}", dependencies=[Depends(auth.need("schedule"))])
 def delete_calendar_event(ev_id: int):
     with db.connect() as c:
         c.execute("DELETE FROM calendar_events WHERE id=?", (ev_id,))
@@ -1085,7 +1099,7 @@ class AnchorIn(BaseModel):
     date: str
 
 
-@app.put("/api/schedule/anchor", dependencies=[Depends(auth.writer)])
+@app.put("/api/schedule/anchor", dependencies=[Depends(auth.need("schedule"))])
 def set_anchor(a: AnchorIn):
     date.fromisoformat(a.date)
     with db.connect() as c:
@@ -1095,7 +1109,7 @@ def set_anchor(a: AnchorIn):
     return {"ok": True}
 
 
-@app.post("/api/schedule/compact", dependencies=[Depends(auth.writer)])
+@app.post("/api/schedule/compact", dependencies=[Depends(auth.need("schedule"))])
 def compact_schedule():
     schedule.compact()
     return {"ok": True}
@@ -1136,7 +1150,7 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
     return eid
 
 
-@app.post("/api/episodes", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes", dependencies=[Depends(auth.need("episodes"))])
 def create_episode(e: EpisodeIn, request: Request):
     return get_episode(create_episode_row(e, uid(request)))
 
@@ -1150,7 +1164,7 @@ def decode_text(raw: bytes) -> str:
     raise HTTPException(400, "Не удалось прочитать файл: нужен текст в UTF-8 или Windows-1251")
 
 
-@app.post("/api/episodes/upload", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes/upload", dependencies=[Depends(auth.need("episodes"))])
 async def upload_episode(request: Request, file: UploadFile = File(...), title: str = Form(""),
                          date_: str = Form("", alias="date"), backlog: bool = Form(False)):
     text = decode_text(await file.read())
@@ -1158,7 +1172,7 @@ async def upload_episode(request: Request, file: UploadFile = File(...), title: 
     return get_episode(create_episode_row(e, uid(request)))
 
 
-@app.post("/api/read-text", dependencies=[Depends(auth.writer)])
+@app.post("/api/read-text", dependencies=[Depends(auth.need("episodes", "script"))])
 async def read_text(file: UploadFile = File(...)):
     return {"text": decode_text(await file.read()), "name": Path(file.filename or "").stem}
 
@@ -1217,10 +1231,15 @@ POST_FIELDS = {"post_text", "post_same", "post_text_tiktok", "post_text_reels", 
 ANY_STAGE_FIELDS = POST_FIELDS | {"urgent"}  # описание поста и «срочно» сценарист меняет на любом этапе
 
 
-@app.put("/api/episodes/{eid}", dependencies=[Depends(auth.writer)])
+@app.put("/api/episodes/{eid}", dependencies=[Depends(auth.need("episodes", "script"))])
 def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = True):
     ep = load_episode_row(eid)
     changes = p.model_dump(exclude_unset=True)
+    user = request.state.user
+    if "script" in changes and not auth.has(user, "script"):
+        raise HTTPException(403, "Нет доступа: сценарий. Доступ настраивает админ в «Команде»")
+    if set(changes) - {"script"} and not auth.has(user, "episodes"):
+        raise HTTPException(403, "Нет доступа: серии. Доступ настраивает админ в «Команде»")
     if set(changes) - ANY_STAGE_FIELDS:  # описание для поста и «срочно» сценарист правит на любом этапе
         writer_may_edit(request, ep["status"])
     with db.connect() as c:
@@ -1244,7 +1263,7 @@ class ResultIn(BaseModel):
     url: str = ""
 
 
-@app.post("/api/episodes/{eid}/result", dependencies=[Depends(auth.writer_or_editor)])
+@app.post("/api/episodes/{eid}/result", dependencies=[Depends(auth.need("episodes", "generation"))])
 def set_result(eid: int, r: ResultIn, request: Request):
     """Итог серии: что получилось и где лежит готовый ролик (ссылка, например на Dropbox). Пишет любой из команды."""
     visible_or_404(request, eid)
@@ -1267,6 +1286,8 @@ def set_status(eid: int, s: StatusIn, request: Request):
     if s.status not in db.STATUS_NAMES:
         raise HTTPException(400, "Неизвестный статус")
     role = request.state.user["role"]
+    if not auth.has(request.state.user, "status"):
+        raise HTTPException(403, "Нет доступа: менять статус серии. Доступ настраивает админ в «Команде»")
     ep = load_episode_row(eid)
     if s.status != ep["status"] and s.status not in auth.allowed_statuses(role, ep["status"]):
         raise HTTPException(403, f"Роль «{auth.ROLES[role]}» не может перевести серию из статуса "
@@ -1292,7 +1313,7 @@ class MoveIn(BaseModel):
     pin: bool = False  # поставить на этот день и закрепить (срочная серия): занятый день освобождается сдвигом
 
 
-@app.post("/api/episodes/{eid}/move", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes/{eid}/move", dependencies=[Depends(auth.need("schedule"))])
 def move_episode(eid: int, m: MoveIn, request: Request):
     ep = load_episode_row(eid)
     number = schedule.number_for(m.date) if m.date else m.number
@@ -1312,7 +1333,7 @@ class PinIn(BaseModel):
     pinned: bool
 
 
-@app.post("/api/episodes/{eid}/pin", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes/{eid}/pin", dependencies=[Depends(auth.need("schedule"))])
 def pin_episode(eid: int, p: PinIn, request: Request):
     schedule.set_pinned(eid, p.pinned)
     db.log(eid, uid(request), "Дата закреплена" if p.pinned else "Дата откреплена")
@@ -1342,7 +1363,7 @@ class AnalyzeIn(BaseModel):
     episode_id: int | None = None
 
 
-@app.post("/api/analyze", dependencies=[Depends(auth.writer)])
+@app.post("/api/analyze", dependencies=[Depends(auth.need("script"))])
 def analyze(a: AnalyzeIn):
     """Live analysis while typing: nothing is saved."""
     ctx = Ctx()
@@ -1401,7 +1422,7 @@ def apply_breakdown(eid: int):
         c.execute("UPDATE episodes SET parse_notes=?, updated_at=? WHERE id=?", (db.dumps(notes), db.now(), eid))
 
 
-@app.post("/api/episodes/{eid}/breakdown", dependencies=[Depends(auth.writer)])
+@app.post("/api/episodes/{eid}/breakdown", dependencies=[Depends(auth.need("script"))])
 def breakdown_episode(eid: int, request: Request):
     writer_may_edit(request, load_episode_row(eid)["status"])
     apply_breakdown(eid)
@@ -1413,7 +1434,7 @@ class CastIn(BaseModel):
     cast: list[dict]  # [{asset_id, version_id|null}]
 
 
-@app.put("/api/episodes/{eid}/cast", dependencies=[Depends(auth.writer)])
+@app.put("/api/episodes/{eid}/cast", dependencies=[Depends(auth.need("script"))])
 def set_cast(eid: int, body: CastIn, request: Request):
     writer_may_edit(request, load_episode_row(eid)["status"])
     with db.connect() as c:
@@ -1434,7 +1455,7 @@ class GenerateIn(BaseModel):
     force: bool = False    # только продюсер: отправить и незаполненные шоты «под свою ответственность»
 
 
-@app.post("/api/episodes/{eid}/generate", dependencies=[Depends(auth.editor)])
+@app.post("/api/episodes/{eid}/generate", dependencies=[Depends(auth.need("generation"))])
 def generate_episode(eid: int, g: GenerateIn, request: Request):
     ep = get_episode(eid)
     if not ep["shots"]:
@@ -1533,14 +1554,13 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
     s = load_shot(sid)
     before = dict(s)
     data = p.model_dump(exclude_unset=True)
-    role = request.state.user["role"]
-    if role != "admin":
-        own = WRITER_SHOT_FIELDS if role == "writer" else EDITOR_SHOT_FIELDS if role == "editor" else set()
+    user = request.state.user
+    if user["role"] != "admin":
+        own = (WRITER_SHOT_FIELDS if auth.has(user, "script") else set()) | (EDITOR_SHOT_FIELDS if auth.has(user, "generation") else set())
         foreign = sorted(set(data) - own)
         if foreign:
-            who = "сценарист" if role == "editor" else "монтажёр"
-            raise HTTPException(403, f"Эти поля меняет {who}: {', '.join(foreign)}")
-        if role == "writer":
+            raise HTTPException(403, f"Нет доступа к полям шота: {', '.join(foreign)}. Доступ настраивает админ в «Команде»")
+        if set(data) & (WRITER_SHOT_FIELDS - EDITOR_SHOT_FIELDS):
             writer_may_edit(request, load_episode_row(s["episode_id"])["status"])
     if data.pop("clear_location", False):
         s["location_version_id"] = None
@@ -1603,7 +1623,7 @@ def add_named_characters(s: dict, before: dict, ctx: Ctx):
             have.add(aid)
 
 
-@app.post("/api/shots/{sid}/composition", dependencies=[Depends(auth.editor)])
+@app.post("/api/shots/{sid}/composition", dependencies=[Depends(auth.need("generation"))])
 def upload_composition(sid: int, image: UploadFile = File(...)):
     s = load_shot(sid)
     s["composition_image"] = save_upload(image, f"compositions/{s['episode_id']}")
@@ -1613,7 +1633,7 @@ def upload_composition(sid: int, image: UploadFile = File(...)):
     return shot_response(sid)
 
 
-@app.delete("/api/shots/{sid}/composition", dependencies=[Depends(auth.editor)])
+@app.delete("/api/shots/{sid}/composition", dependencies=[Depends(auth.need("generation"))])
 def delete_composition(sid: int):
     s = load_shot(sid)
     s["composition_image"] = ""
@@ -1623,7 +1643,7 @@ def delete_composition(sid: int):
     return shot_response(sid)
 
 
-@app.post("/api/shots/{sid}/rebuild-prompt", dependencies=[Depends(auth.editor)])
+@app.post("/api/shots/{sid}/rebuild-prompt", dependencies=[Depends(auth.need("generation"))])
 def rebuild_prompt(sid: int):
     s = load_shot(sid)
     s["prompt_locked"] = 0
@@ -1646,7 +1666,7 @@ class RegenerateIn(BaseModel):
     force: bool = False          # только продюсер: отправить незаполненный шот
 
 
-@app.post("/api/shots/{sid}/generate", dependencies=[Depends(auth.editor)])
+@app.post("/api/shots/{sid}/generate", dependencies=[Depends(auth.need("generation"))])
 def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     s = shot_response(sid)
     if s["gen_status"] in ("queued", "running"):
@@ -1693,7 +1713,7 @@ def _durations_text(ds) -> str:
     return ", ".join(str(d) for d in ds) + " с"
 
 
-@app.post("/api/takes/{tid}/cancel", dependencies=[Depends(auth.editor)])
+@app.post("/api/takes/{tid}/cancel", dependencies=[Depends(auth.need("generation"))])
 def cancel_take(tid: int, request: Request):
     with db.connect() as c:
         t = c.execute("SELECT t.shot_id, t.take_no, s.episode_id, s.label FROM takes t JOIN shots s ON s.id=t.shot_id "
@@ -1710,7 +1730,7 @@ class SelectTakeIn(BaseModel):
     take_id: int
 
 
-@app.post("/api/shots/{sid}/select-take", dependencies=[Depends(auth.editor)])
+@app.post("/api/shots/{sid}/select-take", dependencies=[Depends(auth.need("generation"))])
 def select_take(sid: int, t: SelectTakeIn, request: Request):
     with db.connect() as c:
         take = c.execute("SELECT * FROM takes WHERE id=? AND shot_id=?", (t.take_id, sid)).fetchone()
@@ -1722,7 +1742,7 @@ def select_take(sid: int, t: SelectTakeIn, request: Request):
     return shot_response(sid)
 
 
-@app.post("/api/shots/{sid}/upload-take", dependencies=[Depends(auth.editor)])
+@app.post("/api/shots/{sid}/upload-take", dependencies=[Depends(auth.need("generation"))])
 def upload_take(sid: int, request: Request, video: UploadFile = File(...)):
     s = load_shot(sid)
     rel = save_upload(video, f"renders/manual/{s['episode_id']}", VIDEO_EXT)
@@ -1771,7 +1791,7 @@ class ApproveVersionIn(BaseModel):
     version: int
 
 
-@app.post("/api/episodes/{eid}/approve-version", dependencies=[Depends(auth.editor)])
+@app.post("/api/episodes/{eid}/approve-version", dependencies=[Depends(auth.need("generation"))])
 def approve_version(eid: int, a: ApproveVersionIn, request: Request):
     ep = load_episode_row(eid)
     if ep["export_status"] == "building":
@@ -1847,7 +1867,7 @@ def add_comment(eid: int, cm: CommentIn, request: Request):
     if not cm.text.strip():
         raise HTTPException(400, "Пустой комментарий")
     # Anyone can comment, but only the editor (or producer) decides what goes to re-generation
-    cm.is_fix = cm.is_fix and request.state.user["role"] in auth.GEN_ROLES
+    cm.is_fix = cm.is_fix and auth.has(request.state.user, "generation")
     with db.connect() as c:
         c.execute("INSERT INTO comments(episode_id, shot_id, take_id, user_id, text, timecode, is_fix, created_at)"
                   " VALUES (?,?,?,?,?,?,?,?)",
@@ -1864,7 +1884,7 @@ class ResolveIn(BaseModel):
     resolved: bool = True
 
 
-@app.post("/api/comments/{cid}/resolve", dependencies=[Depends(auth.editor)])
+@app.post("/api/comments/{cid}/resolve", dependencies=[Depends(auth.need("generation"))])
 def resolve_comment(cid: int, r: ResolveIn, request: Request):
     with db.connect() as c:
         cm = c.execute("SELECT * FROM comments WHERE id=?", (cid,)).fetchone()
@@ -2018,10 +2038,10 @@ def badges(request: Request):
     with db.connect() as c:
         urgent = c.execute("SELECT COUNT(*) FROM episodes WHERE urgent=1 AND status!='posted' AND number IS NOT NULL").fetchone()[0]
         notes = []
-        if user["role"] == "editor":  # «серия сгенерировалась» — нейронщику
+        if user["role"] != "admin" and auth.has(user, "generation"):  # «серия сгенерировалась» — нейронщику
             for n in db.rows(c.execute("SELECT n.*, e.status AS ep_status FROM notifications n LEFT JOIN episodes e "
                                        "ON e.id=n.episode_id WHERE n.role=? AND n.created_at >= ? ORDER BY n.id DESC LIMIT 50",
-                                       (user["role"], (date.today() - timedelta(days=14)).isoformat()))):
+                                       ("editor", (date.today() - timedelta(days=14)).isoformat()))):
                 if me not in (n["seen_by"] or []):
                     notes.append({k: n[k] for k in ("id", "kind", "episode_id", "text", "created_at", "ep_status")})
         new_reports = c.execute("SELECT COUNT(*) FROM reports WHERE status='new'").fetchone()[0] if user["role"] == "admin" else 0
@@ -2073,7 +2093,7 @@ def list_templates():
                 "templates": db.rows(c.execute("SELECT * FROM templates ORDER BY position, id"))}
 
 
-@app.post("/api/templates", dependencies=[Depends(auth.editor)])
+@app.post("/api/templates", dependencies=[Depends(auth.need("tech"))])
 def create_template(t: TemplateIn):
     with db.connect() as c:
         pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM templates").fetchone()[0]
@@ -2083,7 +2103,7 @@ def create_template(t: TemplateIn):
     return list_templates()
 
 
-@app.put("/api/templates/{tid}", dependencies=[Depends(auth.editor)])
+@app.put("/api/templates/{tid}", dependencies=[Depends(auth.need("tech"))])
 def update_template(tid: int, t: TemplateIn):
     with db.connect() as c:
         c.execute("UPDATE templates SET name=?, kind=?, model=?, specs=?, prompt=?, notes=?, in_prompt=? WHERE id=?",
@@ -2092,7 +2112,7 @@ def update_template(tid: int, t: TemplateIn):
     return list_templates()
 
 
-@app.delete("/api/templates/{tid}", dependencies=[Depends(auth.editor)])
+@app.delete("/api/templates/{tid}", dependencies=[Depends(auth.need("tech"))])
 def delete_template(tid: int):
     with db.connect() as c:
         c.execute("DELETE FROM templates WHERE id=?", (tid,))

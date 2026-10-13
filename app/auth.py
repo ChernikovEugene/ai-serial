@@ -4,9 +4,11 @@ admin  (Продюсер)   - everything: approves scripts, manages users and se
 writer (Сценарист)  - writes episodes: script, shots, characters, locations; sends the script for approval
 editor (Монтажёр)   - sees only approved episodes; generates video, edits prompts, picks takes, flags re-dos
 viewer (Зритель)    - read and comment only
+guest  (Гость)      - sees only the calendar and the status page by default
 """
 import hashlib
 import hmac
+import json
 import secrets
 from datetime import datetime, timedelta
 
@@ -17,7 +19,7 @@ from . import db
 COOKIE = "studio_session"
 SESSION_DAYS = 30
 ROLES = {"admin": "Продюсер", "writer": "Сценарист-креативщик", "editor": "Нейронщик-монтажёр",
-         "viewer": "Зритель (смотрит и комментирует)"}
+         "viewer": "Зритель (смотрит и комментирует)", "guest": "Гость"}
 # Обязанности ролей — показываются на странице «Команда».
 ROLE_DUTIES = {
     "writer": ["Пишет синопсисы арок и серий (раздел «Серии»)",
@@ -28,6 +30,8 @@ ROLE_DUTIES = {
                "Генерирует шоты в нейросети и монтирует ролик",
                "Сдаёт ролик продюсеру и клиенту на согласование",
                "Публикует готовые ролики и отмечает «Выложено»"],
+    "guest": ["Смотрит календарь выхода и статус серий",
+              "Ничего не меняет; больше страниц может открыть админ («Доступ» в «Команде»)"],
     "admin": ["Следит за всеми статусами и сроками (раздел «Статус»)",
               "Проверяет ТЗ и ролики, ведёт согласование с клиентом",
               "Управляет командой и настройками"],
@@ -54,6 +58,65 @@ STATUS_SOURCES = {
 }
 # The editor only sees episodes whose script (ТЗ) is ready.
 EDITOR_VISIBLE = {"approved", "generating", "fixes", "client_review", "ready", "posted"}
+
+
+# Доступы по людям: какие страницы видно и что можно менять. По умолчанию — набор роли, админ меняет его
+# каждому в «Команде» (users.access = {"pages": [...], "caps": [...]}, пусто = как у роли). Админу можно всё.
+PAGES = {"calendar": "Календарь", "status": "Статус", "series": "Серии", "production": "Продакшн",
+         "publish": "Публикация", "library": "Библиотека", "tech": "Тех. требования"}
+CAPS = {
+    "schedule": "Даты и порядок серий: перенос, 📌, очередь, свои события в календаре",
+    "episodes": "Серии: создавать, название, синопсис, «срочно», описание поста",
+    "script": "Сценарий и шоты: персонажи, локации, действие, реплики, звук",
+    "arcs": "Арки: создавать, менять, согласование",
+    "library": "Библиотека: персонажи, локации, фото",
+    "generation": "Генерация: нейросеть, промпт, длина, дубли, загрузка видео, отмена",
+    "status": "Менять статус серии (в пределах своих этапов)",
+    "tech": "Тех. требования: шаблоны",
+}
+ROLE_ACCESS = {
+    "writer": {"pages": ["calendar", "series", "library", "tech"],
+               "caps": ["schedule", "episodes", "script", "arcs", "library", "status"]},
+    "editor": {"pages": ["calendar", "series", "production", "library", "tech"],
+               "caps": ["generation", "status"]},
+    "viewer": {"pages": list(PAGES), "caps": []},
+    "guest": {"pages": ["calendar", "status"], "caps": []},
+}
+READ_ONLY_ROLES = ("viewer", "guest")  # без отдельно выданных возможностей только смотрят и комментируют
+
+
+def access_of(user: dict) -> dict:
+    """Итоговые доступы человека: свои (если админ их настроил) или по роли."""
+    if user["role"] == "admin":
+        return {"pages": list(PAGES), "caps": list(CAPS), "custom": False}
+    base = ROLE_ACCESS.get(user["role"], {"pages": [], "caps": []})
+    try:
+        own = json.loads(user.get("access") or "") or {}
+    except ValueError:
+        own = {}
+    return {"pages": [p for p in own.get("pages", base["pages"]) if p in PAGES],
+            "caps": [c for c in own.get("caps", base["caps"]) if c in CAPS], "custom": bool(own)}
+
+
+def has(user: dict | None, *caps: str) -> bool:
+    """Есть ли у человека хотя бы одна из возможностей."""
+    if not user:
+        return False
+    if user["role"] == "admin":
+        return True
+    mine = access_of(user)["caps"]
+    return any(c in mine for c in caps)
+
+
+def need(*caps: str):
+    """Зависимость FastAPI: пускает, если у человека есть хоть одна из возможностей."""
+    def check(request: Request) -> dict:
+        u = request.state.user
+        if not has(u, *caps):
+            raise HTTPException(403, "Нет доступа: " + " / ".join(CAPS[c].split(":")[0] for c in caps)
+                                + ". Доступ настраивает админ в «Команде»")
+        return u
+    return check
 
 
 def can_see(role: str, status: str) -> bool:
@@ -104,7 +167,7 @@ def user_for_token(token: str | None):
     if not token:
         return None
     with db.connect() as c:
-        r = c.execute("SELECT u.id, u.login, u.name, u.role FROM sessions s JOIN users u ON u.id=s.user_id "
+        r = c.execute("SELECT u.id, u.login, u.name, u.role, u.access FROM sessions s JOIN users u ON u.id=s.user_id "
                       "WHERE s.token=? AND s.expires_at > ?", (token, db.now())).fetchone()
     return dict(r) if r else None
 

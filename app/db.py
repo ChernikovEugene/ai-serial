@@ -25,7 +25,8 @@ TABLES = {
         role TEXT NOT NULL DEFAULT 'editor',
         created_at TEXT NOT NULL DEFAULT '',
         tg TEXT NOT NULL DEFAULT '',
-        tasks TEXT NOT NULL DEFAULT ''""",
+        tasks TEXT NOT NULL DEFAULT '',
+        access TEXT NOT NULL DEFAULT ''""",
     "sessions": """
         token TEXT PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

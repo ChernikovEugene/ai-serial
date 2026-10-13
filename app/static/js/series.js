@@ -11,7 +11,7 @@ const WRITER_STATUSES = ["synopsis", "synopsis_review", "synopsis_ok", "dev", "r
 let listView = (() => { try { return localStorage.getItem(VIEW_KEY) === "list"; } catch { return false; } })();
 
 /** Можно ли править карточку: продюсер — всегда, сценарист — пока серия на его этапах. */
-const editable = (e) => can.admin() || (can.write() && WRITER_STATUSES.includes(e.status));
+const editable = (e) => can.admin() || (can.episodes() && WRITER_STATUSES.includes(e.status));
 const shortDate = (iso) => (iso ? fmtDate(iso) : "");
 
 // ---------------- главный экран: арки сверху, очередь выкладки ниже ----------------
@@ -43,13 +43,13 @@ export async function renderSeries() {
   view().innerHTML = `
     <div class="row"><h1>Серии</h1><div class="spacer"></div>
       <a class="btn" href="#/archive" title="Закончившиеся арки и выложенные серии: чтобы вернуться и вспомнить сюжет">Архив</a>
-      ${can.edit() ? `<button id="new-ep">+ Новая серия</button><button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
+      ${can.episodes() ? `<button id="new-ep">+ Новая серия</button>` : ""}${can.arcs() ? `<button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
     <div class="arc-grid compact">
       ${cards.map((a) => arcCard(a, eps.filter((e) => (a.id === "none" ? !e.arc_id : e.arc_id === a.id)))).join("")}
     </div>
     <div class="row queue-head"><h2>Очередь выкладки</h2>
       <span class="muted small">1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте.</span>
-      <div class="spacer"></div>${can.edit() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
+      <div class="spacer"></div>${can.schedule() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
     <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today, arcs)}</div>
     ${history.length ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
       ${showHistory ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : ""}` : ""}`;
@@ -62,7 +62,7 @@ export async function renderSeries() {
     if (!ev.target.closest("button,a,input")) location.hash = `#/episodes/${r.dataset.open}`;
   }));
   $$("[data-create]").forEach((b) => (b.onclick = () => newEpisodeQuick(arcs, renderSeries, b.dataset.create)));
-  if (can.edit()) bindQueueDrag(renderSeries);
+  if (can.schedule()) bindQueueDrag(renderSeries);
 }
 
 /** Страница «Архив»: закончившиеся арки (внутри — все серии с синопсисами) и выложенные серии закрытых арок. */
@@ -105,7 +105,7 @@ function queueRows(list, today, arcs, gaps = true) {
       const gap = next.number - e.number - 1;
       const first = addDay(e.date, 1);
       out.push(`<div class="queue-gap"><span>${gap === 1 ? `Свободный день · ${fmtDate(first)}` : `Свободно ${gap} дн. · ${fmtDate(first)} — ${fmtDate(addDay(e.date, gap))}`}</span>
-        ${can.edit() && first >= today ? `<button class="ghost small" data-create="${first}">+ серия на ${fmtDate(first, false)}</button>` : ""}</div>`);
+        ${can.episodes() && first >= today ? `<button class="ghost small" data-create="${first}">+ серия на ${fmtDate(first, false)}</button>` : ""}</div>`);
     }
   });
   return out.join("");
@@ -125,7 +125,7 @@ function arcBreak(arc, again) {
 }
 
 function queueRow(e, today) {
-  const movable = can.edit() && e.status !== "posted" && !e.pinned;
+  const movable = can.schedule() && e.status !== "posted" && !e.pinned;
   const arc = e.arc_id ? `<span class="arc-chip">Серия ${e.arc_number}</span>` : `<span class="arc-chip none">Вне арки</span>`;
   return `<div class="ep-card queue-row ${e.date === today ? "today" : ""} ${e.date < today ? "past" : ""}" data-ep="${e.id}" data-open="${e.id}" data-movable="${movable ? 1 : ""}" style="--c:${STATUS_COLORS[e.status]}">
     <div class="q-when">${movable ? `<span class="grip">⋮⋮</span>` : ""}<b>${fmtDate(e.date)}</b>${e.date === today ? ` <span class="today-tag">сегодня</span>` : ""}${e.pinned ? " 📌" : ""}</div>
@@ -245,34 +245,34 @@ export async function renderArc(arcKey) {
     <div class="row arc-head">
       <button class="ghost" id="arc-back" title="Назад">←</button>
       <h1 style="margin:0">${esc(arc.title)}</h1>
-      ${real && can.edit() ? `<select id="arc-status" class="status-select" style="--c:${ARC_STATUS_COLORS[arc.status]}">
+      ${real && can.arcs() ? `<select id="arc-status" class="status-select" style="--c:${ARC_STATUS_COLORS[arc.status]}">
           ${["writing", "client", "approved"].map((k) => `<option value="${k}" ${arc.status === k ? "selected" : ""}>${{ writing: "Синопсисы пишутся", client: "Синопсисы у клиента", approved: "Синопсисы согласованы" }[k]}</option>`).join("")}
         </select>` : real ? `<span class="status" style="--c:${ARC_STATUS_COLORS[arc.status]}">${esc(arc.status_name)}</span>` : ""}
       <div class="spacer"></div>
       ${real ? `<a class="btn" href="/api/arcs/${arc.id}/pdf" target="_blank" title="Синопсисы арки для клиента">PDF для клиента</a>` : ""}
-      ${real && can.edit() ? `<button class="ghost" id="arc-edit">Арка и участники</button>
+      ${real && can.arcs() ? `<button class="ghost" id="arc-edit">Арка и участники</button>
         <button class="ghost" id="arc-archive" title="${arc.archived ? "Вернуть арку на главную «Серий»" : "Арка закончилась: убрать с главной, но не удалять"}">${arc.archived ? "↩ Из архива" : "🗄 В архив"}</button>
         <button class="ghost danger" id="arc-del" title="Удалить арку (серии останутся)">🗑 Удалить арку</button>` : ""}
     </div>
     ${real && arc.archived ? `<p class="muted small arc-archived-note">🗄 Арка в архиве: на главной «Серий» её нет. Здесь можно перечитать синопсисы и сюжет.</p>` : ""}
     ${real ? `<div class="card arc-syn-card">
       <label style="margin-top:0">Синопсис арки</label>
-      <textarea id="arc-syn" rows="3" placeholder="О чём арка, что меняется в персонаже, локации, сюжете" ${can.edit() ? "" : "disabled"}>${esc(arc.notes)}</textarea>
+      <textarea id="arc-syn" rows="3" placeholder="О чём арка, что меняется в персонаже, локации, сюжете" ${can.arcs() ? "" : "disabled"}>${esc(arc.notes)}</textarea>
       ${members.length ? `<div class="arc-members">${members.map((x) => `<span class="badge">${esc(x)}</span>`).join("")}</div>` : ""}
     </div>` : ""}
     <div class="row series-tools">
       <div class="seg"><button class="${listView ? "" : "on"}" data-view="cards">Карточки</button><button class="${listView ? "on" : ""}" data-view="list">Список</button></div>
-      <span class="muted small">${can.edit() ? "Перетащите карточку, чтобы поменять порядок выхода. Выложенные и закреплённые (📌) серии стоят на месте." : ""}</span>
+      <span class="muted small">${can.schedule() ? "Перетащите карточку, чтобы поменять порядок выхода. Выложенные и закреплённые (📌) серии стоят на месте." : ""}</span>
     </div>
     <h2>В очереди <span class="muted small">${queued.length}</span></h2>
     <div class="${listView ? "ep-list" : "ep-grid"}" data-dnd="queue">
       ${queued.map((e) => epCard(e)).join("")}
-      ${can.edit() ? `<button class="ep-add" data-add="queue">+ Серия</button>` : ""}
+      ${can.episodes() ? `<button class="ep-add" data-add="queue">+ Серия</button>` : ""}
     </div>
     <h2>Черновики <span class="muted small">${drafts.length} · не удалены, но в очередь не идут</span></h2>
     <div class="${listView ? "ep-list" : "ep-grid"}" data-dnd="drafts">
-      ${drafts.map((e) => epCard(e)).join("") || (can.edit() ? "" : `<p class="muted small">Черновиков нет.</p>`)}
-      ${can.edit() ? `<button class="ep-add" data-add="drafts">+ Черновик</button>` : ""}
+      ${drafts.map((e) => epCard(e)).join("") || (can.episodes() ? "" : `<p class="muted small">Черновиков нет.</p>`)}
+      ${can.episodes() ? `<button class="ep-add" data-add="drafts">+ Черновик</button>` : ""}
     </div>`;
 
   const rerender = () => renderArc(arcKey);
@@ -282,7 +282,7 @@ export async function renderArc(arcKey) {
     try { localStorage.setItem(VIEW_KEY, listView ? "list" : "cards"); } catch {}
     rerender();
   }));
-  if (real && can.edit()) {
+  if (real && can.arcs()) {
     $("#arc-status").onchange = async (ev) => {
       await api(`/api/arcs/${arc.id}/status`, { json: { status: ev.target.value } });
       toast("Статус арки обновлён — серии на этапе синопсиса получили его же");
@@ -319,14 +319,14 @@ function epCard(e) {
   const head = e.number != null
     ? `<b>Серия ${e.arc_number ?? e.number}</b><span class="muted small">${shortDate(e.date)}${e.pinned ? " 📌" : ""}</span>`
     : `<b class="muted">Черновик</b>`;
-  const movable = can.edit() && e.status !== "posted" && !(e.number != null && e.pinned);
+  const movable = can.schedule() && e.status !== "posted" && !(e.number != null && e.pinned);
   return `<div class="ep-card" data-ep="${e.id}" data-movable="${movable ? 1 : ""}" style="--c:${STATUS_COLORS[e.status]}">
     <div class="ep-card-head">${movable ? `<span class="grip" title="Потяните, чтобы переставить">⋮⋮</span>` : ""}${head}<div class="spacer"></div>${statusPill(e.status, true)}</div>
     <input class="ep-title" value="${esc(e.title)}" placeholder="Название серии" ${ed ? "" : "disabled"}>
     <textarea class="ep-syn" rows="${listView ? 1 : 4}" placeholder="Синопсис: о чём серия…" ${ed ? "" : "disabled"}>${esc(e.synopsis)}</textarea>
     <div class="ep-card-foot">
       <a class="btn go-tz" href="#/episodes/${e.id}" title="Открыть страницу серии: подробное ТЗ, шоты, ролик">Перейти к ТЗ →${e.shots ? ` <span class="go-tz-n">${plural(e.shots, "шот", "шота", "шотов")}</span>` : ""}</a><div class="spacer"></div>
-      ${can.edit() ? `${e.number != null ? `<button class="ghost small" data-pin="${e.id}" data-date="${e.date || ""}" title="Закрепить за датой (под событие)">📌</button>
+      ${can.schedule() ? `${e.number != null ? `<button class="ghost small" data-pin="${e.id}" data-date="${e.date || ""}" title="Закрепить за датой (под событие)">📌</button>
         <button class="ghost small" data-draft="${e.id}" title="Убрать из очереди, не удаляя">В черновик</button>`
         : `<button class="ghost small" data-queue="${e.id}">В очередь</button>`}` : ""}
       ${can.admin() ? `<button class="ghost small danger" data-del-ep="${e.id}" title="Удалить серию совсем">🗑</button>` : ""}
@@ -364,7 +364,7 @@ function bindCards(arc, rerender) {
     rerender();
   }));
   $$("[data-pin]").forEach((b) => (b.onclick = () => pinDialog(+b.dataset.pin, b.dataset.date, rerender)));
-  if (can.edit()) bindDrag(arc, rerender);
+  if (can.schedule()) bindDrag(arc, rerender);
 }
 
 /** Перетаскивание карточек внутри «В очереди» и внутри «Черновиков». */

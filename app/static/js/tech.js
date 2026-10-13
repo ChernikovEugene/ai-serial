@@ -3,7 +3,7 @@
 import { $, $$, api, can, closeModal, esc, modal, state, toast, view } from "./core.js";
 
 const KIND_COLORS = { video: "#b36bff", sound: "#25d0d6", edit: "#ff8a3d", other: "#8b93a3" };
-const canEditTemplates = () => can.gen(); // продюсер и монтажёр
+const canEditTemplates = () => can.tech(); // по умолчанию только админ; открывается в «Команде» → «Доступ»
 
 export async function renderTech() {
   const [s, t] = await Promise.all([api("/api/settings"), api("/api/templates")]);

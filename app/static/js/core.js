@@ -109,15 +109,25 @@ export function replaceHash(h) {
   location.replace(h);
 }
 
+/** Что может человек: его доступы приходят с сервера (/api/meta → access), админ настраивает их в «Команде».
+ * Сервер проверяет то же самое, здесь — только чтобы не показывать лишние кнопки. */
+const cap = (c) => state.meta?.user?.role === "admin" || (state.meta?.access?.caps || []).includes(c);
 export const can = {
-  edit: () => ["admin", "writer"].includes(state.meta?.user?.role),   // script, shots content, library, schedule
-  write: () => ["admin", "writer"].includes(state.meta?.user?.role),  // same as edit, clearer in episode code
-  gen: () => ["admin", "editor"].includes(state.meta?.user?.role),    // prompts, generation, takes, re-dos
+  schedule: () => cap("schedule"),     // даты, очередь, 📌, свои события календаря
+  episodes: () => cap("episodes"),     // создать серию, название, синопсис, «срочно», описание поста
+  write: () => cap("script"),          // сценарий и содержание шотов
+  arcs: () => cap("arcs"),
+  library: () => cap("library"),
+  gen: () => cap("generation"),        // промпты, генерация, дубли, перегенерация
+  status: () => cap("status"),
+  tech: () => cap("tech"),
   admin: () => state.meta?.user?.role === "admin",
+  page: (p) => state.meta?.user?.role === "admin" || (state.meta?.access?.pages || []).includes(p),
 };
 
 /** Statuses the current user may move an episode to from `current` (empty list = read-only). */
 export function allowedStatuses(current) {
+  if (!can.status()) return [];
   const flow = state.meta.status_flow;
   if (flow.from && !flow.from.includes(current)) return [];
   return state.meta.statuses.map((s) => s.key).filter((k) => k !== current && (!flow.to || flow.to.includes(k)));
