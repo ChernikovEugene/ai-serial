@@ -468,5 +468,11 @@ editor.call("POST", "/api/notifications/seen", {"episode_id": eid})
 st, b = editor.call("GET", "/api/badges")
 check("notify: opened episode clears it", not any(n["episode_id"] == eid for n in b["notifications"]), b)
 
+# --- лимиты загрузки: картинка больше 20 МБ не сохраняется ---
+st, _ = editor.call("POST", f"/api/shots/{s1['id']}/composition", form={"image": ("big.png", PNG + b"0" * (21 << 20))})
+check("upload: image over the limit rejected", st == 413, st)
+st, _ = editor.call("POST", f"/api/shots/{s1['id']}/composition", form={"image": ("ok.png", PNG)})
+check("upload: normal image accepted", st == 200, st)
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

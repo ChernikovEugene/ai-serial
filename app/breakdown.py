@@ -21,7 +21,6 @@ ALLOWED_DURATIONS = (4, 6, 8)
 # Какие длины клипа умеет каждая нейросеть и подсказка под выбором длины: берутся из описаний моделей в app/models.py
 # (сверено с документацией Magnific в октябре 2026).
 ENGINE_DURATIONS = {k: m["durations"] for k, m in models.MODELS.items()}
-ENGINE_DURATION_NOTES = {k: m["duration_note"] for k, m in models.MODELS.items()}
 
 
 def engine_durations(engine: str | None) -> tuple:
@@ -43,7 +42,6 @@ def snap_duration(engine: str | None, duration: int, est: float = 0) -> int:
         return duration
     need = max(duration or 0, est or 0)
     return next((d for d in allowed if d >= need), allowed[-1])
-MAX_REFERENCE_IMAGES = 3
 MAX_DIALOGUE_LINES_PER_SHOT = 2
 
 SHOT_MARK_RE = re.compile(
@@ -60,7 +58,6 @@ CAPS_SPEAKER_RE = re.compile(r"^@?([A-ZА-ЯЁ][A-ZА-ЯЁ0-9 .\-]{0,30})\s*(?:\
 PAREN_RE = re.compile(r"^\(([^)]{1,80})\)$")
 MENTION_RE = re.compile(r"@([\wЁё\-]+)(?::([\wЁё\-]+))?")
 TITLE_RE = re.compile(r"^(?:серия|эпизод|название|episode)\b", re.I)
-SENTENCE_SPLIT_RE =re.compile(r"(?<=[.!?…])\s+")
 # «МАША (за кадром): …», «Маша (з/к, тихо): …», «Маша (V.O.): …» -> закадровая озвучка
 VOICEOVER_RE = re.compile(r"^(?:за\s*кадр\w*|з\s*[./]?\s*к\.?|закадр\w*|v\.?\s?o\.?|o\.?\s?s\.?|voice[\s-]*over|голос)$", re.I)
 VOICE_DIRECT, VOICE_OVER = "direct", "voiceover"
@@ -238,7 +235,7 @@ def extract_quotes(text: str, idx: "AssetIndex") -> tuple[str, list[dict]]:
     for a, b, _ in spans:
         masked[a:b] = ["\x00"] * (b - a)
     masked = "".join(masked)
-    out, keep, last = [], [], 0
+    out, keep = [], []
     for a, b, quote in spans:
         bs = max((masked.rfind(c, 0, a) for c in ".!?…"), default=-1) + 1
         before = masked[bs:a].replace("\x00", " ")

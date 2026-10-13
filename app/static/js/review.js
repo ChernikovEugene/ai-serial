@@ -1,6 +1,6 @@
 // «Просмотр и правки»: вся серия одним роликом в рамке соцсети, указатель шота на таймлайне, правки по точкам времени.
 import { $, $$, api, can, engineName, postTextFor, esc, fmtDateTime, media, state, toast } from "./core.js";
-import { E, TAKE_STATUS, archiveButton, cancelTake, drawHeader, renderEpisode, soundMode, takeBadge } from "./episode.js";
+import { E, TAKE_STATUS, archiveButton, cancelTake, drawHeader, renderEpisode, soundMode, takeBadge, videoTooBig } from "./episode.js";
 
 const FEEDS = [["none", "Без ленты"], ["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
 const FEED_KEY = "reviewFeed";
@@ -438,7 +438,7 @@ function drawShotTools() {
   }
   const up = $("#up-take", box);
   if (up) up.onchange = async () => {
-    const f = up.files[0]; if (!f) return;
+    const f = up.files[0]; if (!f || videoTooBig(f)) return;
     const fd = new FormData(); fd.append("video", f);
     toast("Загружаю видео…");
     await api(`/api/shots/${s.id}/upload-take`, { method: "POST", body: fd });

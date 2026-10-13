@@ -58,10 +58,7 @@
 .grafit .nav-foot .badge { align-self: flex-start; }
 
 /* логотип: в старом дизайне — «🎬 Студия», в «Графите» — бирюзовый значок со стрелкой */
-.brand-new { display: none; }
 .grafit .brand { display: flex; align-items: center; gap: 11px; }
-.grafit .brand-old { display: none; }
-.grafit .brand-new { display: contents; }
 .logo-mark { width: 34px; height: 34px; border-radius: 7px; background: #00c7b2; display: grid; place-items: center; flex: none; }
 .logo-mark svg { width: 18px; height: 18px; }
 .logo-text { display: flex; flex-direction: column; line-height: 1.15; }
@@ -128,8 +125,6 @@
 .grafit .sm-flag.bad { color: #ef5a4c; } .grafit .sm-flag.risk { color: #e0a21b; } .grafit .sm-flag.good { color: #22b07d; }
 
 /* кнопка «Правка» */
-.grafit #fb .fb-btn { border-radius: 6px; background: var(--btn); border-color: var(--btn); color: var(--btn-fg); box-shadow: 0 4px 16px var(--shadow); }
-.grafit #fb .fb-panel, .grafit .fb-panel { border-radius: 8px; box-shadow: 0 12px 40px var(--shadow); }
 
 /* ---------- переключатель темы (во всех дизайнах) ---------- */
 .theme-switch { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }

@@ -1,7 +1,7 @@
 // «Продакшн» — канбан нейронщика-монтажёра: все серии очереди по этапам производства, срочные сверху.
 // Карточки перетаскиваются между колонками — это и есть смена статуса серии. «Выложено ✓» убирает серию с доски.
 // Серии без готового ТЗ видны в «Ждёт ТЗ» (название, дата, арка), но не открываются и не двигаются.
-import { $$, api, can, esc, fmtDate, postTextAll, state, STATUS_COLORS, toast, view } from "./core.js";
+import { $$, api, can, esc, fmtDate, postTextAll, state, STATUS_COLORS, view } from "./core.js";
 import { copyText } from "./episode.js";
 import { generatedIds } from "./notify.js";
 

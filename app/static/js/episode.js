@@ -1,7 +1,6 @@
 // Episode card: script editor with live analysis, shots, review & comments, history.
 import {
-  POST_NETS, $, $$, api, assetColor, can, closeModal, engineName, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state,
-  statusPill, statusSelect, STATUS_COLORS, toast, view,
+  POST_NETS, $, $$, api, assetColor, can, closeModal, engineName, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state, statusSelect, STATUS_COLORS, toast, view,
 } from "./core.js";
 import { attachMentions } from "./mention.js";
 import { attachHighlight } from "./highlight.js";
@@ -11,6 +10,14 @@ import { seenEpisode } from "./notify.js";
 export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "" };
 export const TAKE_STATUS = { queued: ["в очереди", "run"], running: ["генерация…", "run"], done: ["готово", "ok"],
   stub: ["заглушка", "warn"], error: ["ошибка", "err"], cancelled: ["отменено", ""], idle: ["не создано", ""] };
+
+/** Видео больше лимита сервера не отправляем: сразу говорим, а не ждём долгую загрузку. */
+export function videoTooBig(f) {
+  const mb = state.meta.upload_limits?.video_mb || 300;
+  if (f.size <= mb * 1024 * 1024) return false;
+  toast(`Видео ${Math.round(f.size / 1048576)} МБ, а можно до ${mb} МБ. Сожмите его или загрузите короче`, true);
+  return true;
+}
 
 /** Режим звука шота: «речь и звук» / «только естественный фон» / «без звука». */
 export const soundMode = (s) => s.sound_mode || (s.sound_off ? "off" : "full");
@@ -668,7 +675,7 @@ function bindShot(s) {
   }
   const up = $("[data-upload]", el);
   if (up) up.onchange = async () => {
-    const f = up.files[0]; if (!f) return;
+    const f = up.files[0]; if (!f || videoTooBig(f)) return;
     const fd = new FormData(); fd.append("video", f);
     toast("Загружаю видео…");
     await api(`/api/shots/${s.id}/upload-take`, { method: "POST", body: fd });

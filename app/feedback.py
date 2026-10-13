@@ -1,7 +1,7 @@
-"""«Правка»: notes about the studio itself (text + screenshots), shared through GitHub Issues.
+"""Правки для Claude через GitHub Issues: админ отправляет сюда заявку из «Сообщить о проблеме» (вкладка «Заявки»).
 
-Each note is an issue with the label LABEL. Screenshots are committed to the SHOTS_BRANCH branch and linked
-from the issue. The hidden `<!-- pravka: {...} -->` line in the issue body keeps the details machine-readable,
+Each note is an issue with the label LABEL. A screenshot (only if the admin ticked it — the repo is public) is committed
+to the SHOTS_BRANCH branch and linked from the issue. The hidden `<!-- pravka: {...} -->` line in the issue body keeps the details machine-readable,
 so Claude can pick the notes up on the command «Запусти правки» (see CLAUDE.md).
 """
 import base64
@@ -18,7 +18,6 @@ SHOTS_BRANCH = "pravki-shots"
 LABELS = {LABEL: ("ff3b6b", "Правка, оставленная кнопкой «Правка» в студии"),
           IN_WORK: ("f5b642", "Claude или человек уже вносит эту правку")}
 META = re.compile(r"<!-- pravka: (\{.*?\}) -->", re.S)
-SHOT_PATH = re.compile(r"^shots/[\w.-]+$")
 
 
 def _ensure_labels() -> None:
@@ -82,22 +81,3 @@ def create(text: str, page: str, viewport: str, author: str, images: list[tuple[
         "", f"<!-- pravka: {json.dumps(meta, ensure_ascii=False)} -->",
     ])
     return _note(call("POST", "/issues", {"title": title, "body": body, "labels": [LABEL]}))
-
-
-def comments(number: int) -> list[dict]:
-    return [{"author": c["user"]["login"], "body": c["body"], "created_at": c["created_at"]}
-            for c in call("GET", f"/issues/{number}/comments?per_page=100")]
-
-
-def add_comment(number: int, text: str, author: str) -> None:
-    call("POST", f"/issues/{number}/comments", {"body": f"**{author}:** {text}"})
-
-
-def withdraw(number: int) -> None:
-    call("PATCH", f"/issues/{number}", {"state": "closed", "state_reason": "not_planned"})
-
-
-def shot(path: str) -> bytes:
-    if not SHOT_PATH.match(path):
-        raise GitHubError("Нет такого скриншота", 404)
-    return call("GET", f"/contents/{path}?ref={SHOTS_BRANCH}", raw=True)

@@ -1,4 +1,5 @@
 import hmac
+import shutil
 import json
 import re
 import uuid
@@ -34,6 +35,9 @@ def _site_version() -> str:
 SITE_VERSION = _site_version()
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
+# Лимиты загрузки: один ролик шота — до VIDEO_MAX_MB, картинка — до IMAGE_MAX_MB. И не загружаем, если на диске
+# с данными (на сервере — 10 ГБ) остаётся меньше DISK_RESERVE_MB: иначе студия перестанет сохранять базу.
+VIDEO_MAX_MB, IMAGE_MAX_MB, DISK_RESERVE_MB = 300, 20, 1024
 # В какой нейросети делается шот: выбирает монтажёр. Все, кроме «Другой», уходят через Magnific API (app/models.py).
 ENGINES = models.ENGINES
 ENGINE_NAMES = dict(ENGINES)
@@ -225,6 +229,7 @@ def meta(request: Request):
         "series_title": s.get("series_title") or "Сериал",
         "version": SITE_VERSION,
         "sound_modes": SOUND_MODES,
+        "upload_limits": {"video_mb": VIDEO_MAX_MB, "image_mb": IMAGE_MAX_MB},
     }
 
 
@@ -254,11 +259,22 @@ def save_upload(f: UploadFile, folder: str, allowed=IMAGE_EXT) -> str:
     ext = Path(f.filename or "").suffix.lower()
     if ext not in allowed:
         raise HTTPException(400, f"Неподдерживаемый формат файла: {f.filename}. Подходят: {', '.join(sorted(allowed))}")
+    limit_mb = VIDEO_MAX_MB if allowed is VIDEO_EXT else IMAGE_MAX_MB
+    db.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    free_mb = shutil.disk_usage(db.MEDIA_DIR).free // (1 << 20)
+    if free_mb - ((f.size or 0) >> 20) < DISK_RESERVE_MB:
+        raise HTTPException(507, f"На сервере почти закончилось место (свободно {free_mb} МБ). Удалите старые видео или увеличьте диск")
     rel = f"{folder}/{uuid.uuid4().hex[:12]}{ext}"
     dest = db.MEDIA_DIR / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
     with dest.open("wb") as out:
         while chunk := f.file.read(1 << 20):
+            size += len(chunk)
+            if size > limit_mb << 20:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"Файл «{f.filename}» больше {limit_mb} МБ. Сожмите его или загрузите короче")
             out.write(chunk)
     return rel
 
@@ -1874,65 +1890,11 @@ def delete_comment(cid: int, request: Request):
 
 # ---------- «Правка»: notes about the studio itself, stored as GitHub issues ----------
 
-class NoteComment(BaseModel):
-    text: str
-
-
 def _gh(fn, *args):
     try:
         return fn(*args)
     except GitHubError as e:
         raise HTTPException(502 if e.code >= 500 else 400, str(e))
-
-
-@app.get("/api/feedback")
-def feedback_list():
-    return _gh(feedback.list_notes)
-
-
-@app.post("/api/feedback", dependencies=[Depends(auth.writer_or_editor)])
-async def feedback_create(request: Request, text: str = Form(""), page: str = Form(""), viewport: str = Form(""),
-                          images: list[UploadFile] = File(default=[])):
-    shots = []
-    for f in images:
-        ext = Path(f.filename or "").suffix.lower()
-        if ext not in IMAGE_EXT:
-            ext = "." + (f.content_type or "image/png").split("/")[-1].replace("jpeg", "jpg")
-        if ext not in IMAGE_EXT:
-            continue
-        data = await f.read()
-        if data:
-            shots.append((data, ext[1:]))
-    if not text.strip() and not shots:
-        raise HTTPException(400, "Напишите, что не так, или вставьте скриншот")
-    return _gh(feedback.create, text, page, viewport, request.state.user["name"], shots)
-
-
-@app.get("/api/feedback/{number}/comments")
-def feedback_comments(number: int):
-    return _gh(feedback.comments, number)
-
-
-@app.post("/api/feedback/{number}/comments", dependencies=[Depends(auth.writer_or_editor)])
-def feedback_comment(number: int, body: NoteComment, request: Request):
-    if not body.text.strip():
-        raise HTTPException(400, "Пустой ответ")
-    _gh(feedback.add_comment, number, body.text.strip(), request.state.user["name"])
-    return {"ok": True}
-
-
-@app.post("/api/feedback/{number}/withdraw", dependencies=[Depends(auth.writer_or_editor)])
-def feedback_withdraw(number: int):
-    _gh(feedback.withdraw, number)
-    return {"ok": True}
-
-
-@app.get("/api/feedback-shot")
-def feedback_shot(path: str):
-    data = _gh(feedback.shot, path)
-    ext = path.rsplit(".", 1)[-1]
-    return Response(data, media_type=f"image/{'jpeg' if ext == 'jpg' else ext}",
-                    headers={"Cache-Control": "max-age=86400"})
 
 
 # ---------- «Сообщить о проблеме»: заявки команды, видит их админ ----------

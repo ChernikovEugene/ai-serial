@@ -1,5 +1,5 @@
 // Router, navigation and login.
-import { $, $$, api, can, esc, state, toast, view } from "./core.js";
+import { $, $$, api, can, esc, state, view } from "./core.js";
 import { renderSeries, renderArc, renderArchive } from "./series.js";
 import { renderProduction } from "./production.js";
 import { renderTech } from "./tech.js";
@@ -74,7 +74,7 @@ function drawNav(section) {
   $("#nav").hidden = false;
   $("#nav").classList.remove("open"); // на телефоне меню за «бургером» закрывается при каждом переходе
   $("#nav").innerHTML = `
-    <div class="brand"><span class="brand-old">🎬 Студия</span><span class="brand-new"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04221e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="logo-text"><b>Студия</b><small>PARI · сериал</small></span></span></div>
+    <div class="brand"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04221e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="logo-text"><b>Студия</b><small>PARI · сериал</small></span></div>
     <button class="burger ghost" id="burger" aria-label="Меню" aria-expanded="false">☰</button>
     <a href="#/calendar" data-nav="calendar">Календарь</a>
     <a href="#/status" data-nav="status">Статус</a>

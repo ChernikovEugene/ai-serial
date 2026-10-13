@@ -1,6 +1,6 @@
 // Значки в меню и уведомления. Раз в 20 с спрашиваем сервер: сколько срочных серий (🔥 у «Продакшна», видят все),
 // какие серии сгенерировались (точка в цвет статуса у «Продакшна» и звук — нейронщику), сколько новых заявок (админу).
-import { $, api, esc, state, STATUS_COLORS, toast } from "./core.js";
+import { $, api, esc, STATUS_COLORS, toast } from "./core.js";
 
 export const badges = { urgent: 0, notifications: [], reports: 0 };
 let timer = null;
@@ -75,5 +75,3 @@ function chime() {
     });
   } catch { /* звук недоступен */ }
 }
-
-export const isEditor = () => state.meta?.user?.role === "editor";

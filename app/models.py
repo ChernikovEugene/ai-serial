@@ -99,7 +99,6 @@ MODELS = {
     },
 }
 ENGINES = [(k, m["name"]) for k, m in MODELS.items()]
-RETIRED = {"sora": "other"}  # Sora закрыта OpenAI (24.09.2026), в Magnific её нет
 
 
 def spec(engine: str | None) -> dict:

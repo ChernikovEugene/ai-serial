@@ -1,7 +1,7 @@
 // «Сообщить о проблеме» (кнопка внизу меню) и страница «Заявки» для админа.
 // Заявка хранится на сайте; снимок экрана видит только админ. Нужные заявки админ отправляет в правки:
 // тогда они становятся задачей на GitHub с меткой «правка», и её подхватывает Claude.
-import { $, $$, api, closeModal, esc, fmtDateTime, modal, state, toast, view } from "./core.js";
+import { $, $$, api, closeModal, esc, fmtDateTime, modal, toast, view } from "./core.js";
 
 const KINDS = [
   ["bug", "Что-то сломалось", "Не сохраняется, не открывается, ошибка",
@@ -150,5 +150,3 @@ function card(r, statuses) {
          <div class="spacer"></div><button class="primary small" data-rp-forward="${r.id}">Отправить в правки Claude</button>`}</div>
   </div>`;
 }
-
-export const reportsAllowed = () => state.meta?.user?.role === "admin";
