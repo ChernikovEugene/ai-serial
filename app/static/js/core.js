@@ -157,3 +157,7 @@ export const postTextFor = (ep, net) => (ep.post_same === 0 ? ep[`post_text_${ne
 export const postTextAll = (ep) => (ep.post_same === 0
   ? POST_NETS.map(([k, n]) => (ep[`post_text_${k}`] ? `${n}:\n${ep[`post_text_${k}`]}` : "")).filter(Boolean).join("\n\n")
   : ep.post_text || "");
+
+// Цвет арки: спокойные оттенки, свой у каждой арки (по её номеру). Нужен, чтобы видеть, как арки перемешаны.
+const ARC_COLORS = ["#8f86e8", "#e08a6a", "#4fb894", "#d77fa6", "#6fa0dc", "#c9a24a", "#8fb85a", "#b58ad8"];
+export const arcColor = (id) => (id == null || id === "none" ? "var(--line)" : ARC_COLORS[(id - 1) % ARC_COLORS.length]);

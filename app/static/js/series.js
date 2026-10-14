@@ -1,14 +1,18 @@
 // «Серии»: сверху карточки арок; внутри арки — карточки серий для быстрых синопсисов (или список).
 // Серии арки идут в общей очереди выхода (1 серия в день), порядок меняется перетаскиванием карточек.
 // Черновики — серии без даты: не удалены, но в очередь не идут. Подробное ТЗ серии — на её странице (#/episodes/ID).
-import { $, $$, api, ARC_STATUS_COLORS, can, closeModal, esc, fmtDate, goBack, modal, state, statusPill, STATUS_COLORS, toast, view } from "./core.js";
+import { $, $$, addDays, api, arcColor, ARC_STATUS_COLORS, can, closeModal, esc, fmtDate, goBack, modal, state, statusPill, STATUS_COLORS, toast, view, WEEKDAYS } from "./core.js";
 import { arcDialog, ensureAssets } from "./arcs.js";
+import { deleteEpisode, deleteMany } from "./trash.js";
 
 const NO_ARC = { id: "none", title: "Без арки", notes: "", members: [], status: null };
 const VIEW_KEY = "seriesView";
 const WRITER_STATUSES = ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review"];
 
 let listView = (() => { try { return localStorage.getItem(VIEW_KEY) === "list"; } catch { return false; } })();
+// Очередь на главной «Серий»: списком по дням или «лентой» — у каждой арки своя дорожка, видно, как арки перемешаны
+const QUEUE_KEY = "queueView";
+let laneView = (() => { try { return localStorage.getItem(QUEUE_KEY) === "lanes"; } catch { return false; } })();
 
 /** Можно ли править карточку: продюсер — всегда, сценарист — пока серия на его этапах. */
 const editable = (e) => can.admin() || (can.episodes() && WRITER_STATUSES.includes(e.status));
@@ -43,14 +47,16 @@ export async function renderSeries() {
   view().innerHTML = `
     <div class="row"><h1>Серии</h1><div class="spacer"></div>
       <a class="btn" href="#/archive" title="Закончившиеся арки и выложенные серии: чтобы вернуться и вспомнить сюжет">Архив</a>
+      ${can.episodes() ? `<a class="btn ghost" href="#/trash" title="Удалённые серии: 30 дней их можно вернуть">🗑 Корзина</a>` : ""}
       ${can.episodes() ? `<button id="new-ep">+ Новая серия</button>` : ""}${can.arcs() ? `<button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
     <div class="arc-grid compact">
       ${cards.map((a) => arcCard(a, eps.filter((e) => (a.id === "none" ? !e.arc_id : e.arc_id === a.id)))).join("")}
     </div>
     <div class="row queue-head"><h2>Очередь выкладки</h2>
-      <span class="muted small">1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте.</span>
+      <div class="seg"><button class="${laneView ? "" : "on"}" data-qview="list">Список</button><button class="${laneView ? "on" : ""}" data-qview="lanes" title="Каждая арка на своей дорожке: видно, как сюжеты перемешаны">Лента арок</button></div>
+      <span class="muted small">${laneView ? "Каждая арка на своей дорожке, внизу — общая очередь. Нажмите на серию, чтобы открыть её." : "1 серия в день. Перетащите строку, чтобы поменять порядок; выложенные и закреплённые (📌) стоят на месте."}</span>
       <div class="spacer"></div>${can.schedule() ? `<button class="ghost small" id="compact" title="Сдвинуть серии, чтобы не было пустых дней (закреплённые не трогаются)">Убрать пропуски</button>` : ""}</div>
-    <div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today, arcs)}</div>
+    ${laneView ? lanes(active, arcs, today) : `<div class="ep-list queue-list" data-dnd="schedule">${queueRows(active, today, arcs)}</div>`}
     ${history.length ? `<button class="ghost small history-toggle" id="history">${showHistory ? "▾" : "▸"} История: ${plural(history.length, "выложенная серия", "выложенные серии", "выложенных серий")} завершённых арок</button>
       ${showHistory ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : ""}` : ""}`;
 
@@ -58,6 +64,12 @@ export async function renderSeries() {
   $("#new-arc") && ($("#new-arc").onclick = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) }));
   $("#compact") && ($("#compact").onclick = async () => { await api("/api/schedule/compact", { json: {} }); toast("Пропуски убраны"); renderSeries(); });
   $("#history") && ($("#history").onclick = () => { showHistory = !showHistory; renderSeries(); });
+  $$("[data-qview]").forEach((b) => (b.onclick = () => {
+    laneView = b.dataset.qview === "lanes";
+    try { localStorage.setItem(QUEUE_KEY, laneView ? "lanes" : "list"); } catch {}
+    renderSeries();
+  }));
+  $$("[data-lane-ep]").forEach((el) => (el.onclick = () => (location.hash = `#/episodes/${el.dataset.laneEp}`)));
   $$(".queue-row[data-open]").forEach((r) => r.addEventListener("click", (ev) => {
     if (!ev.target.closest("button,a,input")) location.hash = `#/episodes/${r.dataset.open}`;
   }));
@@ -117,7 +129,7 @@ function arcBreak(arc, again) {
     <span class="muted small">праздники, события, отдельные ролики</span></a>`;
   const syn = (arc.notes || "").replace(/\s+/g, " ");
   return `<a class="q-arc ${again ? "again" : ""}" href="#/series/${arc.id}" title="Открыть арку">
-    <span class="arc-tag">${again ? "Арка · продолжение" : "Арка"}</span><b>${esc(arc.title)}</b>
+    <span class="arc-tag">${again ? "Арка · продолжение" : "Арка"}</span><i class="arc-dot" style="--a:${arcColor(arc.id)}"></i><b>${esc(arc.title)}</b>
     <span class="status small" style="--c:${ARC_STATUS_COLORS[arc.status]}">${esc(arc.status_name)}</span>
     ${arc.start_date ? `<span class="muted small">${shortDate(arc.start_date)} — ${shortDate(arc.end_date)} · ${plural(arc.episodes, "серия", "серии", "серий")}</span>` : ""}
     ${!again && syn ? `<span class="q-arc-syn muted small">${esc(syn.slice(0, 180))}${syn.length > 180 ? "…" : ""}</span>` : ""}
@@ -126,7 +138,7 @@ function arcBreak(arc, again) {
 
 function queueRow(e, today) {
   const movable = can.schedule() && e.status !== "posted" && !e.pinned;
-  const arc = e.arc_id ? `<span class="arc-chip">Серия ${e.arc_number}</span>` : `<span class="arc-chip none">Вне арки</span>`;
+  const arc = e.arc_id ? `<span class="arc-chip"><i class="arc-dot" style="--a:${arcColor(e.arc_id)}"></i>Серия ${e.arc_number}</span>` : `<span class="arc-chip none">Вне арки</span>`;
   return `<div class="ep-card queue-row ${e.date === today ? "today" : ""} ${e.date < today ? "past" : ""}" data-ep="${e.id}" data-open="${e.id}" data-movable="${movable ? 1 : ""}" style="--c:${STATUS_COLORS[e.status]}">
     <div class="q-when">${movable ? `<span class="grip">⋮⋮</span>` : ""}<b>${fmtDate(e.date)}</b>${e.date === today ? ` <span class="today-tag">сегодня</span>` : ""}${e.pinned ? " 📌" : ""}</div>
     <div>${arc}</div>
@@ -215,11 +227,55 @@ function arcCard(a, eps) {
   const status = a.status ? `<span class="status small" style="--c:${ARC_STATUS_COLORS[a.status]}">${esc(a.status_name)}</span>` : "";
   return `<a class="arc-card ${a.archived ? "archived" : ""}" href="#/series/${a.id}">
     <div class="row">${a.archived ? `<span class="badge">в архиве</span>` : ""}${status}<div class="spacer"></div><span class="muted small">${esc(span)}</span></div>
-    <h2>${esc(a.title)}</h2>
+    <h2><i class="arc-dot" style="--a:${arcColor(a.id)}"></i>${esc(a.title)}</h2>
+    ${a.period_start || a.period_end ? `<div class="arc-period muted small">${periodText(a)}</div>` : ""}
     <p class="arc-card-syn">${esc(a.notes || (a.id === "none" ? "Серии вне арок: праздники, события, отдельные ролики." : "Синопсис арки пока не написан."))}</p>
     <div class="arc-card-bar">${bar || `<i style="flex:1;background:var(--line)"></i>`}</div>
     <div class="muted small">${plural(a.episodes, "серия", "серии", "серий")} в очереди${a.drafts ? ` · ${plural(a.drafts, "черновик", "черновика", "черновиков")}` : ""}</div>
   </a>`;
+}
+
+/** Период арки: когда она идёт по плану (задаётся в окне арки, по желанию). */
+const periodText = (a) => `Период: ${a.period_start ? fmtDate(a.period_start, false) : "…"} — ${a.period_end ? fmtDate(a.period_end, false) : "…"}`;
+
+/** «Лента арок»: дни идут слева направо, у каждой арки своя дорожка, внизу — что выходит в этот день.
+ * Пунктир на дорожке — арка ещё идёт (между её сериями выходят серии других арок), светлая подложка — период арки. */
+function lanes(list, arcs, today) {
+  if (!list.length) return `<p class="muted">В очереди пока нет серий.</p>`;
+  const first = list[0].date, last = list.at(-1).date;
+  const byDate = Object.fromEntries(list.map((e) => [e.date, e]));
+  // Колонки — дни; длинный пустой промежуток (больше 3 дней) сворачивается в одну колонку «… N дн.»
+  const days = [];
+  let empty = [];
+  const flush = () => { days.push(...(empty.length > 3 ? [{ gap: empty.length, from: empty[0] }] : empty)); empty = []; };
+  for (let d = first; d <= last; d = addDays(d, 1)) {
+    if (byDate[d]) { flush(); days.push(d); } else empty.push(d);
+  }
+  flush();
+  const keys = [...new Set(list.map((e) => e.arc_id ?? "none"))];
+  const arcOf = (k) => (k === "none" ? { id: "none", title: "Вне арки" } : arcs.find((a) => a.id === k) || { id: k, title: "Арка" });
+  const cell = (e, label) => `<button class="lane-ep ${e.date === today ? "today" : ""}" data-lane-ep="${e.id}" style="--a:${arcColor(e.arc_id)}"
+      title="${esc(fmtDate(e.date))} · ${esc(e.title || "Без названия")} · ${esc(e.status_name)}">${label}</button>`;
+  const short = (e) => (e.arc_id ? e.arc_number : "•"); // арку в общей очереди показывает цвет
+  const rows = keys.map((k) => {
+    const a = arcOf(k);
+    const own = list.filter((e) => (e.arc_id ?? "none") === k);
+    const from = own[0].date, to = own.at(-1).date;
+    return `<div class="lane-name" title="${esc(a.title)}"><i class="arc-dot" style="--a:${arcColor(a.id)}"></i>${esc(a.title)}</div>
+      ${days.map((d) => {
+        if (d.gap) return `<div class="lane-cell lane-gap">${d.from > from && d.from < to ? `<span class="lane-line" style="--a:${arcColor(a.id)}"></span>` : ""}</div>`;
+        const e = byDate[d];
+        const inPeriod = a.period_start && d >= a.period_start && (!a.period_end || d <= a.period_end);
+        const cls = `lane-cell ${inPeriod ? "in-period" : ""} ${d === today ? "is-today" : ""}`;
+        if (e && (e.arc_id ?? "none") === k) return `<div class="${cls}" style="--a:${arcColor(a.id)}">${cell(e, e.arc_number ?? "•")}</div>`;
+        return `<div class="${cls}" style="--a:${arcColor(a.id)}">${d > from && d < to ? `<span class="lane-line"></span>` : ""}</div>`;
+      }).join("")}`;
+  }).join("");
+  return `<div class="lanes-wrap"><div class="lanes" style="--n:${days.length}">
+    <div></div>${days.map((d) => d.gap ? `<div class="lane-day lane-gap" title="Свободно ${d.gap} дн. с ${fmtDate(d.from)}">…<small>${d.gap} дн.</small></div>` : `<div class="lane-day ${d === today ? "is-today" : ""}">${+d.slice(8)}<small>${WEEKDAYS[new Date(d + "T00:00:00").getDay()]}</small></div>`).join("")}
+    ${rows}
+    <div class="lane-name lane-total">Выход</div>${days.map((d) => d.gap ? `<div class="lane-cell total lane-gap"></div>` : `<div class="lane-cell total">${byDate[d] ? cell(byDate[d], short(byDate[d])) : `<span class="lane-free" title="Свободный день">·</span>`}</div>`).join("")}
+  </div></div>`;
 }
 
 const plural = (n, one, few, many) =>
@@ -232,6 +288,7 @@ export async function renderArc(arcKey) {
   const arc = arcKey === "none" ? NO_ARC : arcs.find((a) => a.id === +arcKey);
   if (!arc) { view().innerHTML = `<p>Арка не найдена. <a href="#/series">К сериям</a></p>`; return; }
   const own = eps.filter((e) => (arc.id === "none" ? !e.arc_id : e.arc_id === arc.id));
+  arc.eps = own;
   const queued = own.filter((e) => e.number != null).sort((x, y) => x.number - y.number);
   const drafts = own.filter((e) => e.number == null).sort((x, y) => x.position - y.position || x.id - y.id);
   const real = arc.id !== "none";
@@ -244,18 +301,21 @@ export async function renderArc(arcKey) {
   view().innerHTML = `
     <div class="row arc-head">
       <button class="ghost" id="arc-back" title="Назад">←</button>
-      <h1 style="margin:0">${esc(arc.title)}</h1>
+      <h1 style="margin:0">${real ? `<i class="arc-dot big" style="--a:${arcColor(arc.id)}"></i>` : ""}${esc(arc.title)}</h1>
       ${real && can.arcs() ? `<select id="arc-status" class="status-select" style="--c:${ARC_STATUS_COLORS[arc.status]}">
           ${["writing", "client", "approved"].map((k) => `<option value="${k}" ${arc.status === k ? "selected" : ""}>${{ writing: "Синопсисы пишутся", client: "Синопсисы у клиента", approved: "Синопсисы согласованы" }[k]}</option>`).join("")}
         </select>` : real ? `<span class="status" style="--c:${ARC_STATUS_COLORS[arc.status]}">${esc(arc.status_name)}</span>` : ""}
       <div class="spacer"></div>
       ${real ? `<a class="btn" href="/api/arcs/${arc.id}/pdf" target="_blank" title="Синопсисы арки для клиента">PDF для клиента</a>` : ""}
+      ${real && can.schedule() && arcs.filter((a) => a.id !== arc.id && !a.archived && a.episodes).length && queued.length
+        ? `<button class="ghost" id="arc-weave" title="Перемешать серии этой арки с другой: чередовать через день или 2 к 1">⇄ Чередовать с аркой</button>` : ""}
       ${real && can.arcs() ? `<button class="ghost" id="arc-edit">Арка и участники</button>
         <button class="ghost" id="arc-archive" title="${arc.archived ? "Вернуть арку на главную «Серий»" : "Арка закончилась: убрать с главной, но не удалять"}">${arc.archived ? "↩ Из архива" : "🗄 В архив"}</button>
         <button class="ghost danger" id="arc-del" title="Удалить арку (серии останутся)">🗑 Удалить арку</button>` : ""}
     </div>
     ${real && arc.archived ? `<p class="muted small arc-archived-note">🗄 Арка в архиве: на главной «Серий» её нет. Здесь можно перечитать синопсисы и сюжет.</p>` : ""}
     ${real ? `<div class="card arc-syn-card">
+      ${arc.period_start || arc.period_end ? `<div class="arc-period muted small">${periodText(arc)}${outside(arc, queued)}</div>` : ""}
       <label style="margin-top:0">Синопсис арки</label>
       <textarea id="arc-syn" rows="3" placeholder="О чём арка, что меняется в персонаже, локации, сюжете" ${can.arcs() ? "" : "disabled"}>${esc(arc.notes)}</textarea>
       ${members.length ? `<div class="arc-members">${members.map((x) => `<span class="badge">${esc(x)}</span>`).join("")}</div>` : ""}
@@ -269,13 +329,24 @@ export async function renderArc(arcKey) {
       ${queued.map((e) => epCard(e)).join("")}
       ${can.episodes() ? `<button class="ep-add" data-add="queue">+ Серия</button>` : ""}
     </div>
-    <h2>Черновики <span class="muted small">${drafts.length} · не удалены, но в очередь не идут</span></h2>
+    <div class="row"><h2>Черновики <span class="muted small">${drafts.length} · не удалены, но в очередь не идут</span></h2>
+      ${can.episodes() && drafts.length ? `<div class="spacer"></div><span class="muted small" id="pick-n"></span>
+        <button class="ghost small danger" id="del-picked" hidden>🗑 Удалить выбранные</button>` : ""}</div>
     <div class="${listView ? "ep-list" : "ep-grid"}" data-dnd="drafts">
       ${drafts.map((e) => epCard(e)).join("") || (can.episodes() ? "" : `<p class="muted small">Черновиков нет.</p>`)}
       ${can.episodes() ? `<button class="ep-add" data-add="drafts">+ Черновик</button>` : ""}
     </div>`;
 
   const rerender = () => renderArc(arcKey);
+  $("#arc-weave") && ($("#arc-weave").onclick = () => weaveDialog(arc, arcs, rerender));
+  // Галочки у черновиков: удалить несколько сразу
+  const picked = () => $$("[data-pick]:checked").map((c) => +c.dataset.pick);
+  $$("[data-pick]").forEach((c) => (c.onchange = () => {
+    const n = picked().length;
+    $("#del-picked").hidden = !n;
+    $("#pick-n").textContent = n ? `выбрано: ${n}` : "";
+  }));
+  $("#del-picked") && ($("#del-picked").onclick = () => deleteMany(picked(), rerender));
   $("#arc-back").onclick = () => goBack("#/series");
   $$("[data-view]").forEach((b) => (b.onclick = () => {
     listView = b.dataset.view === "list";
@@ -318,7 +389,7 @@ function epCard(e) {
   const ed = editable(e);
   const head = e.number != null
     ? `<b>Серия ${e.arc_number ?? e.number}</b><span class="muted small">${shortDate(e.date)}${e.pinned ? " 📌" : ""}</span>`
-    : `<b class="muted">Черновик</b>`;
+    : `${can.episodes() ? `<input type="checkbox" class="pick" data-pick="${e.id}" title="Выбрать, чтобы удалить несколько черновиков сразу" aria-label="Выбрать черновик">` : ""}<b class="muted">Черновик</b>`;
   const movable = can.schedule() && e.status !== "posted" && !(e.number != null && e.pinned);
   return `<div class="ep-card" data-ep="${e.id}" data-movable="${movable ? 1 : ""}" style="--c:${STATUS_COLORS[e.status]}">
     <div class="ep-card-head">${movable ? `<span class="grip" title="Потяните, чтобы переставить">⋮⋮</span>` : ""}${head}<div class="spacer"></div>${statusPill(e.status, true)}</div>
@@ -329,7 +400,7 @@ function epCard(e) {
       ${can.schedule() ? `${e.number != null ? `<button class="ghost small" data-pin="${e.id}" data-date="${e.date || ""}" title="Закрепить за датой (под событие)">📌</button>
         <button class="ghost small" data-draft="${e.id}" title="Убрать из очереди, не удаляя">В черновик</button>`
         : `<button class="ghost small" data-queue="${e.id}">В очередь</button>`}` : ""}
-      ${can.admin() ? `<button class="ghost small danger" data-del-ep="${e.id}" title="Удалить серию совсем">🗑</button>` : ""}
+      ${can.episodes() ? `<button class="ghost small danger" data-del-ep="${e.id}" title="Удалить серию (30 дней её можно вернуть из корзины)" aria-label="Удалить серию">🗑</button>` : ""}
     </div>
   </div>`;
 }
@@ -356,15 +427,41 @@ function bindCards(arc, rerender) {
     toast("Серия вернулась в очередь — в конец арки");
     rerender();
   }));
-  $$("[data-del-ep]").forEach((b) => (b.onclick = async () => {
-    const t = $(".ep-title", b.closest(".ep-card")).value || "без названия";
-    if (!confirm(`Удалить серию «${t}» совсем? Пропадут её сценарий, шоты и ролики, вернуть нельзя.\n\nЕсли серия просто не нужна сейчас, нажмите «В черновик».`)) return;
-    await api(`/api/episodes/${b.dataset.delEp}`, { method: "DELETE" });
-    toast("Серия удалена");
-    rerender();
+  $$("[data-del-ep]").forEach((b) => (b.onclick = () => {
+    const ep = arc.eps.find((x) => x.id === +b.dataset.delEp);
+    if (ep) deleteEpisode({ ...ep, title: $(".ep-title", b.closest(".ep-card")).value }, rerender);
   }));
   $$("[data-pin]").forEach((b) => (b.onclick = () => pinDialog(+b.dataset.pin, b.dataset.date, rerender)));
   if (can.schedule()) bindDrag(arc, rerender);
+}
+
+/** Сколько серий арки стоят вне её периода — подсказка, без запретов. */
+function outside(arc, queued) {
+  const n = queued.filter((e) => (arc.period_start && e.date < arc.period_start) || (arc.period_end && e.date > arc.period_end)).length;
+  return n ? ` · вне периода: ${n}` : "";
+}
+
+/** «⇄ Чередовать с аркой»: серии двух арок перемешиваются на тех же днях, что уже занимают. */
+function weaveDialog(arc, arcs, rerender) {
+  const others = arcs.filter((a) => a.id !== arc.id && !a.archived && a.episodes);
+  const m = modal(`<h1>Чередовать арки</h1>
+    <p class="muted">Серии двух арок встанут вперемешку. Дни выхода остаются те же, что они уже занимают; порядок внутри каждой арки
+      сохраняется. Выложенные и закреплённые 📌 серии не двигаются, другие арки не трогаются.</p>
+    <label>С какой аркой</label><select id="wv-arc">${others.map((a) => `<option value="${a.id}">${esc(a.title)} · ${plural(a.episodes, "серия", "серии", "серий")}</option>`).join("")}</select>
+    <label>Как чередовать</label>
+    <div class="seg" id="wv-pat">${[["1:1", "через одну"], ["2:1", `2 «${esc(arc.title)}» : 1`], ["1:2", `1 «${esc(arc.title)}» : 2`]]
+      .map(([k, n], i) => `<button data-pat="${k}" class="${i ? "" : "on"}">${n}</button>`).join("")}</div>
+    <p class="muted small">Потом порядок можно поправить перетаскиванием в очереди.</p>
+    <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="ghost" id="wv-cancel">Отмена</button><button class="primary" id="wv-go">Перемешать</button></div>`);
+  let pattern = "1:1";
+  $$("[data-pat]", m).forEach((b) => (b.onclick = () => { pattern = b.dataset.pat; $$("[data-pat]", m).forEach((x) => x.classList.toggle("on", x === b)); }));
+  $("#wv-cancel", m).onclick = closeModal;
+  $("#wv-go", m).onclick = async () => {
+    const r = await api(`/api/arcs/${arc.id}/weave`, { json: { with_arc: +$("#wv-arc", m).value, pattern } });
+    closeModal();
+    toast(`Арки перемешаны: ${plural(r.moved, "серия", "серии", "серий")}`);
+    rerender();
+  };
 }
 
 /** Перетаскивание карточек внутри «В очереди» и внутри «Черновиков». */

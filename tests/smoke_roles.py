@@ -207,6 +207,12 @@ p4 = ep4["shots"][0]["prompt"]
 check("character with image is a reference in the prompt", "the character from reference image 1" in p4 and "Альтушка" not in p4.split("Action:")[1], p4)
 check("preserve-identity rules in the prompt", "Strictly preserve" in p4 and "Recreate the location exactly" in p4, p4)
 check("location reference numbered", "shown in reference image 2" in p4, p4)
+# метки для ручной генерации: латиница по названию, промпт с @метками, файлы с теми же именами
+check("asset tag from the name", alt["tag"] == "altushka" and loc["tag"] == "loft", (alt.get("tag"), loc.get("tag")))
+s0 = ep4["shots"][0]
+check("manual prompt uses @tags", "@altushka" in s0["prompt_manual"] and "@loft" in s0["prompt_manual"]
+      and "reference image 1" not in s0["prompt_manual"], s0.get("prompt_manual"))
+check("manual refs carry tags", [r["tag"] for r in s0["manual_refs"]] == ["altushka", "loft"], s0.get("manual_refs"))
 check("reference order matches the references list", [r["kind"] for r in ep4["shots"][0]["references"]] == ["character", "location"], ep4["shots"][0]["references"])
 # много фото в одной версии: догрузка, порядок, удаление
 av = alt["versions"][0]
@@ -512,6 +518,67 @@ check("guest: cannot create episodes", st == 403, st)
 st, _ = writer.call("PUT", f"/api/users/{ed_id}", {"access": {"pages": ["status"], "caps": ["schedule"]}})
 st, users = admin.call("GET", "/api/users")
 check("access: only admin changes access", not next(u for u in users if u["id"] == ed_id)["access"]["custom"])
+
+# --- метки: уникальные, только латиница ---
+st, alt2 = writer.call("POST", "/api/assets", form={"kind": "character", "name": "Альтушка"})
+check("tag: duplicate name gets a number", st == 200 and alt2["tag"] == "altushka2", alt2.get("tag") if st == 200 else st)
+st, _ = writer.call("PUT", f"/api/assets/{alt2['id']}", {"tag": "Альт"})
+check("tag: cyrillic rejected", st == 400, st)
+st, _ = writer.call("PUT", f"/api/assets/{alt2['id']}", {"tag": "altushka"})
+check("tag: taken tag rejected", st == 400, st)
+st, r = writer.call("PUT", f"/api/assets/{alt2['id']}", {"tag": "@Alt_Twin"})
+check("tag: saved lowercased without @", st == 200 and r["tag"] == "alt_twin", r.get("tag") if st == 200 else st)
+
+# --- период арки и чередование арок ---
+st, arc_a = writer.call("POST", "/api/arcs", {"title": "Арка А", "period_start": "2031-03-01", "period_end": "2031-03-20"})
+check("arc period saved", st == 200 and arc_a["period_start"] == "2031-03-01" and arc_a["period_end"] == "2031-03-20", arc_a)
+st, _ = writer.call("POST", "/api/arcs", {"title": "Плохая", "period_start": "2031-03-10", "period_end": "2031-03-01"})
+check("arc period: end before start rejected", st == 400, st)
+st, kept = writer.call("PUT", f"/api/arcs/{arc_a['id']}", {"title": "Арка А", "notes": "синопсис"})
+check("arc period kept when not sent", kept["period_start"] == "2031-03-01", kept)
+a_eps = [writer.call("POST", f"/api/arcs/{arc_a['id']}/episodes", {"title": f"А{i}"})[1]["id"] for i in range(1, 4)]
+st, arc_b = writer.call("POST", "/api/arcs", {"title": "Арка Б", "period_start": "2031-03-04"})
+b_eps = [writer.call("POST", f"/api/arcs/{arc_b['id']}/episodes", {"title": f"Б{i}"})[1]["id"] for i in range(1, 3)]
+
+
+def days():
+    return {e["id"]: e["date"] for e in admin.call("GET", "/api/episodes")[1]}
+
+
+d = days()
+check("first episode of an arc starts on its period", d[a_eps[0]] == "2031-03-01" and d[b_eps[0]] == "2031-03-04", [d[i] for i in a_eps + b_eps])
+st, r = writer.call("POST", f"/api/arcs/{arc_a['id']}/weave", {"with_arc": arc_b["id"], "pattern": "1:1"})
+d = days()
+order = [i for i, _ in sorted(((i, d[i]) for i in a_eps + b_eps), key=lambda x: x[1])]
+check("weave 1:1 alternates the arcs on the same days", st == 200 and order == [a_eps[0], b_eps[0], a_eps[1], b_eps[1], a_eps[2]]
+      and sorted(d[i] for i in order) == ["2031-03-01", "2031-03-02", "2031-03-03", "2031-03-04", "2031-03-05"], (st, r, [d[i] for i in order]))
+st, _ = editor.call("POST", f"/api/arcs/{arc_a['id']}/weave", {"with_arc": arc_b["id"]})
+check("weave needs the schedule right", st == 403, st)
+
+# --- корзина: удалить может сценарист, следующие серии сдвигаются, 30 дней можно вернуть ---
+st, _ = editor.call("DELETE", f"/api/episodes/{b_eps[0]}")
+check("trash: editor cannot delete", st == 403, st)
+st, _ = writer.call("DELETE", f"/api/episodes/{b_eps[0]}", {"shift": True})
+d = days()
+check("trash: writer deletes", st == 200 and b_eps[0] not in d, st)
+check("trash: next episodes shift one day back", d[a_eps[1]] == "2031-03-02" and d[b_eps[1]] == "2031-03-03" and d[a_eps[2]] == "2031-03-04",
+      [d.get(i) for i in (a_eps[1], b_eps[1], a_eps[2])])
+st, _ = writer.call("GET", f"/api/episodes/{b_eps[0]}")
+check("trash: deleted episode page is gone", st == 404, st)
+st, t = writer.call("GET", "/api/trash")
+check("trash: listed in the trash", st == 200 and [e["id"] for e in t["episodes"]] == [b_eps[0]] and t["episodes"][0]["arc_title"] == "Арка Б", t)
+st, _ = writer.call("DELETE", f"/api/episodes/{a_eps[2]}", {"shift": False})
+check("trash: delete without shift leaves the day empty", "2031-03-04" not in days().values() and days()[a_eps[1]] == "2031-03-02", days().get(a_eps[1]))
+st, _ = writer.call("POST", f"/api/trash/{b_eps[0]}/restore", {})
+e = next((x for x in admin.call("GET", "/api/episodes")[1] if x["id"] == b_eps[0]), None)
+check("trash: restored into drafts of its arc", st == 200 and e and e["number"] is None and e["arc_id"] == arc_b["id"], e)
+drafts = [writer.call("POST", f"/api/arcs/{arc_a['id']}/episodes", {"title": f"Черн{i}", "draft": True})[1]["id"] for i in range(2)]
+st, r = writer.call("POST", "/api/episodes/bulk-delete", {"ids": drafts})
+check("trash: several drafts at once", st == 200 and len(writer.call("GET", "/api/trash")[1]["episodes"]) == 3, st)
+st, _ = writer.call("DELETE", f"/api/trash/{drafts[0]}")
+check("trash: delete forever", st == 200 and drafts[0] not in [x["id"] for x in writer.call("GET", "/api/trash")[1]["episodes"]], st)
+st, arcs = writer.call("GET", "/api/arcs")
+check("trash: deleted episodes are not counted in the arc", next(a for a in arcs if a["id"] == arc_a["id"])["drafts"] == 0, arcs)
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

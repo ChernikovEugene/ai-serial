@@ -1,4 +1,5 @@
 // Episode card: script editor with live analysis, shots, review & comments, history.
+import { deleteEpisode } from "./trash.js";
 import {
   POST_NETS, $, $$, api, assetColor, can, closeModal, engineName, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state, statusSelect, STATUS_COLORS, toast, view,
 } from "./core.js";
@@ -90,6 +91,19 @@ function draw() {
 const engineInfo = (key) => state.meta.engines.find((e) => e.key === key) || state.meta.engines.find((e) => e.key === "other");
 
 // Подпись картинки-референса так, как на неё ссылается промпт выбранной нейросети: @Image1, Image 1 или просто номер.
+/** Для ручной генерации (Magnific в браузере и другие сервисы): промпт, где картинки названы латинскими метками
+ * (@altushka), и картинки, которые скачиваются с этими же именами. Загрузил файлы, вставил промпт — связи по именам. */
+function manualBlock(s) {
+  if (!s.prompt_manual) return "";
+  const ext = (p) => (p.match(/\.\w+$/) || [".png"])[0];
+  return `<details class="manual-prompt"><summary class="muted small">Для ручной генерации: промпт с @метками</summary>
+    <div class="muted small">Скачайте картинки (имена файлов совпадают с метками), загрузите их в сервис и вставьте этот промпт.</div>
+    <textarea rows="6" readonly>${esc(s.prompt_manual)}</textarea>
+    <div class="row" style="margin-top:6px">${s.manual_refs.map((r) => `<a class="btn ghost small" href="${media(r.path)}" download="${esc(r.tag + ext(r.path))}"
+        title="${r.kind === "composition" ? "Композиция" : esc(r.name)}">⬇ @${esc(r.tag)}</a>`).join("")}
+      <div class="spacer"></div><button class="small" data-act="copymanual">Скопировать промпт</button></div></details>`;
+}
+
 function refTag(s, r, i) {
   const ex = engineInfo(s.engine).ref_example;
   if (s.composition_mode === "first_frame" && r.kind === "composition") return "первый кадр";
@@ -231,11 +245,13 @@ function titleRow(ep) {
     </div>
     ${can.episodes() ? `<button class="ghost urgent-btn ${ep.urgent ? "on" : ""}" id="ep-urgent" title="${ep.urgent ? "Серия срочная. Нажмите, чтобы снять отметку" : "Срочная серия: на выбранный день, наверх в «Продакшне» и значок в меню"}">🔥 ${ep.urgent ? "Срочно" : "Сделать срочной"}</button>`
       : ep.urgent ? `<span class="badge urgent-badge">🔥 Срочно</span>` : ""}
-    ${statusSelect(ep.status, 'id="ep-status"')}`;
+    ${statusSelect(ep.status, 'id="ep-status"')}
+    ${can.episodes() ? `<button class="ghost danger" id="ep-del" title="Удалить серию (30 дней её можно вернуть из корзины)" aria-label="Удалить серию">🗑</button>` : ""}`;
 }
 
 function bindTitleRow(ep) {
   $("#ep-back").onclick = () => goBack(`#/series/${ep.arc_id ?? "none"}`);
+  $("#ep-del") && ($("#ep-del").onclick = () => deleteEpisode(ep, () => (location.hash = `#/series/${ep.arc_id ?? "none"}`)));
   $("#ep-urgent") && ($("#ep-urgent").onclick = async () => {
     if (E.ep.urgent) {
       await api(`/api/episodes/${E.id}`, { method: "PUT", json: { urgent: false } });
@@ -643,6 +659,7 @@ function shotHtml(s) {
       <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>
       <label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
       <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${refTag(s, r, i)} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
+      ${manualBlock(s)}
     </div>` : ""}
   </div>`;
 }
@@ -753,6 +770,7 @@ function bindShot(s) {
     if (act === "rebuild") return replaceShot(await api(`/api/shots/${s.id}/rebuild-prompt`, { json: {} }));
     if (act === "rmcomp") return replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "DELETE" }));
     if (act === "copyprompt") return copyText(s.prompt);
+    if (act === "copymanual") return copyText(s.prompt_manual);
     if (act === "cancel") return cancelTake(s);
   }));
 }
@@ -761,13 +779,7 @@ function bindShot(s) {
 async function drawHistory(el) {
   const evs = await api(`/api/episodes/${E.id}/events`);
   el.innerHTML = `<div class="card">${evs.map((e) => `<div class="event"><span class="muted small">${fmtDateTime(e.created_at)}</span>
-      <b>${esc(e.user_name)}</b> ${esc(e.text)}</div>`).join("") || `<span class="muted">Пока пусто</span>`}
-    ${can.admin() ? `<div style="margin-top:16px"><button class="danger ghost" id="del-ep">Удалить серию</button></div>` : ""}</div>`;
-  $("#del-ep") && ($("#del-ep").onclick = async () => {
-    if (!confirm("Удалить серию со всеми шотами, видео-дублями и комментариями?")) return;
-    await api(`/api/episodes/${E.id}`, { method: "DELETE" });
-    location.hash = "#/series";
-  });
+      <b>${esc(e.user_name)}</b> ${esc(e.text)}</div>`).join("") || `<span class="muted">Пока пусто</span>`}</div>`;
 }
 
 // ---------------- new episode ----------------

@@ -1,5 +1,5 @@
 // Posting calendar: month grid with episodes, holidays and own events; drag episodes between days.
-import { $, $$, api, can, closeModal, esc, isoDate, modal, MONTHS, state, STATUS_COLORS, toast, view } from "./core.js";
+import { $, $$, api, can, closeModal, esc, isoDate, modal, MONTHS, state, STATUS_COLORS, toast, view, arcColor } from "./core.js";
 import { newEpisodeDialog } from "./episode.js";
 import { arcDialog, bindArcDividers, ensureAssets } from "./arcs.js";
 
@@ -50,7 +50,7 @@ export async function renderCalendar() {
           ${show.arcs && arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
           ${(evs[iso] || []).filter((ev) => (ev.builtin ? show.holidays : show.own)).map((ev) => evChip(ev)).join("")}
           ${(show.eps ? eps : []).map((e) => `<div class="cal-ep" draggable="${can.schedule()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
-              <b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
+              ${e.arc_id ? `<i class="arc-dot" style="--a:${arcColor(e.arc_id)}" title="Арка «${esc(e.arc_title)}»"></i>` : ""}<b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
           ${show.eps && !eps.length && iso >= today && can.episodes() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
         </div>`;
       }).join("")}

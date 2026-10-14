@@ -37,6 +37,7 @@ TABLES = {
         name TEXT NOT NULL,
         aliases TEXT NOT NULL DEFAULT '[]',
         active_version_id INTEGER,
+        tag TEXT NOT NULL DEFAULT '',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
     "asset_versions": """
@@ -79,6 +80,7 @@ TABLES = {
         export_status TEXT NOT NULL DEFAULT '',
         export_error TEXT NOT NULL DEFAULT '',
         urgent INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT NOT NULL DEFAULT '',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT ''""",
@@ -177,6 +179,8 @@ TABLES = {
         status TEXT NOT NULL DEFAULT 'writing',
         members TEXT NOT NULL DEFAULT '[]',
         archived INTEGER NOT NULL DEFAULT 0,
+        period_start TEXT NOT NULL DEFAULT '',
+        period_end TEXT NOT NULL DEFAULT '',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
     "templates": """
@@ -322,6 +326,29 @@ def init():
                   (datetime.now().date().isoformat(),))
         _migrate_arcs_v2(c)
         _seed_templates(c)
+        # метка для промпта (@altushka) у каждого персонажа и локации; старым раздаём по названию
+        taken = {r[0] for r in c.execute("SELECT tag FROM assets WHERE tag<>''")}
+        for a in c.execute("SELECT id, name, kind FROM assets WHERE tag='' ORDER BY id").fetchall():
+            tag = make_tag(a["name"], taken, a["kind"])
+            taken.add(tag)
+            c.execute("UPDATE assets SET tag=? WHERE id=?", (tag, a["id"]))
+
+
+_TRANSLIT = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+                     ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t",
+                      "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"]))
+TAG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+
+
+def make_tag(name: str, taken: set, kind: str = "asset") -> str:
+    """Латинская метка для промпта из названия: «Альтушка» → altushka, «Кофейня у дома» → kofeynya_u_doma.
+    Только латиница, цифры и «_», чтобы её понимали все нейросети. Занятая метка получает номер: altushka2."""
+    t = "".join(_TRANSLIT.get(ch, ch) for ch in name.lower())
+    t = re.sub(r"[^a-z0-9]+", "_", t).strip("_")[:32] or ("char" if kind == "character" else "loc")
+    base, n = t, 2
+    while t in taken:
+        t, n = f"{base}{n}", n + 1
+    return t
 
 
 # Шаблоны технических требований: примеры при первом запуске (в промпт не подставляются, пока не включат)

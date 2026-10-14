@@ -59,6 +59,11 @@ export async function arcDialog({ arc = null, onChange, draft = null } = {}) {
   };
   const m = modal(`<h1>${arc ? "Арка" : "Новая арка"}</h1>
     <label>Название арки</label><input id="arc-title" value="${esc(draft?.title ?? arc?.title ?? "")}" placeholder="Например: Первый косплей">
+    <div class="row arc-period-row"><span class="muted small">Период арки, по желанию:</span>
+      <input type="date" id="arc-p1" value="${esc(draft?.p1 ?? arc?.period_start ?? "")}" aria-label="Начало арки">
+      <span class="muted small">—</span>
+      <input type="date" id="arc-p2" value="${esc(draft?.p2 ?? arc?.period_end ?? "")}" aria-label="Конец арки">
+      <span class="muted small">серии в арку добавляются вручную</span></div>
     <label>Синопсис арки и ключевые детали: что меняется в персонаже, локации, сюжете</label>
     <textarea id="arc-notes" rows="5" placeholder="Ксю шьёт костюм Кристал Мейден, в комнате появляется манекен; в конце — пабстомп Пари">${esc(draft?.notes ?? arc?.notes ?? "")}</textarea>
     ${pick("character", "Персонажи в арке")}
@@ -82,7 +87,7 @@ export async function arcDialog({ arc = null, onChange, draft = null } = {}) {
       picked[created.id] = "";
       closeModal();
       toast(`«${name}» добавлен в библиотеку`);
-      arcDialog({ arc, onChange, draft: { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked } });
+      arcDialog({ arc, onChange, draft: { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked, p1: $("#arc-p1", m).value, p2: $("#arc-p2", m).value } });
     };
   });
   // «✕» у персонажа или локации: удаляем из библиотеки совсем (с подтверждением), окно перерисовывается с введённым
@@ -91,14 +96,16 @@ export async function arcDialog({ arc = null, onChange, draft = null } = {}) {
     if (!a || !confirm(`Удалить «${a.name}» из библиотеки? Исчезнут все его версии и фото, он пропадёт из арок и серий. Это нельзя отменить.`)) return;
     const picked = Object.fromEntries(membersOf().filter((x) => x.asset_id !== a.id).map((x) => [x.asset_id, x.version_id ?? ""]));
     await api(`/api/assets/${a.id}`, { method: "DELETE" });
-    const draft = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked };
+    const draft = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, chosen: picked, p1: $("#arc-p1", m).value, p2: $("#arc-p2", m).value };
     closeModal();
     toast(`«${a.name}» удалён из библиотеки`);
     arcDialog({ arc, onChange, draft });
   }));
   $("#arc-save", m).onclick = async () => {
     const members = membersOf();
-    const body = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, members };
+    const p1 = $("#arc-p1", m).value, p2 = $("#arc-p2", m).value;
+    if (p1 && p2 && p2 < p1) return toast("Конец периода раньше начала", true);
+    const body = { title: $("#arc-title", m).value, notes: $("#arc-notes", m).value, members, period_start: p1, period_end: p2 };
     const saved = await api(arc ? `/api/arcs/${arc.id}` : "/api/arcs", { method: arc ? "PUT" : "POST", json: body });
     closeModal();
     toast(arc ? "Арка сохранена" : "Арка создана");

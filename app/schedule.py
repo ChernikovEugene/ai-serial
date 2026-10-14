@@ -106,6 +106,25 @@ def compact():
         normalize(c)
 
 
+def close_gap(c, number: int) -> None:
+    """После удаления серии со дня `number`: следующие серии подряд сдвигаются на день назад, чтобы в очереди
+    не осталось пустого дня. Закреплённые 📌 и выложенные остаются на своих днях (их перешагиваем);
+    сдвиг идёт до первого уже пустого дня."""
+    fixed = {r[0] for r in c.execute("SELECT number FROM episodes WHERE number IS NOT NULL AND (pinned=1 OR status='posted')")}
+    later = [dict(r) for r in c.execute("SELECT id, number FROM episodes WHERE number > ? AND pinned=0 AND status<>'posted' "
+                                        "ORDER BY number", (number,))]
+    hole = number
+    for e in later:
+        prev = e["number"] - 1
+        while prev in fixed:
+            prev -= 1
+        if prev != hole:
+            break
+        c.execute("UPDATE episodes SET number=? WHERE id=?", (hole, e["id"]))
+        hole = e["number"]
+    normalize(c)
+
+
 def next_free(settings=None) -> int:
     with db.connect() as c:
         taken = {r[0] for r in c.execute("SELECT number FROM episodes WHERE number IS NOT NULL")}
@@ -124,7 +143,7 @@ def load_arcs(c=None) -> list[dict]:
         with db.connect() as conn:
             return load_arcs(conn)
     arcs = db.rows(c.execute("SELECT * FROM arcs ORDER BY id"))
-    eps = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS NOT NULL")]
+    eps = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS NOT NULL AND deleted_at=''")]
     for a in arcs:
         nums = sorted(e["number"] for e in eps if e["arc_id"] == a["id"] and e["number"] is not None)
         a["start_number"] = nums[0] if nums else None
@@ -163,9 +182,36 @@ def append_to_arc(eid: int, arc_id: int | None) -> int:
         else:
             last = c.execute("SELECT MAX(number) FROM episodes WHERE arc_id=? AND number IS NOT NULL AND id<>?",
                              (arc_id, eid)).fetchone()[0]
+    if not last and arc_id is not None:  # первая серия арки с периодом встаёт на день начала периода
+        with db.connect() as c:
+            start = c.execute("SELECT period_start FROM arcs WHERE id=?", (arc_id,)).fetchone()
+        if start and start[0] and start[0] >= date.today().isoformat():
+            move(eid, number_for(start[0]))
+            return number_for(start[0])
     number = last + 1 if last else next_free()
     move(eid, number)
     return number
+
+
+def weave(arc_a: int, arc_b: int, a_n: int = 1, b_n: int = 1) -> int:
+    """Чередовать серии двух арок: a_n серий первой, b_n серий второй и так далее. Серии занимают те же дни,
+    что и до этого (набор дней не меняется, другие арки не трогаются), внутри каждой арки порядок сохраняется.
+    Закреплённые 📌 и выложенные серии остаются на месте. Возвращает, сколько серий участвовало."""
+    with db.connect() as c:
+        eps = [dict(r) for r in c.execute(
+            "SELECT id, number, arc_id FROM episodes WHERE arc_id IN (?, ?) AND number IS NOT NULL AND pinned=0 "
+            "AND status<>'posted' AND deleted_at='' ORDER BY number", (arc_a, arc_b))]
+        a = [e for e in eps if e["arc_id"] == arc_a]
+        b = [e for e in eps if e["arc_id"] == arc_b]
+        if not a or not b:
+            return 0
+        order = []
+        while a or b:
+            order += a[:a_n] + b[:b_n]
+            a, b = a[a_n:], b[b_n:]
+        for e, n in zip(order, sorted(e["number"] for e in eps)):
+            c.execute("UPDATE episodes SET number=? WHERE id=?", (n, e["id"]))
+        return len(order)
 
 
 def reorder_queue(ids: list[int]) -> None:

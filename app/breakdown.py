@@ -610,16 +610,23 @@ def _cap(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tuple[str, list[dict], list[str]]:
+def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
+                 manual: bool = False) -> tuple[str, list[dict], list[str]]:
     """Returns (prompt, references, warnings). references: [{"path", "kind": composition|character|location, ...}].
 
     Герои и локации, у которых есть картинка, в тексте идут не по имени, а ссылкой на картинку по правилам выбранной
     нейросети: «@Image1» (Kling 3 Omni, Seedance, Hailuo), «Image 1» (WAN), «reference image 1» (Veo). Имя из сценария
     видеомодели ничего не говорит, а картинка говорит всё. Нумерация совпадает с порядком картинок в `references`
-    (так же они уходят в запрос и показываются на карточке шота)."""
+    (так же они уходят в запрос и показываются на карточке шота).
+
+    manual=True — промпт для ручной генерации (Magnific и другие сервисы в браузере): картинки называются латинскими
+    метками из библиотеки (@altushka), ограничений нейросети по числу и видам референсов нет — человек сам загружает
+    файлы с такими именами, и сервис связывает их с текстом по имени."""
     lang = settings.get("dialogue_language") or "Russian"
     engine = shot.get("engine") or "veo"
     m = models.spec(engine)
+    if manual:
+        m = {**m, "ref_token": "at", "max_refs": 99, "ref_kinds": ("composition", "character", "location")}
     comp = shot.get("composition_image")
     mode = shot.get("composition_mode") or "reference"
     if comp and mode == "first_frame" and not m["first_frame"]:
@@ -644,6 +651,8 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
         if len(refs) > 1:
             warns.append(f"В режиме «первый кадр» фото персонажей и локации не отправляются — {m['name']} берёт всё из кадра")
         refs = refs[:1]
+    elif manual:
+        pass
     elif refs and not models.accepts_refs(engine, settings):
         if engine == "veo":
             warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
@@ -667,6 +676,10 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict) -> tu
     num = {(r["kind"], r.get("asset_id")): i for i, r in enumerate(attached, 1) if r["kind"] != "composition"}
     comp_n = next((i for i, r in enumerate(attached, 1) if r["kind"] == "composition"), None)
     tok = lambda n: models.token(engine, n)  # noqa: E731
+    if manual:
+        for r in refs:
+            r["tag"] = "frame" if r["kind"] == "composition" else (assets.get(r["asset_id"], {}).get("tag") or f"img{r['asset_id']}")
+        tok = lambda n: "@" + attached[n - 1]["tag"]  # noqa: E731
     natural = m["ref_token"] == "natural"
     label = {a_id: (f"the character from {tok(n)}" if natural else tok(n))
              for (kind, a_id), n in num.items() if kind == "character"}

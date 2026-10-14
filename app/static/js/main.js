@@ -11,13 +11,14 @@ import { renderStatus, stopStatusPolling } from "./status.js";
 import { renderTeam } from "./team.js";
 import { openReport, renderReports } from "./report.js";
 import { drawBadges, startBadges, stopBadges } from "./notify.js";
+import { renderTrash } from "./trash.js";
 
 let lastHash = location.hash;
 
 
 /** Раздел, которого нет в меню человека: «Команда», «Настройки», «Заявки» — только админу, остальные страницы —
  * по доступам из «Команды» (по умолчанию как у роли). Страница серии входит в «Серии», персонажи — в «Библиотеку». */
-const PAGE_OF = { episodes: "series", archive: "series", characters: "library", locations: "library", library: "library" };
+const PAGE_OF = { episodes: "series", archive: "series", trash: "series", characters: "library", locations: "library", library: "library" };
 function hidden(section) {
   if (["team", "settings", "reports"].includes(section)) return !can.admin();
   const page = PAGE_OF[section] || section;
@@ -55,6 +56,7 @@ async function route() {
     if (section === "queue") { location.replace("#/series"); return; }
     if (section === "series") return id ? await renderArc(id) : await renderSeries();
     if (section === "archive") return await renderArchive();
+    if (section === "trash") return can.episodes() ? await renderTrash() : location.replace("#/series");
     if (section === "calendar") return await renderCalendar();
     if (section === "episodes") return id ? await renderEpisode(+id, sub || (can.gen() && !can.write() ? "shots" : "script")) : await renderSeries();
     if (section === "library") return await renderAssets("character");
@@ -83,7 +85,7 @@ function setTheme(t) {
 const FLAG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4"/><path d="M4 4h12l-2 4 2 4H4"/></svg>`;
 
 function drawNav(section) {
-  const active = section === "episodes" || section === "archive" ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
+  const active = ["episodes", "archive", "trash"].includes(section) ? "series" : ["characters", "locations", "library"].includes(section) ? "library" : section;
   const u = state.meta.user;
   $("#nav").hidden = false;
   $("#nav").classList.remove("open"); // на телефоне меню за «бургером» закрывается при каждом переходе

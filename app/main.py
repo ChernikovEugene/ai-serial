@@ -3,7 +3,7 @@ import shutil
 import json
 import re
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -376,6 +376,8 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
     s["over_limit"] = s["est_seconds"] > max_s
     s["forced_8"] = bool(breakdown.forced_duration(refs, s, ctx.settings))
     s["references"] = refs
+    # промпт для ручной генерации: картинки по латинским меткам (@altushka), файлы скачиваются с такими же именами
+    s["prompt_manual"], s["manual_refs"], _ = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings, manual=True)
     s["takes"] = takes
     sel = next((t for t in takes if t["id"] == s.get("selected_take_id")), None)
     s["selected_take"] = sel
@@ -424,6 +426,8 @@ def load_episode_row(eid: int) -> dict:
         ep = db.row(c.execute("SELECT * FROM episodes WHERE id=?", (eid,)).fetchone())
     if not ep:
         raise HTTPException(404, "Серия не найдена")
+    if ep["deleted_at"]:
+        raise HTTPException(404, "Серия в корзине: верните её на странице «Серии» → «Корзина»")
     return ep
 
 
@@ -477,8 +481,9 @@ def create_asset(request: Request, kind: str = Form(...), name: str = Form(...),
         raise HTTPException(400, "Укажите название")
     alias_list = [x.strip() for x in aliases.split(",") if x.strip()]
     with db.connect() as c:
-        asset_id = c.execute("INSERT INTO assets(kind, name, aliases, created_by, created_at) VALUES (?,?,?,?,?)",
-                             (kind, name, db.dumps(alias_list), uid(request), db.now())).lastrowid
+        tag = db.make_tag(name, {r[0] for r in c.execute("SELECT tag FROM assets")}, kind)
+        asset_id = c.execute("INSERT INTO assets(kind, name, aliases, tag, created_by, created_at) VALUES (?,?,?,?,?,?)",
+                             (kind, name, db.dumps(alias_list), tag, uid(request), db.now())).lastrowid
     paths = [save_upload(f, f"{kind}s/{asset_id}") for f in images if f.filename]
     with db.connect() as c:
         vid = c.execute(
@@ -492,11 +497,19 @@ def create_asset(request: Request, kind: str = Form(...), name: str = Form(...),
 class AssetPatch(BaseModel):
     name: str | None = None
     aliases: list[str] | None = None
+    tag: str | None = None
 
 
 @app.put("/api/assets/{asset_id}", dependencies=[Depends(auth.need("library"))])
 def update_asset(asset_id: int, p: AssetPatch):
     with db.connect() as c:
+        if p.tag is not None:
+            tag = p.tag.strip().lstrip("@").lower()
+            if not db.TAG_RE.match(tag):
+                raise HTTPException(400, "Метка — только латиница, цифры и «_», без пробелов: например, altushka")
+            if c.execute("SELECT 1 FROM assets WHERE tag=? AND id<>?", (tag, asset_id)).fetchone():
+                raise HTTPException(400, f"Метка @{tag} уже занята: у каждого персонажа и локации своя")
+            c.execute("UPDATE assets SET tag=? WHERE id=?", (tag, asset_id))
         if p.name is not None and p.name.strip():
             c.execute("UPDATE assets SET name=? WHERE id=?", (p.name.strip(), asset_id))
         if p.aliases is not None:
@@ -595,7 +608,8 @@ def episode_summaries(role: str = "admin") -> list[dict]:
     max_s = int(settings.get("max_shot_seconds") or 8)
     with db.connect() as c:
         eps = db.rows(c.execute("SELECT id, number, pinned, planned_date, title, status, posted_at, updated_at, "
-                                "arc_id, position, synopsis, post_text, post_same, post_text_tiktok, post_text_reels, post_text_shorts, urgent FROM episodes ORDER BY number IS NULL, number, position, id"))
+                                "arc_id, position, synopsis, post_text, post_same, post_text_tiktok, post_text_reels, post_text_shorts, urgent FROM episodes "
+                                "WHERE deleted_at='' ORDER BY number IS NULL, number, position, id"))
         stats = {r["episode_id"]: dict(r) for r in c.execute(
             "SELECT episode_id, COUNT(*) AS shots, COALESCE(SUM(duration),0) AS seconds, "
             "COALESCE(SUM(est_seconds),0) AS est, SUM(est_seconds > ?) AS over, "
@@ -681,6 +695,8 @@ class ArcIn(BaseModel):
     title: str
     notes: str = ""           # синопсис арки / ключевые детали
     members: list[dict] = []  # [{asset_id, version_id|null}]
+    period_start: str | None = None  # период арки (по желанию): когда она идёт; серии в неё добавляют вручную.
+    period_end: str | None = None    # None — оставить как было
 
 
 def _arc_values(a: ArcIn) -> tuple:
@@ -689,7 +705,14 @@ def _arc_values(a: ArcIn) -> tuple:
         raise HTTPException(400, "Назовите арку")
     members = [{"asset_id": int(m["asset_id"]), "version_id": int(m["version_id"]) if m.get("version_id") else None}
                for m in a.members if m.get("asset_id")]
-    return title, a.notes.strip(), db.dumps(members)
+    for d in (a.period_start, a.period_end):
+        try:
+            _ = d and date.fromisoformat(d)
+        except ValueError:
+            raise HTTPException(400, "Дата периода в формате ГГГГ-ММ-ДД")
+    if a.period_start and a.period_end and a.period_end < a.period_start:
+        raise HTTPException(400, "Конец периода арки раньше начала")
+    return title, a.notes.strip(), db.dumps(members), a.period_start, a.period_end
 
 
 def _arc_or_404(c, arc_id: int) -> dict:
@@ -715,20 +738,27 @@ def list_arcs():
 
 @app.post("/api/arcs", dependencies=[Depends(auth.need("arcs"))])
 def create_arc(a: ArcIn, request: Request):
-    title, notes, members = _arc_values(a)
+    title, notes, members, p1, p2 = _arc_values(a)
     with db.connect() as c:
         # start_number больше не используется (день начала считается по сериям арки), но в базах до v2 он NOT NULL
-        arc_id = c.execute("INSERT INTO arcs(title, start_number, notes, members, created_by, created_at) VALUES (?,0,?,?,?,?)",
-                           (title, notes, members, uid(request), db.now())).lastrowid
+        arc_id = c.execute("INSERT INTO arcs(title, start_number, notes, members, period_start, period_end, created_by, "
+                           "created_at) VALUES (?,0,?,?,?,?,?,?)",
+                           (title, notes, members, p1 or "", p2 or "", uid(request), db.now())).lastrowid
     return next(x for x in list_arcs() if x["id"] == arc_id)
 
 
 @app.put("/api/arcs/{arc_id}", dependencies=[Depends(auth.need("arcs"))])
 def update_arc(arc_id: int, a: ArcIn):
-    title, notes, members = _arc_values(a)
+    title, notes, members, p1, p2 = _arc_values(a)
     with db.connect() as c:
         _arc_or_404(c, arc_id)
-        c.execute("UPDATE arcs SET title=?, notes=?, members=? WHERE id=?", (title, notes, members, arc_id))
+        old = _arc_or_404(c, arc_id)
+        p1 = old["period_start"] if p1 is None else p1
+        p2 = old["period_end"] if p2 is None else p2
+        if p1 and p2 and p2 < p1:
+            raise HTTPException(400, "Конец периода арки раньше начала")
+        c.execute("UPDATE arcs SET title=?, notes=?, members=?, period_start=?, period_end=? WHERE id=?",
+                  (title, notes, members, p1, p2, arc_id))
     return next(x for x in list_arcs() if x["id"] == arc_id)
 
 
@@ -739,6 +769,29 @@ def delete_arc(arc_id: int):
         c.execute("UPDATE episodes SET arc_id=NULL WHERE arc_id=?", (arc_id,))
         c.execute("DELETE FROM arcs WHERE id=?", (arc_id,))
     return list_arcs()
+
+
+class WeaveIn(BaseModel):
+    with_arc: int
+    pattern: str = "1:1"  # сколько серий этой арки, потом сколько серий второй: 1:1, 2:1, 1:2
+
+
+@app.post("/api/arcs/{arc_id}/weave", dependencies=[Depends(auth.need("schedule"))])
+def weave_arcs(arc_id: int, w: WeaveIn, request: Request):
+    """Перемешать две арки: их серии в очереди чередуются по шаблону на тех же днях, что они уже занимают."""
+    try:
+        a_n, b_n = (max(1, int(x)) for x in w.pattern.split(":"))
+    except ValueError:
+        raise HTTPException(400, "Шаблон чередования вида 1:1")
+    with db.connect() as c:
+        arc_a, arc_b = _arc_or_404(c, arc_id), _arc_or_404(c, w.with_arc)
+    if arc_id == w.with_arc:
+        raise HTTPException(400, "Выберите другую арку")
+    moved = schedule.weave(arc_id, w.with_arc, a_n, b_n)
+    if not moved:
+        raise HTTPException(400, "Нечего чередовать: у арок нет серий в очереди, которые можно двигать")
+    db.log(None, uid(request), f"Арки «{arc_a['title']}» и «{arc_b['title']}» перемешаны ({w.pattern})")
+    return {"ok": True, "moved": moved}
 
 
 class ArcArchiveIn(BaseModel):
@@ -769,8 +822,8 @@ def set_arc_status(arc_id: int, s: ArcStatusIn, request: Request):
         c.execute("UPDATE arcs SET status=? WHERE id=?", (s.status, arc_id))
         stage = tuple(db.SYNOPSIS_STAGE)
         changed = [r[0] for r in c.execute(
-            f"SELECT id FROM episodes WHERE arc_id=? AND status IN ({','.join('?' * len(stage))})", (arc_id, *stage))]
-        c.execute(f"UPDATE episodes SET status=?, updated_at=? WHERE arc_id=? AND status IN ({','.join('?' * len(stage))})",
+            f"SELECT id FROM episodes WHERE arc_id=? AND deleted_at='' AND status IN ({','.join('?' * len(stage))})", (arc_id, *stage))]
+        c.execute(f"UPDATE episodes SET status=?, updated_at=? WHERE arc_id=? AND deleted_at='' AND status IN ({','.join('?' * len(stage))})",
                   (db.ARC_TO_EPISODE[s.status], db.now(), arc_id, *stage))
     names = dict(db.ARC_STATUSES)
     for eid in changed:
@@ -1205,7 +1258,7 @@ def get_episode(eid: int) -> dict:
     ep["incomplete"] = sum(1 for s in ep["shots"] if s["missing"])
     ep["date"] = schedule.date_for(ep["number"], ctx.settings)
     with db.connect() as c:
-        mates = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS ?", (ep["arc_id"],))]
+        mates = [dict(r) for r in c.execute("SELECT id, number, arc_id FROM episodes WHERE arc_id IS ? AND deleted_at=''", (ep["arc_id"],))]
     ep.update(schedule.arc_numbers(mates, schedule.load_arcs()).get(eid, {"arc_id": None, "arc_title": "", "arc_number": None}))
     ep["status_name"] = db.STATUS_NAMES.get(ep["status"], ep["status"])
     ep["approved_by_name"] = user_names().get(ep["approved_by"], "") if ep.get("approved_by") else ""
@@ -1340,10 +1393,103 @@ def pin_episode(eid: int, p: PinIn, request: Request):
     return {"ok": True}
 
 
-@app.delete("/api/episodes/{eid}", dependencies=[Depends(auth.admin)])
-def delete_episode(eid: int):
+# ---------- корзина серий ----------
+# Удалённая серия 30 дней лежит в корзине (episodes.deleted_at): из очереди и со всех страниц она пропадает,
+# но её можно вернуть — она вернётся в черновики своей арки. Через 30 дней серия удаляется совсем, вместе с файлами.
+TRASH_DAYS = 30
+
+
+class DeleteEpIn(BaseModel):
+    shift: bool = False  # сдвинуть следующие серии на день назад, чтобы не было пустого дня
+
+
+def _trash(c, eid: int, shift: bool) -> None:
+    e = c.execute("SELECT number, pinned FROM episodes WHERE id=? AND deleted_at=''", (eid,)).fetchone()
+    if not e:
+        raise HTTPException(404, "Серия не найдена")
+    c.execute("UPDATE episodes SET deleted_at=?, number=NULL, pinned=0, planned_date=NULL, urgent=0 WHERE id=?",
+              (db.now(), eid))
+    if shift and e["number"] is not None:
+        schedule.close_gap(c, e["number"])
+
+
+@app.delete("/api/episodes/{eid}", dependencies=[Depends(auth.need("episodes"))])
+def delete_episode(eid: int, request: Request, p: DeleteEpIn | None = None):
     with db.connect() as c:
+        _trash(c, eid, bool(p and p.shift))
+    db.log(eid, uid(request), "Серия перенесена в корзину")
+    return {"ok": True}
+
+
+class BulkDeleteIn(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/episodes/bulk-delete", dependencies=[Depends(auth.need("episodes"))])
+def bulk_delete_episodes(p: BulkDeleteIn, request: Request):
+    """Несколько серий сразу в корзину (галочки у черновиков). Дни в очереди не сдвигаются."""
+    with db.connect() as c:
+        for eid in p.ids:
+            _trash(c, eid, False)
+    for eid in p.ids:
+        db.log(eid, uid(request), "Серия перенесена в корзину")
+    return {"ok": True, "count": len(p.ids)}
+
+
+def _purge(c, eids: list[int]) -> None:
+    """Удалить серии совсем: строки в базе (шоты, дубли, комментарии уходят каскадом) и их видео и картинки."""
+    for eid in eids:
+        files = [r[0] for r in c.execute("SELECT t.video_path FROM takes t JOIN shots s ON s.id=t.shot_id "
+                                         "WHERE s.episode_id=? AND t.video_path<>''", (eid,))]
+        files += [r[0] for r in c.execute("SELECT composition_image FROM shots WHERE episode_id=? AND composition_image<>''", (eid,))]
         c.execute("DELETE FROM episodes WHERE id=?", (eid,))
+        root = db.MEDIA_DIR.resolve()
+        for rel in files:
+            f = (db.MEDIA_DIR / rel).resolve()
+            if root in f.parents:
+                f.unlink(missing_ok=True)
+
+
+def purge_old_trash() -> None:
+    cutoff = (datetime.now() - timedelta(days=TRASH_DAYS)).isoformat(timespec="seconds")
+    with db.connect() as c:
+        _purge(c, [r[0] for r in c.execute("SELECT id FROM episodes WHERE deleted_at<>'' AND deleted_at < ?", (cutoff,))])
+
+
+@app.get("/api/trash", dependencies=[Depends(auth.need("episodes"))])
+def list_trash():
+    purge_old_trash()
+    titles = {a["id"]: a["title"] for a in schedule.load_arcs()}
+    with db.connect() as c:
+        eps = db.rows(c.execute("SELECT e.id, e.title, e.synopsis, e.status, e.arc_id, e.deleted_at, "
+                                "(SELECT COUNT(*) FROM shots s WHERE s.episode_id=e.id) AS shots "
+                                "FROM episodes e WHERE e.deleted_at<>'' ORDER BY e.deleted_at DESC"))
+    for e in eps:
+        e["arc_title"] = titles.get(e["arc_id"], "")
+        e["status_name"] = db.STATUS_NAMES.get(e["status"], e["status"])
+        e["purge_at"] = (datetime.fromisoformat(e["deleted_at"]) + timedelta(days=TRASH_DAYS)).date().isoformat()
+    return {"episodes": eps, "days": TRASH_DAYS}
+
+
+@app.post("/api/trash/{eid}/restore", dependencies=[Depends(auth.need("episodes"))])
+def restore_episode(eid: int, request: Request):
+    """Серия возвращается в черновики своей арки (её прежний день мог уже занять кто-то другой)."""
+    with db.connect() as c:
+        if not c.execute("UPDATE episodes SET deleted_at='' WHERE id=? AND deleted_at<>''", (eid,)).rowcount:
+            raise HTTPException(404, "В корзине такой серии нет")
+        if c.execute("SELECT arc_id FROM episodes WHERE id=?", (eid,)).fetchone()[0] is not None and \
+                not c.execute("SELECT 1 FROM arcs WHERE id=(SELECT arc_id FROM episodes WHERE id=?)", (eid,)).fetchone():
+            c.execute("UPDATE episodes SET arc_id=NULL WHERE id=?", (eid,))  # арку за это время удалили
+    db.log(eid, uid(request), "Серия возвращена из корзины в черновики")
+    return {"ok": True}
+
+
+@app.delete("/api/trash/{eid}", dependencies=[Depends(auth.need("episodes"))])
+def purge_episode(eid: int):
+    with db.connect() as c:
+        if not c.execute("SELECT 1 FROM episodes WHERE id=? AND deleted_at<>''", (eid,)).fetchone():
+            raise HTTPException(404, "В корзине такой серии нет")
+        _purge(c, [eid])
     return {"ok": True}
 
 
@@ -2040,7 +2186,7 @@ def badges(request: Request):
         notes = []
         if user["role"] != "admin" and auth.has(user, "generation"):  # «серия сгенерировалась» — нейронщику
             for n in db.rows(c.execute("SELECT n.*, e.status AS ep_status FROM notifications n LEFT JOIN episodes e "
-                                       "ON e.id=n.episode_id WHERE n.role=? AND n.created_at >= ? ORDER BY n.id DESC LIMIT 50",
+                                       "ON e.id=n.episode_id WHERE n.role=? AND COALESCE(e.deleted_at,'')='' AND n.created_at >= ? ORDER BY n.id DESC LIMIT 50",
                                        ("editor", (date.today() - timedelta(days=14)).isoformat()))):
                 if me not in (n["seen_by"] or []):
                     notes.append({k: n[k] for k in ("id", "kind", "episode_id", "text", "created_at", "ep_status")})

@@ -20,12 +20,12 @@ export async function renderAssets(kind) {
     <p class="muted">${k.hint}</p>
     <div class="grid" id="grid"></div>`;
   const draw = (q = "") => {
-    const list = assets.filter((a) => (a.name + " " + a.aliases.join(" ")).toLowerCase().includes(q.toLowerCase()));
+    const list = assets.filter((a) => (a.name + " " + a.aliases.join(" ") + " " + a.tag).toLowerCase().includes(q.toLowerCase()));
     $("#grid").innerHTML = list.map((a) => {
       const v = a.versions.find((x) => x.id === a.active_version_id) || a.versions.at(-1) || { images: [] };
       return `<div class="card tile" data-id="${a.id}">
         <div class="thumb" style="${v.images[0] ? `background-image:url('${media(v.images[0])}')` : ""}">${v.images[0] ? "" : k.icon}</div>
-        <div class="meta"><b>${esc(a.name)}</b><span class="muted small">${esc(handle(a.name))} · v${v.version_no || 1} ${esc(v.label || "")} · версий: ${a.versions.length}</span></div></div>`;
+        <div class="meta"><b>${esc(a.name)}</b><span class="muted small">${esc(handle(a.name))} · <span title="Метка для промпта">@${esc(a.tag)}</span> · v${v.version_no || 1} ${esc(v.label || "")} · версий: ${a.versions.length}</span></div></div>`;
     }).join("") || `<p class="muted">Пока пусто.</p>`;
     $$(".tile").forEach((t) => (t.onclick = () => (location.hash = `#/${k.path}/${t.dataset.id}`)));
   };
@@ -50,13 +50,15 @@ export async function renderAsset(id) {
         <label>Название</label><input id="a-name" value="${esc(a.name)}" ${ro}>
         <label>Другие имена через запятую — по ним тоже узнаём в тексте</label>
         <input id="a-aliases" value="${esc(a.aliases.join(", "))}" ${ro}>
+        <label>Метка для промпта <span class="muted small">— латиницей, своя у каждого. Так ${a.kind === "location" ? "локация" : "персонаж"} называется в промпте для ручной генерации, и так же называются скачанные фото</span></label>
+        <div class="tag-input"><span>@</span><input id="a-tag" value="${esc(a.tag)}" ${ro} pattern="[a-z0-9_]+" spellcheck="false" autocapitalize="off"></div>
         ${can.library() ? `<div class="row" style="margin-top:10px"><div class="spacer"></div><button id="save-meta">Сохранить</button></div>` : ""}
         <h2>Активная версия: v${active.version_no} ${esc(active.label)}</h2>
         <p class="muted small">Активная версия используется по умолчанию. В конкретной серии можно выбрать другую (вкладка «Сценарий» → «Версии для этой серии»).</p>
         <div class="gallery">${active.images.map((p, i) => `<figure class="ph" data-img="${esc(p)}">
           <a href="${media(p)}" target="_blank"><img src="${media(p)}" draggable="true"></a>${i === 0 ? `<span class="main-ref">главный реф</span>` : ""}
           <figcaption><button class="ghost small" data-copy title="Скопировать фото, чтобы вставить в видеогенератор (Ctrl+V)">Копировать</button>
-            <a class="btn ghost small" href="${media(p)}" download title="Скачать файл">Скачать</a>
+            <a class="btn ghost small" href="${media(p)}" download="${esc(a.tag + (i ? "_" + (i + 1) : "") + ((p.match(/\.\w+$/) || [".png"])[0]))}" title="Скачать файл с именем по метке">Скачать</a>
             ${can.library() && i > 0 ? `<button class="ghost small" data-main title="Сделать главным референсом (уходит в видеогенератор первым)">★</button>` : ""}
             ${can.library() ? `<button class="ghost small danger" data-rm title="Убрать фото из версии">✕</button>` : ""}</figcaption></figure>`).join("")
           || `<span class="muted">Нет фото — нейросеть нарисует по описанию.</span>`}</div>
@@ -107,7 +109,9 @@ export async function renderAsset(id) {
     renderAsset(id);
   });
   $("#save-meta").onclick = async () => {
-    await api(`/api/assets/${id}`, { method: "PUT", json: { name: $("#a-name").value, aliases: $("#a-aliases").value.split(",") } });
+    const tag = $("#a-tag").value.trim().replace(/^@/, "").toLowerCase();
+    if (!/^[a-z0-9_]{1,40}$/.test(tag)) return toast("Метка — только латиница, цифры и «_», без пробелов: например, altushka", true);
+    await api(`/api/assets/${id}`, { method: "PUT", json: { name: $("#a-name").value, aliases: $("#a-aliases").value.split(","), tag } });
     toast("Сохранено"); renderAsset(id);
   };
   $("#del").onclick = async () => {

@@ -740,3 +740,39 @@ textarea.need { border-color: var(--warn); }
   .phone { border-radius: 28px; padding: 8px; }
   .ph-screen { border-radius: 21px; }
 }
+
+/* Цвет арки: маленькая точка рядом с названием и номером серии (видно, как арки перемешаны) */
+.arc-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--a); margin-right: 6px; vertical-align: 1px; flex: none; }
+.arc-dot.big { width: 12px; height: 12px; margin-right: 10px; vertical-align: 3px; }
+.arc-period { margin: -2px 0 6px; }
+.arc-period-row { gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.arc-period-row input[type=date] { width: 160px; padding: 4px 8px; }
+.ep-card .pick { width: auto; margin: 0 4px 0 0; }
+
+/* Лента арок на «Серии»: дорожка у каждой арки, внизу — общая очередь */
+.lanes-wrap { overflow-x: auto; padding-bottom: 6px; }
+.lanes { display: grid; grid-template-columns: 150px repeat(var(--n), minmax(34px, 1fr)); gap: 3px 2px; align-items: center; min-width: min-content; }
+.lane-day { text-align: center; font-size: 12px; color: var(--muted); line-height: 1.1; }
+.lane-day small { display: block; font-size: 10px; }
+.lane-day.is-today { color: var(--text); font-weight: 600; }
+.lane-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+.lane-cell { height: 30px; display: flex; align-items: center; justify-content: center; position: relative; border-radius: 6px; }
+.lane-cell.in-period { background: color-mix(in srgb, var(--a) 8%, transparent); }
+.lane-cell.is-today { box-shadow: inset 0 0 0 1px var(--line); }
+.lane-line { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed color-mix(in srgb, var(--a) 55%, transparent); }
+.lane-ep { position: relative; z-index: 1; min-width: 28px; height: 26px; padding: 0 4px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  background: color-mix(in srgb, var(--a) 22%, var(--panel)); color: var(--text); border: 1px solid color-mix(in srgb, var(--a) 60%, transparent); }
+.lane-ep:hover { background: color-mix(in srgb, var(--a) 35%, var(--panel)); }
+.lane-ep.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lane-total { font-weight: 600; border-top: 1px solid var(--line); padding-top: 6px; }
+.lane-cell.total { border-top: 1px solid var(--line); border-radius: 0; padding-top: 6px; height: 36px; }
+.lane-free { color: var(--muted); }
+
+/* Метка для промпта (@altushka) и промпт для ручной генерации */
+.tag-input { display: flex; align-items: center; gap: 4px; }
+.tag-input span { color: var(--muted); font-weight: 600; }
+.manual-prompt { margin-top: 12px; }
+.manual-prompt summary { cursor: pointer; }
+.manual-prompt textarea { margin-top: 6px; font-size: 12px; }
+.lane-day.lane-gap { color: var(--muted); }
+.lane-cell.lane-gap { background: repeating-linear-gradient(90deg, transparent 0 4px, color-mix(in srgb, var(--line) 50%, transparent) 4px 5px); }
