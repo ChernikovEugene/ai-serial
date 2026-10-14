@@ -776,3 +776,13 @@ textarea.need { border-color: var(--warn); }
 .manual-prompt textarea { margin-top: 6px; font-size: 12px; }
 .lane-day.lane-gap { color: var(--muted); }
 .lane-cell.lane-gap { background: repeating-linear-gradient(90deg, transparent 0 4px, color-mix(in srgb, var(--line) 50%, transparent) 4px 5px); }
+
+/* Арка в календаре: полупрозрачная лента цвета арки через дни её серий. Соседние дни соединяются через зазор сетки:
+   отступ клетки 6 + рамка 1 + половина зазора 3 = 10 px с каждой стороны. */
+.cal-ribbon { height: 18px; line-height: 18px; font-size: 11px; font-weight: 500; padding: 0 6px; cursor: pointer;
+  background: color-mix(in srgb, var(--a) 24%, transparent); color: color-mix(in srgb, var(--a) 75%, var(--text));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0 -10px; border-radius: 0; }
+.cal-ribbon.first { margin-left: 0; border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.cal-ribbon.last { margin-right: 0; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.cal-ribbon:hover { background: color-mix(in srgb, var(--a) 34%, transparent); }
+@media (max-width: 800px) { .cal-ribbon { margin: 0; border-radius: 6px; } }

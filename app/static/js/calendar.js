@@ -21,10 +21,21 @@ export async function renderCalendar() {
   gridStart.setDate(1 - ((first.getDay() + 6) % 7));
   const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
   const [sched] = await Promise.all([api(`/api/schedule?start=${isoDate(days[0])}&end=${isoDate(days[41])}`), ensureAssets()]);
-  const arcAt = Object.fromEntries(sched.arcs.map((a) => [a.start_date, a]));
+  const arcNotes = Object.fromEntries(sched.arcs.map((a) => [a.id, a.notes || ""]));
   const today = state.meta.today;
   const byDate = {};
   sched.episodes.forEach((e) => (byDate[e.date] = [...(byDate[e.date] || []), e]));
+  // Арка в календаре — полупрозрачная лента цвета арки через все дни её серий (название — в начале ленты и с каждой новой недели)
+  const arcOf = (iso) => (byDate[iso] || []).find((e) => e.arc_id) || null;
+  const ribbon = (d, iso) => {
+    const e = arcOf(iso);
+    if (!show.arcs || !e) return "";
+    const wd = (d.getDay() + 6) % 7;
+    const first = wd === 0 || arcOf(addDays(iso, -1))?.arc_id !== e.arc_id;
+    const last = wd === 6 || arcOf(addDays(iso, 1))?.arc_id !== e.arc_id;
+    return `<div class="cal-ribbon ${first ? "first" : ""} ${last ? "last" : ""}" data-arc="${e.arc_id}" style="--a:${arcColor(e.arc_id)}"
+      title="Арка «${esc(e.arc_title)}»${arcNotes[e.arc_id] ? ": " + esc(arcNotes[e.arc_id]) : ""}">${first ? esc(e.arc_title) : ""}</div>`;
+  };
   const evs = {};
   sched.events.forEach((e) => (evs[e.date] = [...(evs[e.date] || []), e]));
 
@@ -47,10 +58,10 @@ export async function renderCalendar() {
         const other = d.getMonth() !== first.getMonth();
         return `<div class="cal-day ${other ? "other" : ""} ${iso === today ? "today" : ""} ${iso < today ? "past" : ""}" data-date="${iso}">
           <div class="cal-num" data-addev="${iso}" data-wd="${WEEKDAYS[(d.getDay() + 6) % 7]}" title="Добавить событие">${d.getDate()}</div>
-          ${show.arcs && arcAt[iso] ? `<div class="cal-arc" data-arc="${arcAt[iso].id}" title="${esc(arcAt[iso].notes || "")}">▶ Арка: ${esc(arcAt[iso].title)}</div>` : ""}
+          ${ribbon(d, iso)}
           ${(evs[iso] || []).filter((ev) => (ev.builtin ? show.holidays : show.own)).map((ev) => evChip(ev)).join("")}
           ${(show.eps ? eps : []).map((e) => `<div class="cal-ep" draggable="${can.schedule()}" data-id="${e.id}" style="--c:${STATUS_COLORS[e.status]}" title="${esc(e.status_name)}">
-              ${e.arc_id ? `<i class="arc-dot" style="--a:${arcColor(e.arc_id)}" title="Арка «${esc(e.arc_title)}»"></i>` : ""}<b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
+              <b>${e.arc_number ?? e.number}</b> ${esc(e.title || "Без названия")}${e.pinned ? " 📌" : ""}<div class="small">${esc(e.status_name)}</div></div>`).join("")}
           ${show.eps && !eps.length && iso >= today && can.episodes() ? `<button class="cal-add ghost small" data-create="${iso}">+ серия</button>` : ""}
         </div>`;
       }).join("")}
