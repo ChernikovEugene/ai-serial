@@ -110,7 +110,9 @@ function engineHelp(s) {
 }
 
 // The writer cannot touch a script once the producer has approved it.
-const writerLocked = () => state.meta.user.role !== "admin" && !["dev", "review"].includes(E.ep.status);
+// Править серию (не админу) можно, пока ТЗ не готово: те же этапы, что проверяет сервер (auth.WRITER_STATUSES).
+const EDITABLE_STATUSES = ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review"];
+const writerLocked = () => state.meta.user.role !== "admin" && !EDITABLE_STATUSES.includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
 const canEp = () => can.episodes() && !writerLocked(); // название и синопсис серии
 
