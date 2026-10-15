@@ -996,8 +996,12 @@ def arc_pdf(arc_id: int):
   .shape {{ position: absolute; background: rgba(255,255,255,.10); }}
   .shape.s1 {{ width: 520px; height: 520px; left: -200px; top: -260px; transform: rotate(32deg); }}
   .shape.s2 {{ width: 640px; height: 640px; right: -260px; bottom: -380px; transform: rotate(-28deg); background: rgba(255,255,255,.14); }}
-  .grid {{ position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 18px; }}
-  .ep h3 {{ margin: 0 0 12px; text-align: center; color: #111; font: 900 28px/1 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; }}
+  /* Каждая серия — две строки общей сетки (заголовок и карточка, subgrid): у серий одного ряда заголовки занимают
+     одинаковую высоту и прижаты к карточке, а карточки начинаются на одной линии и одной высоты, сколько бы строк ни было в заголовке */
+  .grid {{ position: relative; display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 18px; row-gap: 0; }}
+  .ep {{ display: grid; grid-row: span 2; grid-template-rows: subgrid; }}
+  .ep:nth-child(n+4) h3 {{ margin-top: 26px; }}
+  .ep h3 {{ margin: 0 0 12px; align-self: end; text-align: center; color: #111; font: 900 28px/1 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; }}
   .card {{ background: var(--card); border-radius: 6px; padding: 22px 28px; min-height: 214px; }}
   .card .date {{ color: var(--teal-light); font-size: 13px; margin-bottom: 10px; }}
   .card p {{ margin: 0; white-space: pre-wrap; }}
