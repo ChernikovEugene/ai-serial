@@ -924,39 +924,11 @@ def _streaks() -> str:
     return '<div class="streaks">' + "".join(out) + "</div>"
 
 
-@app.get("/api/arcs/{arc_id}/pdf")
-def arc_pdf(arc_id: int):
-    """Синопсисы арки для клиента в стиле презентации PARI (16:9): «Скачать PDF» собирает файл в браузере,
-    «Печать» — запасной путь.
-    В выгрузку идут серии арки, стоящие в очереди (черновики — нет)."""
+def _synopsis_html(title: str, filename: str, msg: str, cover: str, pages: str) -> str:
+    """Страница-презентация синопсисов (16:9, стиль PARI) со «Скачать PDF»: общая для PDF арки и PDF за период."""
     from html import escape as h
-    arc = next((a for a in list_arcs() if a["id"] == arc_id), None)
-    if not arc:
-        raise HTTPException(404, "Арка не найдена")
-    eps = [e for e in episode_summaries() if e["arc_id"] == arc_id and e["number"] is not None]
-    eps.sort(key=lambda e: e["number"])
-    series = db.get_settings().get("series_title") or "Сериал"
-    assets = {a["id"]: a for a in load_assets()}
-    members = []
-    for m in arc["members"]:
-        a = assets.get(m["asset_id"])
-        if a:
-            v = next((v for v in a["versions"] if v["id"] == m["version_id"]), None)
-            members.append(a["name"] + (f" · {v['label']}" if v else ""))
-    span = (f"{_ru_date(arc['start_date'])} — {_ru_date(arc['end_date'])}" if arc["start_date"] else "даты не назначены")
-    n = len(eps)
-    n_word = "серия" if n % 10 == 1 and n % 100 != 11 else "серии" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "серий"
-    # Слайды 16:9 в стиле презентации PARI (Figma): тёмная обложка с бирюзовым свечением, бирюзовые листы с карточками
-    def card(e):
-        return f"""<article class="ep"><h3>{e['arc_number']}. «{h((e['title'] or 'Без названия').upper())}»</h3>
-          <div class="card"><div class="date">{_ru_date(e['date'])}</div><p>{h(e['synopsis'] or 'Синопсис пока не написан.')}</p></div></article>"""
-    per = 6
-    pages = "".join(f"""<section class="sheet teal"><div class="shape s1"></div><div class="shape s2"></div>
-  <div class="grid">{"".join(card(e) for e in eps[k:k + per])}</div>
-  <div class="pno dark">{k // per + 2}</div></section>""" for k in range(0, len(eps), per))
-    toc = "".join(f"<li><b>{e['arc_number']}.</b> «{h(e['title'] or 'Без названия')}» <span>{_ru_date(e['date'])}</span></li>" for e in eps)
-    page = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<title>{h(arc['title'])} — синопсисы</title>
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>{h(title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fira+Sans+Extra+Condensed:wght@800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -1005,21 +977,27 @@ def arc_pdf(arc_id: int):
   .card {{ background: var(--card); border-radius: 6px; padding: 22px 28px; min-height: 214px; }}
   .card .date {{ color: var(--teal-light); font-size: 13px; margin-bottom: 10px; }}
   .card p {{ margin: 0; white-space: pre-wrap; }}
+  /* выгрузка за период: у каждой серии метка её арки цветом арки (арки идут вперемешку) */
+  .card.arc {{ border-left: 5px solid var(--a); }}
+  .card .arcl {{ display: flex; align-items: center; gap: 7px; font-size: 13px; color: #e8f3f1; margin-bottom: 6px; }}
+  .card .arcl i, .dot {{ width: 9px; height: 9px; border-radius: 50%; background: var(--a); flex: none; display: inline-block; }}
+  .card .arcl span {{ color: var(--muted); }}
+  .arcs-list {{ display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }}
+  .arcs-list .a {{ display: grid; grid-template-columns: 12px 1fr; gap: 4px 10px; align-items: baseline; }}
+  .arcs-list b {{ font-weight: 600; font-size: 17px; }}
+  .arcs-list b small {{ color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 6px; }}
+  .arcs-list p {{ grid-column: 2; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.4; }}
+  /* список серий периода: одна строка на серию (длинное название обрезается), при 13+ сериях — в две колонки */
+  .glass ul.toc li {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }}
+  .glass ul.toc.two {{ display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; row-gap: 6px; }}
+  .glass ul.toc.two li {{ font-size: 13px; }}
+  .glass li .dot {{ margin-right: 6px; }}
   @media print {{ body {{ background: none; }} .bar {{ display: none; }} .sheet {{ margin: 0; zoom: 1; }} }}
 </style></head><body>
 <div class="bar"><button id="dl" onclick="downloadPdf()">Скачать PDF</button>
   <button class="ghost" onclick="print()">Печать</button>
-  <span id="msg">Файл сохранится в «Загрузки». Серий в выгрузке: {n}{' (черновики не входят)' if arc['drafts'] else ''}.</span></div>
-<section class="sheet cover">{_streaks()}
-  <div class="kicker">{h(series)} · синопсисы на согласование</div>
-  <h1 class="head">{h(arc['title'])}</h1>
-  <div class="cols">
-    <div><div class="lead">{h(arc['notes']) if arc['notes'] else 'Синопсис арки пока не написан.'}</div>
-      <div class="meta">{n} {n_word} · {span}</div>
-      {('<div class="chips">' + ''.join(f'<span>{h(m)}</span>' for m in members) + '</div>') if members else ''}</div>
-    <div class="glass"><h4>Серии арки</h4><ul>{toc or '<li>Серий пока нет</li>'}</ul></div>
-  </div>
-  <div class="pno">1</div></section>
+  <span id="msg">{msg}</span></div>
+{cover}
 {pages}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -1039,7 +1017,7 @@ async function downloadPdf() {{
       if (i) pdf.addPage([1280, 720], "landscape");
       pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 1280, 720);
     }}
-    pdf.save({json.dumps(arc["title"] + " — синопсисы.pdf", ensure_ascii=False)});
+    pdf.save({json.dumps(filename, ensure_ascii=False)});
     msg.textContent = "Готово: файл в «Загрузках».";
   }} catch (e) {{
     msg.textContent = "Не получилось собрать PDF — нажмите «Печать» и выберите «Сохранить как PDF».";
@@ -1047,7 +1025,116 @@ async function downloadPdf() {{
 }}
 </script>
 </body></html>"""
-    return Response(page, media_type="text/html")
+
+
+ARC_COLORS = ["#8f86e8", "#e08a6a", "#4fb894", "#d77fa6", "#6fa0dc", "#c9a24a", "#8fb85a", "#b58ad8"]  # как arcColor в core.js
+
+
+def _arc_color(arc_id) -> str:
+    return ARC_COLORS[(arc_id - 1) % len(ARC_COLORS)] if arc_id else "#9aa5a3"
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    return one if n % 10 == 1 and n % 100 != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+
+
+def _synopsis_pages(eps: list[dict], card) -> str:
+    per = 6
+    return "".join(f"""<section class="sheet teal"><div class="shape s1"></div><div class="shape s2"></div>
+  <div class="grid">{"".join(card(i, e) for i, e in enumerate(eps[k:k + per], k + 1))}</div>
+  <div class="pno dark">{k // per + 2}</div></section>""" for k in range(0, len(eps), per))
+
+
+@app.get("/api/arcs/{arc_id}/pdf")
+def arc_pdf(arc_id: int):
+    """Синопсисы арки для клиента в стиле презентации PARI (16:9): «Скачать PDF» собирает файл в браузере,
+    «Печать» — запасной путь.
+    В выгрузку идут серии арки, стоящие в очереди (черновики — нет)."""
+    from html import escape as h
+    arc = next((a for a in list_arcs() if a["id"] == arc_id), None)
+    if not arc:
+        raise HTTPException(404, "Арка не найдена")
+    eps = [e for e in episode_summaries() if e["arc_id"] == arc_id and e["number"] is not None]
+    eps.sort(key=lambda e: e["number"])
+    series = db.get_settings().get("series_title") or "Сериал"
+    assets = {a["id"]: a for a in load_assets()}
+    members = []
+    for m in arc["members"]:
+        a = assets.get(m["asset_id"])
+        if a:
+            v = next((v for v in a["versions"] if v["id"] == m["version_id"]), None)
+            members.append(a["name"] + (f" · {v['label']}" if v else ""))
+    span = (f"{_ru_date(arc['start_date'])} — {_ru_date(arc['end_date'])}" if arc["start_date"] else "даты не назначены")
+    n = len(eps)
+
+    def card(_, e):
+        return f"""<article class="ep"><h3>{e['arc_number']}. «{h((e['title'] or 'Без названия').upper())}»</h3>
+          <div class="card"><div class="date">{_ru_date(e['date'])}</div><p>{h(e['synopsis'] or 'Синопсис пока не написан.')}</p></div></article>"""
+    toc = "".join(f"<li><b>{e['arc_number']}.</b> «{h(e['title'] or 'Без названия')}» <span>{_ru_date(e['date'])}</span></li>" for e in eps)
+    cover = f"""<section class="sheet cover">{_streaks()}
+  <div class="kicker">{h(series)} · синопсисы на согласование</div>
+  <h1 class="head">{h(arc['title'])}</h1>
+  <div class="cols">
+    <div><div class="lead">{h(arc['notes']) if arc['notes'] else 'Синопсис арки пока не написан.'}</div>
+      <div class="meta">{n} {_plural(n, "серия", "серии", "серий")} · {span}</div>
+      {('<div class="chips">' + ''.join(f'<span>{h(m)}</span>' for m in members) + '</div>') if members else ''}</div>
+    <div class="glass"><h4>Серии арки</h4><ul>{toc or '<li>Серий пока нет</li>'}</ul></div>
+  </div>
+  <div class="pno">1</div></section>"""
+    msg = f"Файл сохранится в «Загрузки». Серий в выгрузке: {n}{' (черновики не входят)' if arc['drafts'] else ''}."
+    return Response(_synopsis_html(f"{arc['title']} — синопсисы", f"{arc['title']} — синопсисы.pdf", msg, cover,
+                                   _synopsis_pages(eps, card)), media_type="text/html")
+
+
+@app.get("/api/synopsis-pdf")
+def period_pdf(start: str, end: str):
+    """Синопсисы всех серий за период (с «Серий» → «PDF синопсисов»): арки идут вперемешку, поэтому у каждой серии
+    метка её арки цветом арки, а на обложке — период, число серий и арки периода."""
+    from html import escape as h
+    try:
+        d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(400, "Даты в формате ГГГГ-ММ-ДД")
+    if d1 < d0:
+        raise HTTPException(400, "Конец периода раньше начала")
+    eps = sorted((e for e in episode_summaries() if e["date"] and start <= e["date"] <= end), key=lambda e: e["number"])
+    arcs = {a["id"]: a for a in list_arcs()}
+    series = db.get_settings().get("series_title") or "Сериал"
+    n = len(eps)
+    in_period = []
+    for e in eps:
+        if e["arc_id"] not in in_period:
+            in_period.append(e["arc_id"])
+    span = f"{_ru_date(start)} — {_ru_date(end)}"
+    year = f" {d1.year}" if d1.year != date.today().year else ""
+
+    def arc_label(e):
+        return f"{h(e['arc_title'])} <span>· серия {e['arc_number']}</span>" if e["arc_id"] else "Вне арки"
+
+    def card(i, e):
+        return f"""<article class="ep"><h3>{i}. «{h((e['title'] or 'Без названия').upper())}»</h3>
+          <div class="card arc" style="--a:{_arc_color(e['arc_id'])}"><div class="arcl"><i></i>{arc_label(e)}</div>
+            <div class="date">{_ru_date(e['date'])}</div><p>{h(e['synopsis'] or 'Синопсис пока не написан.')}</p></div></article>"""
+    arcs_html = "".join(
+        f"""<div class="a" style="--a:{_arc_color(aid)}"><i class="dot"></i>
+          <b>{h(arcs[aid]['title']) if aid in arcs else 'Вне арки'}<small>{(c := sum(1 for e in eps if e['arc_id'] == aid))} {_plural(c, 'серия', 'серии', 'серий')}</small></b>
+          {f"<p>{h(' '.join(arcs[aid]['notes'].split())[:150])}{'…' if len(arcs[aid]['notes']) > 150 else ''}</p>" if aid in arcs and arcs[aid]['notes'] else ''}</div>"""
+        for aid in in_period)
+    shown = eps[:20]
+    toc = "".join(f"""<li style="--a:{_arc_color(e['arc_id'])}"><i class="dot"></i><b>{i}.</b> «{h(e['title'] or 'Без названия')}» <span>{_ru_date(e['date'])}</span></li>"""
+                  for i, e in enumerate(shown, 1)) + (f"<li><span>и ещё {n - len(shown)}…</span></li>" if n > len(shown) else "")
+    cover = f"""<section class="sheet cover">{_streaks()}
+  <div class="kicker">{h(series)} · синопсисы на согласование</div>
+  <h1 class="head">{span}{year}</h1>
+  <div class="cols">
+    <div><div class="meta" style="margin-top:0;font-size:18px;color:#fff">{n} {_plural(n, "серия", "серии", "серий")} · {len(in_period)} {_plural(len(in_period), "арка", "арки", "арок")}{" идут вперемешку" if len(in_period) > 1 else ""}</div>
+      <div class="arcs-list">{arcs_html or '<p>В этот период серий нет.</p>'}</div></div>
+    <div class="glass"><h4>Серии периода</h4><ul class="toc{' two' if len(shown) > 12 else ''}">{toc or '<li>Серий нет</li>'}</ul></div>
+  </div>
+  <div class="pno">1</div></section>"""
+    name = f"Синопсисы {_ru_date(start)} — {_ru_date(end)}"
+    msg = f"Файл сохранится в «Загрузки». Серий в выгрузке: {n} (черновики без даты не входят)."
+    return Response(_synopsis_html(name, name + ".pdf", msg, cover, _synopsis_pages(eps, card)), media_type="text/html")
 
 
 @app.get("/api/episodes")

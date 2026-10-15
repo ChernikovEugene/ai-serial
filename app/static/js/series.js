@@ -46,6 +46,7 @@ export async function renderSeries() {
 
   view().innerHTML = `
     <div class="row"><h1>Серии</h1><div class="spacer"></div>
+      <button id="period-pdf" title="Синопсисы всех серий за выбранные даты — презентация для клиента">PDF синопсисов</button>
       <a class="btn" href="#/archive" title="Закончившиеся арки и выложенные серии: чтобы вернуться и вспомнить сюжет">Архив</a>
       ${can.episodes() ? `<a class="btn ghost" href="#/trash" title="Удалённые серии: 30 дней их можно вернуть">🗑 Корзина</a>` : ""}
       ${can.episodes() ? `<button id="new-ep">+ Новая серия</button>` : ""}${can.arcs() ? `<button class="primary" id="new-arc">+ Новая арка</button>` : ""}</div>
@@ -61,6 +62,7 @@ export async function renderSeries() {
       ${showHistory ? `<div class="ep-list queue-list history">${queueRows(history, today, arcs, false)}</div>` : ""}` : ""}`;
 
   $("#new-ep") && ($("#new-ep").onclick = () => newEpisodeQuick(arcs, renderSeries));
+  $("#period-pdf").onclick = () => periodPdfDialog(eps.filter((e) => e.date));
   $("#new-arc") && ($("#new-arc").onclick = () => arcDialog({ onChange: (arc) => arc && (location.hash = `#/series/${arc.id}`) }));
   $("#compact") && ($("#compact").onclick = async () => { await api("/api/schedule/compact", { json: {} }); toast("Пропуски убраны"); renderSeries(); });
   $("#history") && ($("#history").onclick = () => { showHistory = !showHistory; renderSeries(); });
@@ -75,6 +77,47 @@ export async function renderSeries() {
   }));
   $$("[data-create]").forEach((b) => (b.onclick = () => newEpisodeQuick(arcs, renderSeries, b.dataset.create)));
   if (can.schedule()) bindQueueDrag(renderSeries);
+}
+
+/** «PDF синопсисов»: выбрать даты — откроется презентация с синопсисами всех серий периода (арки вперемешку
+ * помечены цветом и названием арки), на обложке период, число серий и арки. */
+function periodPdfDialog(queued) {
+  const today = state.meta.today;
+  const monday = addDays(today, -((new Date(today + "T00:00:00").getDay() + 6) % 7));
+  const presets = [
+    ["Эта неделя", monday, addDays(monday, 6)],
+    ["Следующая неделя", addDays(monday, 7), addDays(monday, 13)],
+    ["2 недели с сегодня", today, addDays(today, 13)],
+    ["Месяц с сегодня", today, addDays(today, 29)],
+  ];
+  const m = modal(`<h1>PDF синопсисов</h1>
+    <p class="muted">Синопсисы всех серий, которые выходят в эти дни. Арки идут вперемешку, поэтому у каждой серии в презентации
+      будет метка её арки. Черновики без даты не входят.</p>
+    <div class="row" style="flex-wrap:wrap;gap:6px">${presets.map(([n], i) => `<button class="ghost small" data-preset="${i}">${n}</button>`).join("")}</div>
+    <div class="row" style="margin-top:10px;gap:8px"><label style="margin:0">С</label><input type="date" id="pp-from" value="${today}" style="width:170px">
+      <label style="margin:0">по</label><input type="date" id="pp-to" value="${addDays(today, 13)}" style="width:170px"></div>
+    <p class="muted small" id="pp-count"></p>
+    <div class="row" style="margin-top:12px"><div class="spacer"></div><button class="ghost" id="pp-cancel">Отмена</button>
+      <button class="primary" id="pp-go">Открыть презентацию</button></div>`);
+  const count = () => {
+    const a = $("#pp-from", m).value, b = $("#pp-to", m).value;
+    const n = queued.filter((e) => e.date >= a && e.date <= b).length;
+    const arcsN = new Set(queued.filter((e) => e.date >= a && e.date <= b).map((e) => e.arc_id ?? "none")).size;
+    $("#pp-count", m).textContent = a && b && b >= a ? `В этот период: ${plural(n, "серия", "серии", "серий")}${n ? `, ${plural(arcsN, "арка", "арки", "арок")}` : ""}` : "Конец периода раньше начала";
+  };
+  $$("[data-preset]", m).forEach((b) => (b.onclick = () => {
+    const [, a, z] = presets[+b.dataset.preset];
+    $("#pp-from", m).value = a; $("#pp-to", m).value = z; count();
+  }));
+  $("#pp-from", m).onchange = $("#pp-to", m).onchange = count;
+  count();
+  $("#pp-cancel", m).onclick = closeModal;
+  $("#pp-go", m).onclick = () => {
+    const a = $("#pp-from", m).value, b = $("#pp-to", m).value;
+    if (!a || !b || b < a) return toast("Проверьте даты: конец периода раньше начала", true);
+    window.open(`/api/synopsis-pdf?start=${a}&end=${b}`, "_blank");
+    closeModal();
+  };
 }
 
 /** Страница «Архив»: закончившиеся арки (внутри — все серии с синопсисами) и выложенные серии закрытых арок. */
