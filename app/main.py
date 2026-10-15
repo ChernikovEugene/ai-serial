@@ -982,16 +982,26 @@ def _synopsis_html(title: str, filename: str, msg: str, cover: str, pages: str) 
   .card .arcl {{ display: flex; align-items: center; gap: 7px; font-size: 13px; color: #e8f3f1; margin-bottom: 6px; }}
   .card .arcl i, .dot {{ width: 9px; height: 9px; border-radius: 50%; background: var(--a); flex: none; display: inline-block; }}
   .card .arcl span {{ color: var(--muted); }}
-  .arcs-list {{ display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }}
-  .arcs-list .a {{ display: grid; grid-template-columns: 12px 1fr; gap: 4px 10px; align-items: baseline; }}
-  .arcs-list b {{ font-weight: 600; font-size: 17px; }}
-  .arcs-list b small {{ color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 6px; }}
-  .arcs-list p {{ grid-column: 2; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.4; }}
-  /* список серий периода: одна строка на серию (длинное название обрезается), при 13+ сериях — в две колонки */
-  .glass ul.toc li {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }}
-  .glass ul.toc.two {{ display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; row-gap: 6px; }}
-  .glass ul.toc.two li {{ font-size: 13px; }}
-  .glass li .dot {{ margin-right: 6px; }}
+  /* обложка выгрузки за период: арки карточками — цветная полоса сверху, даты, синопсис и полоска дней периода */
+  .head.period {{ font-size: 88px; white-space: nowrap; }}
+  .head.period small {{ font-size: 48px; color: var(--teal); margin-left: 18px; }}
+  .arc-grid {{ display: grid; gap: 16px; }}
+  .arc-grid.c1 {{ grid-template-columns: minmax(0, 620px); }}
+  .arc-grid.c2 {{ grid-template-columns: repeat(2, 1fr); }}
+  .arc-grid.c3 {{ grid-template-columns: repeat(3, 1fr); }}
+  .arc-c {{ background: rgba(18,24,23,.62); border: 1px solid rgba(255,255,255,.12); border-top: 4px solid var(--a);
+           border-radius: 10px; padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 6px; }}
+  .arc-c .arc-n {{ font-size: 13px; color: var(--a); font-weight: 600; }}
+  .arc-c h5 {{ margin: 0; font: 900 30px/1 "Fira Sans Extra Condensed", Impact, sans-serif; text-transform: uppercase; color: #fff; }}
+  .arc-c p {{ margin: 0; font-size: 14px; line-height: 1.4; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }}
+  .arc-c .strip {{ display: flex; gap: 2px; margin-top: auto; padding-top: 10px; }}
+  .arc-c .strip i {{ flex: 1; height: 8px; border-radius: 2px; background: rgba(255,255,255,.08); }}
+  .arc-c .strip i.other {{ background: rgba(255,255,255,.22); }}
+  .arc-c .strip i.on {{ background: var(--a); }}
+  .arc-grid.dense {{ gap: 10px; }}
+  .arc-grid.dense .arc-c {{ padding: 10px 14px 12px; }}
+  .arc-grid.dense .arc-c h5 {{ font-size: 22px; }}
+  .arc-grid.dense .arc-c p {{ -webkit-line-clamp: 1; }}
   @media print {{ body {{ background: none; }} .bar {{ display: none; }} .sheet {{ margin: 0; zoom: 1; }} }}
 </style></head><body>
 <div class="bar"><button id="dl" onclick="downloadPdf()">Скачать PDF</button>
@@ -1115,22 +1125,31 @@ def period_pdf(start: str, end: str):
         return f"""<article class="ep"><h3>{i}. «{h((e['title'] or 'Без названия').upper())}»</h3>
           <div class="card arc" style="--a:{_arc_color(e['arc_id'])}"><div class="arcl"><i></i>{arc_label(e)}</div>
             <div class="date">{_ru_date(e['date'])}</div><p>{h(e['synopsis'] or 'Синопсис пока не написан.')}</p></div></article>"""
-    arcs_html = "".join(
-        f"""<div class="a" style="--a:{_arc_color(aid)}"><i class="dot"></i>
-          <b>{h(arcs[aid]['title']) if aid in arcs else 'Вне арки'}<small>{(c := sum(1 for e in eps if e['arc_id'] == aid))} {_plural(c, 'серия', 'серии', 'серий')}</small></b>
-          {f"<p>{h(' '.join(arcs[aid]['notes'].split())[:150])}{'…' if len(arcs[aid]['notes']) > 150 else ''}</p>" if aid in arcs and arcs[aid]['notes'] else ''}</div>"""
-        for aid in in_period)
-    shown = eps[:20]
-    toc = "".join(f"""<li style="--a:{_arc_color(e['arc_id'])}"><i class="dot"></i><b>{i}.</b> «{h(e['title'] or 'Без названия')}» <span>{_ru_date(e['date'])}</span></li>"""
-                  for i, e in enumerate(shown, 1)) + (f"<li><span>и ещё {n - len(shown)}…</span></li>" if n > len(shown) else "")
+    # дни периода: на полоске арки закрашены дни её серий — видно, как арки идут вперемешку
+    days, d = [], d0
+    while d <= d1:
+        days.append(d.isoformat())
+        d += timedelta(days=1)
+    by_day = {e["date"]: e["arc_id"] for e in eps}
+
+    def arc_card(aid):
+        own = [e for e in eps if e["arc_id"] == aid]
+        c = len(own)
+        arc = arcs.get(aid)
+        notes = " ".join((arc["notes"] if arc else "Праздники, события, отдельные ролики.").split())
+        strip = "".join(f'<i class="{"on" if by_day.get(x, "-") == aid else "other" if x in by_day else ""}"></i>' for x in days)
+        when = (_ru_date(own[0]["date"]) if c == 1 else f"{_ru_date(own[0]['date'])} — {_ru_date(own[-1]['date'])}")
+        return f"""<div class="arc-c" style="--a:{_arc_color(aid)}">
+          <div class="arc-n">{c} {_plural(c, "серия", "серии", "серий")} · {when}</div>
+          <h5>{h(arc["title"]) if arc else "Вне арки"}</h5>
+          <p>{h(notes[:170])}{"…" if len(notes) > 170 else ""}</p>
+          <div class="strip">{strip}</div></div>"""
+    cols = 3 if len(in_period) in (3, 5, 6) or len(in_period) > 6 else 2 if len(in_period) in (2, 4) else 1
     cover = f"""<section class="sheet cover">{_streaks()}
   <div class="kicker">{h(series)} · синопсисы на согласование</div>
-  <h1 class="head">{span}{year}</h1>
-  <div class="cols">
-    <div><div class="meta" style="margin-top:0;font-size:18px;color:#fff">{n} {_plural(n, "серия", "серии", "серий")} · {len(in_period)} {_plural(len(in_period), "арка", "арки", "арок")}{" идут вперемешку" if len(in_period) > 1 else ""}</div>
-      <div class="arcs-list">{arcs_html or '<p>В этот период серий нет.</p>'}</div></div>
-    <div class="glass"><h4>Серии периода</h4><ul class="toc{' two' if len(shown) > 12 else ''}">{toc or '<li>Серий нет</li>'}</ul></div>
-  </div>
+  <h1 class="head period">{span}{f'<small>{year}</small>' if year else ''}</h1>
+  <div class="meta" style="margin:12px 0 22px;font-size:18px;color:#fff">{n} {_plural(n, "серия", "серии", "серий")} · {len(in_period)} {_plural(len(in_period), "арка", "арки", "арок")}{" идут вперемешку" if len(in_period) > 1 else ""}</div>
+  <div class="arc-grid c{cols}{' dense' if len(in_period) > 6 else ''}">{"".join(arc_card(a) for a in in_period) or '<p>В этот период серий нет.</p>'}</div>
   <div class="pno">1</div></section>"""
     name = f"Синопсисы {_ru_date(start)} — {_ru_date(end)}"
     msg = f"Файл сохранится в «Загрузки». Серий в выгрузке: {n} (черновики без даты не входят)."
