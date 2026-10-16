@@ -116,7 +116,7 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
             time.sleep(1.5)
             _finish(take_id, shot_id, "stub", "Заглушка: запрос сохранён, видео не создавалось", request=req_rel)
             return
-        if where == "magnific":
+        if where in ("magnific", "renderfarm"):
             tid, path = models.create(shot, refs, settings)
             _remember(take_id, tid, path)
             _wait_magnific(take_id, shot_id, base, tid, path, settings, req_rel)
@@ -186,7 +186,7 @@ def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
         req = models.build(shot, refs, settings, inline=False)
     except RuntimeError as e:
         return {"model": models.spec(engine)["name"], "error": str(e)}
-    out = {"model": models.spec(engine)["name"], "url": models.API_BASE + req["path"], "body": req["body"]}
+    out = {"model": models.spec(engine)["name"], "url": req["base"] + req["path"], "body": req["body"]}
     if warn := models.link_warning(shot, refs, settings):
         out["warning"] = warn
     return out
