@@ -28,7 +28,7 @@ export async function renderSettings() {
     </div>
     <div class="card">
         <h2 style="margin-top:0">Генерация видео (Magnific API)</h2>
-        <p class="muted small">Все нейросети, кроме «Другой», уходят через Magnific (бывший Freepik API): Veo 3.1, Kling 3 Omni, Seedance 2.5,
+        <p class="muted small">Все нейросети, кроме «Рендерфермы» и «Другой», уходят через Magnific (бывший Freepik API): Veo 3.1, Kling 3 Omni, Seedance 2.5,
           Seedance 2.0 и 2.0 Fast, Hailuo 3 и 3 Max, WAN 2.7, Runway Gen-4.5. Нейросеть выбирается в карточке шота. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
         <label>Режим</label>
         <select data-k="gen_mode" ${ro}>
@@ -53,6 +53,21 @@ export async function renderSettings() {
         <div style="max-width:260px">${field("veo_parallel", "Одновременных генераций")}</div>
         <p class="muted small">Число одновременных генераций применяется после перезапуска приложения. Готовое видео скачивается в студию сразу:
           ссылка Magnific на ролик живёт 30 минут.</p>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2 style="margin-top:0">Рендерферма (MiniMax H3)</h2>
+      <p class="muted small">Шоты с нейросетью «Рендерферма (H3)» уходят напрямую в MiniMax, не через Magnific. Ключ — ниже,
+        в «Нейросети и API-ключи»: строка с видом «Рендерферма» (или с именем «рендерферма»). Режим «Заглушка / Реальная генерация» общий.</p>
+      ${field("renderfarm_base_url", "Адрес API", "input", `placeholder="https://api.minimax.io"`)}
+      <label>Модель</label>
+      <select data-k="renderfarm_model" ${ro} style="max-width:320px">
+        <option value="MiniMax-H3" ${s.renderfarm_model === "MiniMax-H3" ? "selected" : ""}>MiniMax H3 (4–15 с, 768P или 2K)</option>
+        <option value="MiniMax-H3-Max" ${s.renderfarm_model === "MiniMax-H3-Max" ? "selected" : ""}>MiniMax H3 Max (быстрее, 5–15 с, 480P или 768P)</option></select>
+      <label>Разрешение</label>
+      <select data-k="renderfarm_resolution" ${ro} style="max-width:260px">
+        ${["480P", "768P", "2K"].map((r) => `<option value="${r}" ${s.renderfarm_resolution === r ? "selected" : ""}>${r}</option>`).join("")}</select>
+      <p class="muted small">Если модель не умеет выбранное разрешение, берётся 768P. Картинки героев и локаций уходят прямо в запросе,
+        публичный адрес студии не нужен. Готовое видео студия скачивает сразу.</p>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">GitHub (отправка заявок в правки Claude)</h2>
@@ -88,7 +103,7 @@ export function renderPublish() {
 }
 
 const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance25", "Seedance 2.5"], ["seedance", "Seedance 2.0"],
-  ["seedance_fast", "Seedance 2.0 Fast"], ["hailuo", "Hailuo 3"], ["hailuo_max", "Hailuo 3 Max"],
+  ["seedance_fast", "Seedance 2.0 Fast"], ["hailuo", "Hailuo 3"], ["hailuo_max", "Hailuo 3 Max"], ["renderfarm", "Рендерферма (H3)"],
   ["wan", "WAN 2.7"], ["runway", "Runway Gen-4.5"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
 
 async function drawIntegrations() {
@@ -96,7 +111,7 @@ async function drawIntegrations() {
   const list = await api("/api/integrations");
   const opts = (sel) => KINDS.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${n}</option>`).join("");
   box.innerHTML = `<h2 style="margin-top:0">Нейросети и API-ключи</h2>
-    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше); здесь можно хранить ключи других сервисов, например ElevenLabs.</p>
+    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше), а шоты «Рендерфермы» — по ключу с видом «Рендерферма» отсюда; здесь же ключи других сервисов, например ElevenLabs.</p>
     ${list.map((i) => `<div class="int-row" data-id="${i.id}">
       <input data-i="name" value="${esc(i.name)}" style="width:200px" placeholder="Имя">
       <select data-i="kind" style="width:auto">${opts(i.kind)}</select>
