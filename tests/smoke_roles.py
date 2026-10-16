@@ -368,6 +368,13 @@ check("seedance: @Image tokens in prompt", st == 200 and "Character @Image1" in 
 st, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
 check("seedance: request to seedance-2-pro with reference_images", q["url"].endswith("/v1/ai/video/seedance-2-pro-720p")
       and len(q["body"]["reference_images"]) == 2 and q["body"]["aspect_ratio"] == "social_story_9_16", q)
+for eng, url in (("seedance25", "/v1/ai/video/seedance-2-5-pro-720p"), ("seedance_fast", "/v1/ai/video/seedance-2-fast-720p"),
+                 ("hailuo_max", "/v1/ai/video/minimax-h3-max-r2v-768p")):
+    st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": eng})
+    st2, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
+    check(f"{eng}: @Image tokens and reference_images request", st == 200 and "Character @Image1" in r["prompt"]
+          and q["url"].endswith(url) and len(q["body"]["reference_images"]) == 2
+          and q["body"]["aspect_ratio"] == "social_story_9_16", (r.get("prompt"), q))
 st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "wan"})
 check("wan: Image N labels, location only in words", "Character Image 1" in r["prompt"] and [x["kind"] for x in r["references"]] == ["character"]
       and any("только персонажей" in w for w in r["warnings"]), (r.get("prompt"), r.get("warnings")))
