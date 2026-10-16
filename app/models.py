@@ -1,7 +1,7 @@
 """Нейросети для видео через Magnific API (бывший Freepik API) и правила, по которым для каждой собирается запрос.
 
 У каждой модели свой адрес, свои названия полей и свой способ сослаться в промпте на картинку-референс:
-  * `@Image1`, `@Image2` … : Kling 3 Omni, Seedance 2.0, Hailuo 3 (номер = порядок картинки в запросе);
+  * `@Image1`, `@Image2` … : Kling 3 Omni, Seedance 2.0 / 2.0 Fast / 2.5, Hailuo 3 / 3 Max (номер = порядок картинки в запросе);
   * `Image 1`, `Image 2` … : WAN 2.7 (каждая картинка = один персонаж);
   * «reference image 1» обычными словами: Veo 3.1 (специального синтаксиса нет);
   * без референсов (только первый кадр): Runway Gen-4.5.
@@ -60,6 +60,26 @@ MODELS = {
                  "Опишите действие по шагам и движение камеры, звук и шумы модель делает сама.",
                  "Картинки можно отправлять прямо из студии, ссылки не нужны."],
     },
+    "seedance25": {
+        "name": "Seedance 2.5", "durations": tuple(range(4, 31)), "ref_token": "at", "max_refs": 30,
+        "ref_kinds": ("composition", "character", "location"), "first_frame": True, "audio": True,
+        "url_only": False, "prompt_max": 40000,
+        "duration_note": "Seedance 2.5: от 4 до 30 с.",
+        "refs_note": "До 30 картинок. В промпте @Image1, @Image2 … по порядку. Первый кадр и референсы вместе нельзя.",
+        "tips": ["Самая сильная модель Magnific: держит героев по картинкам, делает звук и движение камеры.",
+                 "Ссылайтесь на героев и локацию через @ImageN: «@Image1 opens the door of @Image2».",
+                 "Можно до 30 с одним клипом, но длинный клип дороже: Magnific считает кредиты по секундам."],
+    },
+    "seedance_fast": {
+        "name": "Seedance 2.0 Fast", "durations": tuple(range(4, 16)), "ref_token": "at", "max_refs": 9,
+        "ref_kinds": ("composition", "character", "location"), "first_frame": True, "audio": True,
+        "url_only": False, "prompt_max": 40000,
+        "duration_note": "Seedance 2.0 Fast: от 4 до 15 с, только 480p или 720p.",
+        "refs_note": "До 9 картинок. В промпте @Image1 … @Image9 по порядку. Первый кадр и референсы вместе нельзя.",
+        "tips": ["Быстрый и дешёвый вариант Seedance 2.0 для черновиков: те же правила промпта, разрешение до 720p.",
+                 "Ссылайтесь на каждого героя и локацию через @ImageN.",
+                 "Картинки можно отправлять прямо из студии, ссылки не нужны."],
+    },
     "hailuo": {
         "name": "Hailuo 3", "durations": tuple(range(4, 16)), "ref_token": "at", "max_refs": 9,
         "ref_kinds": ("composition", "character", "location"), "first_frame": True, "audio": False,
@@ -67,6 +87,16 @@ MODELS = {
         "duration_note": "MiniMax Hailuo 3: от 4 до 15 с.",
         "refs_note": "До 9 картинок. В промпте @Image1 … @Image9 по порядку. Первый кадр и референсы вместе нельзя.",
         "tips": ["Ссылайтесь на героев и локацию через @ImageN, например «@Image1 walks past @Image2».",
+                 "Звук Hailuo не делает: реплики озвучиваются в ElevenLabs."],
+    },
+    "hailuo_max": {
+        "name": "Hailuo 3 Max", "durations": tuple(range(5, 16)), "ref_token": "at", "max_refs": 9,
+        "ref_kinds": ("composition", "character", "location"), "first_frame": True, "audio": False,
+        "url_only": False, "prompt_max": 50000,
+        "duration_note": "MiniMax Hailuo 3 Max: от 5 до 15 с, 480p или 768p.",
+        "refs_note": "До 9 картинок. В промпте @Image1 … @Image9 по порядку. Первый кадр и референсы вместе нельзя.",
+        "tips": ["Ссылайтесь на героев и локацию через @ImageN, например «@Image1 walks past @Image2».",
+                 "Подходит для быстрых черновиков движения и мизансцены, финальное качество лучше у Seedance.",
                  "Звук Hailuo не делает: реплики озвучиваются в ElevenLabs."],
     },
     "wan": {
@@ -166,7 +196,7 @@ def image_value(rel: str, settings: dict, engine: str, inline: bool, url_only: b
     if url_only:
         if inline:
             raise NeedPublicUrl(f"{spec(engine)['name']} принимает картинки только ссылкой. Укажите «Публичный адрес студии» "
-                                "в настройках (студия должна быть доступна из интернета) или выберите Seedance 2.0 / Hailuo 3.")
+                                "в настройках (студия должна быть доступна из интернета) или выберите Seedance / Hailuo.")
         return f"<ссылка на {rel}: нужен публичный адрес студии>"
     if not inline:
         return f"<base64 {rel}>"
@@ -183,7 +213,7 @@ def link_warning(shot: dict, refs: list[dict], settings: dict) -> str:
     if engine == "veo" and (first or veo_route(settings) == "google"):
         return ""  # первый кадр Veo и Veo через Google принимают картинку файлом
     return (f"{m['name']} принимает картинки только ссылкой: без «Публичного адреса студии» в настройках отправка не пройдёт. "
-            "С ноутбука подойдут Seedance 2.0 или Hailuo 3")
+            "С ноутбука подойдут Seedance или Hailuo")
 
 
 def image_warnings(engine: str | None, refs: list[dict]) -> list[str]:
@@ -248,6 +278,31 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
         res = res if res in ("480p", "720p", "1080p") else "720p"
         path, status = f"/v1/ai/video/seedance-2-pro-{res}", "/v1/ai/video/seedance-2-pro"
         body.update(duration=dur, aspect_ratio=SOCIAL.get(ratio, "social_story_9_16"), sound_effects=audio, no_music=True)
+        if first:
+            body["image"] = img(paths[0])
+        elif paths:
+            body["reference_images"] = [img(p) for p in paths]
+    elif engine == "seedance25":
+        res = res if res in ("480p", "720p", "1080p") else "1080p"
+        path = status = f"/v1/ai/video/seedance-2-5-pro-{res}"  # задача видна только по адресу своего разрешения
+        body.update(duration=dur, aspect_ratio=SOCIAL.get(ratio, "social_story_9_16"), sound_effects=audio, no_music=True)
+        if first:
+            body["image"] = img(paths[0])
+        elif paths:
+            body["reference_images"] = [img(p) for p in paths]
+    elif engine == "seedance_fast":
+        res = "480p" if res == "480p" else "720p"
+        path, status = f"/v1/ai/video/seedance-2-fast-{res}", "/v1/ai/video/seedance-2-fast"
+        body.update(duration=dur, aspect_ratio=SOCIAL.get(ratio, "social_story_9_16"), sound_effects=audio, no_music=True)
+        if first:
+            body["image"] = img(paths[0])
+        elif paths:
+            body["reference_images"] = [img(p) for p in paths]
+    elif engine == "hailuo_max":
+        res = "480p" if res == "480p" else "768p"
+        kind = "minimax-h3-max-r2v" if paths and not first else "minimax-h3-max"  # референсы идут на отдельный адрес
+        path = status = f"/v1/ai/video/{kind}-{res}"
+        body.update(duration=dur, aspect_ratio=SOCIAL.get(ratio, "social_story_9_16"))
         if first:
             body["image"] = img(paths[0])
         elif paths:

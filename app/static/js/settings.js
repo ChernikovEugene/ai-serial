@@ -28,8 +28,8 @@ export async function renderSettings() {
     </div>
     <div class="card">
         <h2 style="margin-top:0">Генерация видео (Magnific API)</h2>
-        <p class="muted small">Все нейросети, кроме «Другой», уходят через Magnific (бывший Freepik API): Veo 3.1, Kling 3 Omni, Seedance 2.0,
-          Hailuo 3, WAN 2.7, Runway Gen-4.5. Нейросеть выбирается в карточке шота. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
+        <p class="muted small">Все нейросети, кроме «Другой», уходят через Magnific (бывший Freepik API): Veo 3.1, Kling 3 Omni, Seedance 2.5,
+          Seedance 2.0 и 2.0 Fast, Hailuo 3 и 3 Max, WAN 2.7, Runway Gen-4.5. Нейросеть выбирается в карточке шота. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
         <label>Режим</label>
         <select data-k="gen_mode" ${ro}>
           <option value="stub" ${s.gen_mode === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
@@ -41,10 +41,10 @@ export async function renderSettings() {
           <option value="720p" ${s.magnific_resolution === "720p" ? "selected" : ""}>720p</option>
           <option value="1080p" ${s.magnific_resolution === "1080p" ? "selected" : ""}>1080p</option>
           <option value="4k" ${s.magnific_resolution === "4k" ? "selected" : ""}>4k</option></select>
-        <p class="muted small">720p дешевле и подходит для черновиков. Если модель не умеет выбранное, берётся ближайшее (Hailuo 3 всегда 768p).</p>
+        <p class="muted small">720p дешевле и подходит для черновиков. Если модель не умеет выбранное, берётся ближайшее (Hailuo 3 всегда 768p, Hailuo 3 Max до 768p, Seedance 2.0 Fast до 720p, Seedance 2.5 до 1080p).</p>
         ${field("public_base_url", "Публичный адрес студии (например, https://studio.onrender.com)", "input", `placeholder="пусто: студия на ноутбуке"`)}
         <p class="muted small">Kling 3 Omni, WAN 2.7 и Veo 3.1 с референсами принимают картинки только ссылкой. Когда студия доступна из интернета,
-          укажите её адрес: картинки уйдут по защищённой ссылке. Без адреса с ноутбука работают Seedance 2.0, Hailuo 3, Runway и Veo без референсов.</p>
+          укажите её адрес: картинки уйдут по защищённой ссылке. Без адреса с ноутбука работают все Seedance и Hailuo, Runway и Veo без референсов.</p>
         <label>Veo 3.1 отправлять</label>
         <select data-k="veo_route" ${ro}>
           <option value="magnific" ${s.veo_route === "magnific" ? "selected" : ""}>через Magnific (ключ выше)</option>
@@ -87,7 +87,8 @@ export function renderPublish() {
     <p class="muted">Сейчас готовые видео лежат в папке <code>data/media/renders</code>, а серию целиком можно посмотреть во вкладке «Просмотр и правки».</p></div>`;
 }
 
-const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance", "Seedance 2.0"], ["hailuo", "Hailuo 3"],
+const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance25", "Seedance 2.5"], ["seedance", "Seedance 2.0"],
+  ["seedance_fast", "Seedance 2.0 Fast"], ["hailuo", "Hailuo 3"], ["hailuo_max", "Hailuo 3 Max"],
   ["wan", "WAN 2.7"], ["runway", "Runway Gen-4.5"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
 
 async function drawIntegrations() {
