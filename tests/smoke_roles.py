@@ -375,6 +375,14 @@ for eng, url in (("seedance25", "/v1/ai/video/seedance-2-5-pro-720p"), ("seedanc
     check(f"{eng}: @Image tokens and reference_images request", st == 200 and "Character @Image1" in r["prompt"]
           and q["url"].endswith(url) and len(q["body"]["reference_images"]) == 2
           and q["body"]["aspect_ratio"] == "social_story_9_16", (r.get("prompt"), q))
+st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "renderfarm"})
+st2, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
+imgs = [x for x in q.get("body", {}).get("content", []) if x["type"] == "image_url"]
+check("renderfarm: MiniMax H3 request with reference images", st == 200 and "reference image 1" in r["prompt"]
+      and q["url"] == "https://api.minimax.io/v2/video_generation" and q["body"]["model"] == "MiniMax-H3"
+      and len(imgs) == 2 and all(x["role"] == "reference_image" for x in imgs) and q["body"]["ratio"] == "9:16", (r.get("prompt"), q))
+st, ints = admin.call("POST", "/api/integrations", {"name": "рендерферма", "kind": "renderfarm", "api_key": "rf-secret-1234"})
+check("renderfarm: key saved as its own kind, masked", st == 200 and any(i["kind"] == "renderfarm" and i["key_mask"] == "••••1234" for i in ints), ints)
 st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "wan"})
 check("wan: Image N labels, location only in words", "Character Image 1" in r["prompt"] and [x["kind"] for x in r["references"]] == ["character"]
       and any("только персонажей" in w for w in r["warnings"]), (r.get("prompt"), r.get("warnings")))

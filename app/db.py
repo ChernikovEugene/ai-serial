@@ -230,6 +230,9 @@ DEFAULT_SETTINGS = {
     "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
+    "renderfarm_base_url": "https://api.minimax.io",  # Рендерферма: MiniMax video API (ключ — в «Нейросети и API-ключи»)
+    "renderfarm_model": "MiniMax-H3",                  # MiniMax-H3 (768P / 2K) или MiniMax-H3-Max (480P / 768P)
+    "renderfarm_resolution": "768P",
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",
     "aspect_ratio": "9:16",

@@ -7,6 +7,10 @@
   * без референсов (только первый кадр): Runway Gen-4.5.
 Данные сверены с docs.magnific.com в октябре 2026. Если модель обновится, поправьте её описание здесь.
 
+Отдельно от Magnific — «Рендерферма»: MiniMax H3 / H3 Max напрямую через официальный MiniMax video API
+(POST /v2/video_generation, опрос GET /v2/query/video_generation/<id>, platform.minimax.io/docs). Ключ берётся из
+«Нейросети и API-ключи» в настройках (вид «Рендерферма» или имя «рендерферма»), адрес API и модель — в настройках.
+
 Как картинки уходят в Magnific: где API принимает base64, картинка вкладывается прямо в запрос (работает и с ноутбука).
 Где принимается только ссылка (Kling 3 Omni, Veo 3.1 по референсам, WAN 2.7), нужен «Публичный адрес студии» в настройках:
 тогда картинка отдаётся по подписанной ссылке /pub/<подпись>/<файл>, которую нельзя подобрать к другим файлам.
@@ -15,6 +19,7 @@ import base64
 import hashlib
 import hmac
 import json
+import mimetypes
 import secrets
 import time
 import urllib.error
@@ -99,6 +104,16 @@ MODELS = {
                  "Подходит для быстрых черновиков движения и мизансцены, финальное качество лучше у Seedance.",
                  "Звук Hailuo не делает: реплики озвучиваются в ElevenLabs."],
     },
+    "renderfarm": {
+        "name": "Рендерферма (H3)", "durations": tuple(range(4, 16)), "ref_token": "natural", "max_refs": 9,
+        "ref_kinds": ("composition", "character", "location"), "first_frame": True, "audio": False,
+        "url_only": False, "prompt_max": 7000,
+        "duration_note": "Рендерферма, MiniMax H3: от 4 до 15 с (H3 Max — от 5 с).",
+        "refs_note": "До 9 картинок. В промпте они называются словами: «reference image 1, 2 …». Первый кадр и референсы вместе нельзя.",
+        "tips": ["Идёт напрямую в MiniMax по ключу «рендерферма» из настроек, не через Magnific.",
+                 "Называйте героев по картинкам: «the girl from reference image 1 opens the door».",
+                 "Промпт не длиннее 7000 знаков. Звук H3 не делает: реплики озвучиваются в ElevenLabs."],
+    },
     "wan": {
         "name": "WAN 2.7", "durations": tuple(range(2, 11)), "ref_token": "label", "max_refs": 5,
         "ref_kinds": ("character",), "first_frame": False, "audio": False,
@@ -154,6 +169,8 @@ def route(engine: str | None, settings: dict) -> str:
         return "manual"
     if settings.get("gen_mode") != "live":
         return "stub"
+    if engine == "renderfarm":
+        return "renderfarm"
     return veo_route(settings) if (engine or "veo") == "veo" else "magnific"
 
 
@@ -240,8 +257,62 @@ SOCIAL = {"9:16": "social_story_9_16", "16:9": "widescreen_16_9", "1:1": "square
 RUNWAY_RATIO = {"9:16": "720:1280", "16:9": "1280:720", "1:1": "960:960", "3:4": "832:1104", "4:3": "1104:832"}
 
 
+# ---------- Рендерферма: MiniMax H3 напрямую ----------
+
+RF_STATUS_PATH = "/v2/query/video_generation"
+RF_RES = {"MiniMax-H3": ("768P", "2K"), "MiniMax-H3-Max": ("480P", "768P")}
+
+
+def rf_base(settings: dict) -> str:
+    return (settings.get("renderfarm_base_url") or "").strip().rstrip("/") or "https://api.minimax.io"
+
+
+def rf_key() -> str:
+    """Ключ рендерфермы из «Нейросети и API-ключи»: сначала вид «Рендерферма», иначе по имени."""
+    with db.connect() as c:
+        rows = db.rows(c.execute("SELECT name, kind, api_key FROM integrations WHERE api_key<>'' ORDER BY id"))
+    for r in rows:
+        if r["kind"] == "renderfarm":
+            return r["api_key"].strip()
+    for r in rows:
+        name = r["name"].lower().replace(" ", "").replace("-", "")
+        if "рендерферм" in name or "renderfarm" in name:
+            return r["api_key"].strip()
+    raise RuntimeError("Не найден ключ рендерфермы: в настройках, «Нейросети и API-ключи», добавьте ключ с видом «Рендерферма»")
+
+
+def _rf_image(rel: str, settings: dict, inline: bool) -> str:
+    url = public_url(rel, settings)
+    if url:
+        return url
+    if not inline:
+        return f"<base64 {rel}>"
+    mime = mimetypes.guess_type(rel)[0] or "image/png"
+    return f"data:{mime};base64," + base64.b64encode((db.MEDIA_DIR / rel).read_bytes()).decode()
+
+
+def _rf_build(shot: dict, paths: list[str], first: bool, settings: dict, inline: bool) -> dict:
+    model = settings.get("renderfarm_model") if settings.get("renderfarm_model") in RF_RES else "MiniMax-H3"
+    allowed = RF_RES[model]
+    res = settings.get("renderfarm_resolution") or "768P"
+    res = res if res in allowed else "768P"
+    dur = int(shot["duration"])
+    if model == "MiniMax-H3-Max" and dur < 5 and inline:
+        raise RuntimeError("MiniMax H3 Max делает клипы от 5 с: поставьте 5 с или выберите H3 в настройках рендерфермы")
+    content: list[dict] = [{"type": "text", "text": shot["prompt"]}]
+    if first:
+        content.append({"type": "image_url", "image_url": {"url": _rf_image(paths[0], settings, inline)}, "role": "first_frame"})
+    else:
+        content += [{"type": "image_url", "image_url": {"url": _rf_image(p, settings, inline)}, "role": "reference_image"}
+                    for p in paths]
+    body = {"model": model, "content": content, "resolution": res, "duration": dur}
+    if not first:  # с первым кадром пропорции берутся из картинки
+        body["ratio"] = _ratio(settings)
+    return {"base": rf_base(settings), "path": "/v2/video_generation", "status_path": RF_STATUS_PATH, "body": body}
+
+
 def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
-    """Запрос в Magnific: {"path", "status_path", "body"}. inline=False даёт читаемый вариант для просмотра (без base64)."""
+    """Запрос в нейросеть: {"base", "path", "status_path", "body"}. inline=False даёт читаемый вариант для просмотра (без base64)."""
     engine = shot.get("engine") or "veo"
     m = spec(engine)
     first = bool(shot.get("composition_image")) and shot.get("composition_mode") == "first_frame" and m["first_frame"]
@@ -314,6 +385,10 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
             body["image"] = img(paths[0])
         elif paths:
             body["reference_images"] = [img(p) for p in paths]
+    elif engine == "renderfarm":
+        if m["prompt_max"] and len(prompt) > m["prompt_max"]:
+            raise RuntimeError(f"Промпт длиннее {m['prompt_max']} знаков, MiniMax H3 его не примет: сократите стиль или правила")
+        return _rf_build(shot, paths, first, settings, inline)
     elif engine == "wan":
         path = status = "/v1/ai/reference-to-video/wan-2-7"
         if not paths and inline:
@@ -332,22 +407,24 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
         raise RuntimeError(f"«{m['name']}» не подключена к API: сделайте видео вручную и загрузите файл")
     if m["prompt_max"] and len(prompt) > m["prompt_max"]:
         raise RuntimeError(f"Промпт длиннее {m['prompt_max']} знаков, {m['name']} его не примет: сократите стиль или правила")
-    return {"path": path, "status_path": status, "body": body}
+    return {"base": API_BASE, "path": path, "status_path": status, "body": body}
 
 
 # ---------- отправка ----------
 
-def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=False):
+def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=False, who="Magnific", bearer=False):
     headers = {"Content-Type": "application/json"}
     if key:
-        headers["x-magnific-api-key"] = key
+        headers.update({"Authorization": f"Bearer {key}"} if bearer else {"x-magnific-api-key": key})
     req = urllib.request.Request(url, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
         with urllib.request.urlopen(req, timeout=180) as r:
             data = r.read()
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Magnific: HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
+        raise RuntimeError(f"{who}: HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"{who}: нет связи с {url.split('/')[2]}: {e.reason}") from None
     return data if raw else json.loads(data)
 
 
@@ -362,12 +439,19 @@ def create(shot: dict, refs: list[dict], settings: dict) -> tuple[str, str]:
     """Создаёт задачу в Magnific и возвращает (task_id, адрес опроса): их хранит дубль, чтобы после перезапуска
     студии продолжить ждать ту же задачу, а не терять уже оплаченный ролик."""
     req = build(shot, refs, settings, inline=True)
+    if req["status_path"] == RF_STATUS_PATH:
+        r = _http("POST", req["base"] + req["path"], rf_key(), req["body"], who="Рендерферма", bearer=True)
+        if not r.get("task_id"):
+            raise RuntimeError("Рендерферма не приняла задачу: " + json.dumps(r, ensure_ascii=False)[:500])
+        return str(r["task_id"]), req["status_path"]
     task = _http("POST", API_BASE + req["path"], _key(settings), req["body"])["data"]
     return task["task_id"], req["status_path"]
 
 
 def wait(tid: str, status_path: str, settings: dict, stop=lambda: False, minutes: int = 30) -> bytes | None:
     """Опрашивает задачу каждые 10 с и сразу скачивает mp4 (ссылка живёт 30 минут). None — если stop() сказал прекратить."""
+    if status_path == RF_STATUS_PATH:
+        return _rf_wait(tid, settings, stop, minutes)
     key = _key(settings)
     task: dict = {}
     deadline = time.time() + minutes * 60
@@ -382,3 +466,21 @@ def wait(tid: str, status_path: str, settings: dict, stop=lambda: False, minutes
     if task["status"] == "FAILED" or not task.get("generated"):
         raise RuntimeError("Magnific не сделал видео: " + json.dumps(task, ensure_ascii=False)[:500])
     return _http("GET", task["generated"][0], None, raw=True)
+
+
+def _rf_wait(tid: str, settings: dict, stop, minutes: int) -> bytes | None:
+    key, base = rf_key(), rf_base(settings)
+    task: dict = {}
+    deadline = time.time() + minutes * 60
+    while task.get("status") not in ("succeeded", "failed", "cancelled"):
+        if stop():
+            return None
+        if time.time() > deadline:
+            raise RuntimeError(f"Рендерферма не закончила за {minutes} минут (задача {tid})")
+        if task:
+            time.sleep(10)
+        task = _http("GET", f"{base}{RF_STATUS_PATH}/{tid}", key, who="Рендерферма", bearer=True).get("task") or {}
+    url = (task.get("content") or {}).get("url")
+    if task["status"] != "succeeded" or not url:
+        raise RuntimeError("Рендерферма не сделала видео: " + json.dumps(task.get("error") or task, ensure_ascii=False)[:500])
+    return _http("GET", url, None, raw=True, who="Рендерферма")
