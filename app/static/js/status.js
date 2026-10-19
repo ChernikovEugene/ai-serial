@@ -6,18 +6,22 @@ import { arcDivider, bindArcDividers, ensureAssets } from "./arcs.js";
 // Этапы. Цвета те же, что у статусов серий на остальных страницах.
 const STAGES = [
   { name: "Не начато", color: "#8b93a3" },
+  { name: "Синопсис", color: "#7fb2ff" },
   { name: "Сценарий", color: "#f5b642" },
   { name: "Генерация", color: "#b36bff" },
   { name: "Монтаж", color: "#ff8a3d" },
   { name: "Готов к выкладке", color: "#3ccf7e" },
   { name: "Выложено", color: "#25d0d6" },
 ];
-// Какой статус серии в приложении к какому этапу относится
-const STAGE_BY_STATUS = { synopsis: 1, synopsis_review: 1, synopsis_ok: 1, dev: 1, review: 1, approved: 1,
-  generating: 2, fixes: 3, client_review: 3, ready: 4, posted: 5 };
-const SCRIPT_SUB = { synopsis: "синопсис", synopsis_review: "синопсис у клиента", synopsis_ok: "синопсис согласован",
-  dev: "пишется ТЗ", review: "ТЗ на проверке", approved: "ТЗ готово" };
-const SEG_LABELS = ["Сценарий", "Генерация", "Монтаж", "К выкладке", "Выложено"];
+// Какой статус серии в приложении к какому этапу относится. До генерации (синопсис … ТЗ готово) этап зависит от текста:
+// сценарий прописан — «Сценарий», нет — «Синопсис» (см. stageOf).
+const PRE_GEN = ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review", "approved"];
+const STAGE_BY_STATUS = { generating: 3, fixes: 4, client_review: 4, ready: 5, posted: 6 };
+const SYN_SUB = { synopsis_review: "у клиента", synopsis_ok: "согласован", dev: "сценарий не прописан",
+  review: "сценарий не прописан", approved: "сценарий не прописан" };
+const SCRIPT_SUB = { dev: "пишется ТЗ", review: "ТЗ на проверке", approved: "ТЗ готово" };
+const SEG_LABELS = ["Синопсис", "Сценарий", "Генерация", "Монтаж", "К выкладке", "Выложено"];
+const READY = 5, POSTED = 6;
 const WD_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
 const WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
 const MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
@@ -48,7 +52,10 @@ const rng = (a) => {
 
 function stageOf(ep) {
   if (!ep) return 0;
-  if (ep.status === "synopsis" && !ep.synopsis && !ep.has_script && !ep.shots) return 0; // карточка заведена, но пустая
+  if (PRE_GEN.includes(ep.status)) {
+    if (ep.has_script) return 2;                      // сценарий прописан
+    return ep.synopsis || ep.status !== "synopsis" ? 1 : 0; // пустая карточка — «Не начато»
+  }
   return STAGE_BY_STATUS[ep.status] ?? 1;
 }
 
@@ -61,17 +68,17 @@ function buildRows(data, today) {
     const stage = stageOf(ep);
     const isToday = iso === today;
     const diff = daysFromToday(iso, today);
-    const late = diff < 0 && stage < 5;
-    const todayBad = isToday && stage < 4;
-    const risk = diff > 0 && diff <= 2 && stage < 4;
-    const sub = stage === 1 ? SCRIPT_SUB[ep.status] : "";
-    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет сценария" : sub ? `Сценарий · ${sub}` : ep.status === "client_review" ? "Ролик у клиента" : STAGES[stage].name;
+    const late = diff < 0 && stage < POSTED;
+    const todayBad = isToday && stage < READY;
+    const risk = diff > 0 && diff <= 2 && stage < READY;
+    const sub = stage === 1 ? SYN_SUB[ep.status] : stage === 2 ? SCRIPT_SUB[ep.status] : "";
+    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет синопсиса" : sub ? `${STAGES[stage].name} · ${sub}` : ep.status === "client_review" ? "Ролик у клиента" : STAGES[stage].name;
     let flag = "", flagCls = "";
     if (late) { flag = `Просрочено на ${-diff} ${plural(-diff)}`; flagCls = "bad"; }
     else if (todayBad) { flag = "Сегодня выход, а ролик не готов"; flagCls = "bad"; }
     else if (risk) { flag = `Горит: выход через ${diff} ${plural(diff)}`; flagCls = "risk"; }
-    else if (isToday && stage === 4) { flag = "Всё готово к выкладке"; flagCls = "good"; }
-    else if (isToday && stage === 5) { flag = "Выложено вовремя"; flagCls = "good"; }
+    else if (isToday && stage === READY) { flag = "Всё готово к выкладке"; flagCls = "good"; }
+    else if (isToday && stage === POSTED) { flag = "Выложено вовремя"; flagCls = "good"; }
     const dt = new Date(iso + "T00:00:00");
     return {
       d: dt.getDate(), mon: dt.getMonth(), iso, ep, stage, isToday, diff, late: late || todayBad, risk, label, flag, flagCls,
@@ -85,12 +92,12 @@ const epName = (r) => (!r.ep ? `день ${r.d} ${MONTHS_GEN[r.mon]}` : r.arcNum
 
 function rowHtml(r) {
   const color = STAGES[r.stage].color;
-  const segs = [1, 2, 3, 4, 5].map((j) =>
+  const segs = [1, 2, 3, 4, 5, 6].map((j) =>
     `<i style="background:${j <= r.stage ? STAGES[j].color : "var(--line)"};opacity:${j < r.stage ? 0.5 : 1}"></i>`).join("");
   const title = r.ep ? esc(r.ep.title) : "Серия не создана";
   const desc = !r.ep ? "Создайте серию на эту дату в разделе «Серии»."
     : r.ep.locked ? "Откроется, когда сценарий согласуют" : esc(r.ep.blurb || "Сценария пока нет");
-  const cls = ["sm-row", r.isToday && "today", r.late && !r.isToday && "late", r.stage === 5 && !r.isToday && "past", !r.ep && "empty"].filter(Boolean).join(" ");
+  const cls = ["sm-row", r.isToday && "today", r.late && !r.isToday && "late", r.stage === POSTED && !r.isToday && "past", !r.ep && "empty"].filter(Boolean).join(" ");
   const link = r.ep && !r.ep.locked; // монтажёр не открывает серии до согласования сценария
   const tag = link ? "a" : "div";
   const href = link ? ` href="#/episodes/${r.ep.id}"` : "";
@@ -112,7 +119,7 @@ function render() {
   const arcAt = Object.fromEntries([...data.arcs, ...S.mdata.arcs].map((a) => [a.start_number, a]));
   const by = STAGES.map(() => []);
   mrows.forEach((r) => by[r.stage].push(r.number));
-  const posted = by[5].length;
+  const posted = by[POSTED].length;
   const total = rows.length;
   const mtotal = mrows.length;
   const tot = Math.max(mtotal, 1);
@@ -127,13 +134,13 @@ function render() {
   const alerts = [];
   lateRows.forEach((r) => alerts.push({ c: "var(--err)", h: "Опаздывает:", t: `${esc(epName(r))}${r.ep ? ` — «${esc(r.ep.title || "без названия")}»` : ""} — ${r.isToday ? "выход сегодня" : `выход был ${-r.diff} ${plural(-r.diff)} назад`}, сейчас: ${esc(r.label.toLowerCase())}.` }));
   riskRows.forEach((r) => alerts.push({ c: "var(--warn)", h: "Горит:", t: `${esc(epName(r))}${r.ep ? ` — «${esc(r.ep.title || "без названия")}»` : ""} — выход через ${r.diff} ${plural(r.diff)}, сейчас: ${esc(r.label.toLowerCase())}.` }));
-  if (todayRow && todayRow.stage === 4) alerts.push({ c: "var(--accent)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» готова — осталось выложить.` });
-  if (todayRow && todayRow.stage === 5) alerts.push({ c: "var(--ok)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» уже выложена.` });
+  if (todayRow && todayRow.stage === READY) alerts.push({ c: "var(--accent)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» готова — осталось выложить.` });
+  if (todayRow && todayRow.stage === POSTED) alerts.push({ c: "var(--ok)", h: "Сегодня:", t: `${esc(epName(todayRow))} — «${esc(todayRow.ep.title)}» уже выложена.` });
   if (data.backlog) alerts.push({ c: "var(--muted)", h: "Без даты:", t: `серий в черновиках — ${data.backlog}. Верните их в очередь в разделе «Серии», и они появятся здесь.` });
   if (!alerts.length) alerts.push({ c: "var(--ok)", h: "Всё по графику:", t: "опаздывающих серий нет." });
 
   let shown = rows;
-  if (S.hidePosted) shown = shown.filter((r) => r.stage < 5);
+  if (S.hidePosted) shown = shown.filter((r) => r.stage < POSTED);
   if (S.stage !== null) shown = shown.filter((r) => r.stage === S.stage); // нажата плитка этапа
 
   const todayLabel = `${WD_FULL[new Date(today + "T00:00:00").getDay()]}, ${+today.slice(8)} ${MONTHS_GEN[+today.slice(5, 7) - 1]}`;
