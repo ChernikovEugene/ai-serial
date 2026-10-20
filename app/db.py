@@ -156,11 +156,10 @@ TABLES = {
         position INTEGER NOT NULL DEFAULT 0,
         farm_msg TEXT NOT NULL DEFAULT '',
         draft_path TEXT NOT NULL DEFAULT '',
-        farm_updated REAL NOT NULL DEFAULT 0""",
-    "farm_uploads": """
-        hash TEXT PRIMARY KEY,
-        upload_id TEXT NOT NULL,
-        created_at REAL NOT NULL DEFAULT 0""",
+        farm_updated REAL NOT NULL DEFAULT 0,
+        farm_payload TEXT NOT NULL DEFAULT '',
+        farm_final TEXT NOT NULL DEFAULT '',
+        farm_err TEXT NOT NULL DEFAULT ''""",
     "translations": """
         hash TEXT PRIMARY KEY,
         result TEXT NOT NULL,
@@ -250,9 +249,7 @@ DEFAULT_SETTINGS = {
     "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
-    "farmhub_api_url": "",           # Рендерферма (Пульт): адрес API, ключ и секрет webhook; переменные сервера FARMHUB_* главнее
-    "farmhub_api_key": "",
-    "farmhub_webhook_secret": "",
+    "farmhub_secret": "",            # Рендерферма: секрет, которым Пульт открывает точки /api/farmhub/…; переменная сервера FARMHUB_SECRET главнее
     "anthropic_api_key": "",         # перевод описаний шота на английский перед отправкой на ферму (или переменная ANTHROPIC_API_KEY)
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",

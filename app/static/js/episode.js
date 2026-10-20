@@ -128,9 +128,13 @@ function farmProgress(s) {
   const t = farmTake(s);
   if (!t || !["queued", "running"].includes(t.status)) return "";
   const pct = Math.round((t.progress || 0) * 100);
-  let label;
-  if (t.stage === "finish") label = t.position > 0 ? "Черновик готов, ждёт доводки" : `Доводка до 1080p — ${pct}%`;
-  else if (t.status === "queued") label = t.position > 0 ? `В очереди: №${t.position}` : /рендер/i.test(t.farm_msg || "") ? "Карта занята рендером, ждём" : "Ожидает свободную карту";
+  let label, hint = "";
+  if (t.status === "queued" && !t.remote_id) { // Пульт шот ещё не принял
+    label = t.farm_ready ? "Отправлено, ждём ферму" : "Готовим шот к отправке";
+    if (t.farm_ready) hint = "Пульт забирает шоты раз в 10 секунд. Если ферма выключена или нет связи, шот подождёт и уйдёт сам.";
+  } else if (t.farm_err) label = "Ролик ещё не загрузился на сайт, Пульт догрузит";
+  else if (t.stage === "finish") label = t.position > 0 ? "Черновик готов, ждёт доводки" : `Доводка до 1080p — ${pct}%`;
+  else if (t.status === "queued") label = t.position > 0 ? `В очереди фермы: №${t.position}` : /рендер|занят/i.test(t.farm_msg || "") ? "Видеокарта занята рендером, ждём" : "Принято фермой, ждёт видеокарту";
   else label = `Генерация видео — ${pct}%`;
   const gen = t.stage === "finish" ? 100 : Math.min(100, pct * 2);
   const fin = t.stage === "finish" ? Math.max(0, Math.min(100, (pct - 50) * 2)) : 0;
@@ -138,7 +142,7 @@ function farmProgress(s) {
     <div class="farm-label small">${esc(label)}${t.status === "running" && pct > 0 && pct < 100 ? ` <span class="muted">· идёт…</span>` : ""}</div>
     <div class="farm-bar"><span style="width:${gen / 2}%"></span><span class="fin" style="width:${fin / 2}%"></span></div>
     <div class="farm-parts muted"><span>генерация</span><span>доводка</span></div>
-    ${t.farm_msg ? `<div class="muted small">${esc(t.farm_msg)}</div>` : ""}</div>`;
+    ${t.farm_msg ? `<div class="muted small">${esc(t.farm_msg)}</div>` : ""}${hint ? `<div class="muted small">${esc(hint)}</div>` : ""}</div>`;
 }
 
 function farmDraft(s) {
@@ -153,7 +157,8 @@ function farmPanel(s) {
   return `<div class="farm-box">
     <div class="row"><label style="margin:0">Ферма: Пульт, MiniMax H3</label><div class="spacer"></div><span class="badge">промпт пишет ферма</span></div>
     <div class="muted small">Ферма сама собирает промпт по картинкам героя и локации, реплике и действию. Описания она принимает только по-английски:
-      если поля пустые, студия переведёт «Действие», «Камеру» и манеру речи сама перед отправкой. Реплика остаётся русской.</div>
+      если поля пустые, студия переведёт «Действие», «Камеру» и манеру речи сама перед отправкой. Реплика остаётся русской.
+      Шот забирает Пульт: «Отменить» в студии снимает шот с очереди, а уже принятый фермой шот остановить можно только в Пульте.</div>
     <label>Действие по-английски <span class="muted small">(по желанию, иначе переведётся «Действие» слева)</span></label>
     <textarea data-f="farm_action" rows="2" ${ro} placeholder="she sits at her computer with her headphones and looks into the camera">${esc(s.farm_action || "")}</textarea>
     <div class="farm-grid">

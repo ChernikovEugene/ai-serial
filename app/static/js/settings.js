@@ -56,14 +56,12 @@ export async function renderSettings() {
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">Рендерферма (Пульт, MiniMax H3)</h2>
-      <p class="muted small">Шоты с нейросетью «Рендерферма (H3)» уходят в Пульт студийной рендер-фермы, не в Magnific: кнопка «Сгенерировать» отправляет все такие шоты серии одним запросом,
-        а ферма присылает на сайт статус, процент (генерация 0–50 %, доводка до 1080p 50–100 %), черновик и готовое видео. Режим «Заглушка / Реальная генерация» общий.
-        Адрес, ключ и секрет можно задать переменными сервера <code>FARMHUB_API_URL</code>, <code>FARMHUB_API_KEY</code>, <code>FARMHUB_WEBHOOK_SECRET</code> (они главнее) или полями ниже.</p>
-      ${field("farmhub_api_url", `Адрес API фермы ${envMark(s, "url")}`, "input", `placeholder="https://api.<домен>/api/v1"`)}
-      ${field("farmhub_api_key", `Ключ API фермы ${envMark(s, "key")}`, "input", `type="password" placeholder="fh_…" autocomplete="off"`)}
-      ${field("farmhub_webhook_secret", `Секрет webhook: им ферма подписывает события ${envMark(s, "secret")}`, "input", `type="password" placeholder="whsec_…" autocomplete="off"`)}
-      <p class="muted small">События ферма присылает на <code>${esc((s.public_base_url || "https://<адрес студии>").replace(/\/$/, ""))}/api/farmhub/webhook</code>: для этого нужен «Публичный адрес студии» выше.
-        Без него студия сама опрашивает ферму раз в минуту, статусы приходят с задержкой. Если ключ фермы не вписан здесь и не задан на сервере, берётся ключ из «Нейросети и API-ключи» с видом «Рендерферма».</p>
+      <p class="muted small">Шоты с нейросетью «Рендерферма (H3)» забирает Пульт студийной рендер-фермы. Студия сама к ферме не обращается (она за закрытой сетью): кнопка «Сгенерировать» готовит шоты серии,
+        а Пульт раз в 10 секунд спрашивает у сайта новые, присылает статус, процент (генерация 0–50 %, доводка до 1080p 50–100 %), черновик и готовое видео. Режим «Заглушка / Реальная генерация» общий.</p>
+      ${field("farmhub_secret", `Секрет связи с Пультом ${envMark(s, "secret")}`, "input", `type="password" placeholder="whsec_…" autocomplete="off"`)}
+      <p class="muted small">Секрет владелец Пульта берёт в файле <code>site-credentials.txt</code> (строка <code>FARMHUB_SECRET=…</code>) и передаёт напрямую, в чаты его не присылают.
+        Его же можно задать переменной сервера <code>FARMHUB_SECRET</code>: она главнее поля. Пульт ходит на <code>${esc((s.public_base_url || location.origin).replace(/\/$/, ""))}/api/farmhub/…</code>.
+        ${farmSeen(s)}</p>
       ${field("anthropic_api_key", `Ключ для перевода описаний на английский ${envMark(s, "translate")}`, "input", `type="password" placeholder="sk-ant-…" autocomplete="off"`)}
       <p class="muted small">Ферма принимает действие, камеру и голос только по-английски. Если они написаны по-русски, студия переведёт их перед отправкой (Claude Haiku по этому ключу, перевод запоминается).
         Без ключа английский вариант вписывают в блоке «Ферма» карточки шота.</p>
@@ -101,6 +99,9 @@ export function renderPublish() {
     <p class="muted">Сейчас готовые видео лежат в папке <code>data/media/renders</code>, а серию целиком можно посмотреть во вкладке «Просмотр и правки».</p></div>`;
 }
 
+const farmSeen = (s) => s.farmhub_seen == null ? `<b>Пульт ещё не обращался</b> с последнего запуска студии.`
+  : s.farmhub_seen < 120 ? `<b>Пульт на связи:</b> последнее обращение ${s.farmhub_seen} с назад.`
+  : `<b>Пульт молчит ${Math.round(s.farmhub_seen / 60)} мин:</b> ферма выключена или нет связи, шоты подождут.`;
 const envMark = (s, k) => (s.farmhub_env?.[k] ? `<span class="badge ok">задано на сервере</span>` : "");
 
 const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance25", "Seedance 2.5"], ["seedance", "Seedance 2.0"],
@@ -112,7 +113,7 @@ async function drawIntegrations() {
   const list = await api("/api/integrations");
   const opts = (sel) => KINDS.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${n}</option>`).join("");
   box.innerHTML = `<h2 style="margin-top:0">Нейросети и API-ключи</h2>
-    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше) или на рендер-ферме (её ключ можно держать и здесь, вид «Рендерферма»); здесь же ключи других сервисов, например ElevenLabs.</p>
+    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше) или на рендер-ферме (её секрет вписан в карточке «Рендерферма» выше); здесь же ключи других сервисов, например ElevenLabs.</p>
     ${list.map((i) => `<div class="int-row" data-id="${i.id}">
       <input data-i="name" value="${esc(i.name)}" style="width:200px" placeholder="Имя">
       <select data-i="kind" style="width:auto">${opts(i.kind)}</select>
