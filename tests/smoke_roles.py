@@ -729,5 +729,21 @@ farm_event({"event": "job.finished", "job": {"id": t2["remote_id"], "ref": f"tak
 check("farm: event for a cancelled take does not revive it", admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][1]["takes"][-1]["status"] == "cancelled")
 admin.call("PUT", "/api/settings", {"gen_mode": "stub", "public_base_url": ""})
 
+# --- удаление версии персонажа ---
+v1 = alt["versions"][0]["id"]
+st, a5 = writer.call("POST", f"/api/assets/{alt['id']}/versions", form={"label": "Зима", "images": ("w.png", PNG)})
+v2 = a5["active_version_id"]
+st, u = writer.call("GET", f"/api/assets/{alt['id']}/versions/{v1}/usage")
+check("version usage counts shots", st == 200 and u["shots"] >= 1, u)
+st, _ = writer.call("DELETE", f"/api/assets/{alt['id']}/versions/{v2}")
+check("version: active cannot be deleted", st == 400, st)
+st, _ = editor.call("DELETE", f"/api/assets/{alt['id']}/versions/{v1}")
+check("version: editor cannot delete", st == 403, st)
+st, a6 = writer.call("DELETE", f"/api/assets/{alt['id']}/versions/{v1}")
+check("version deleted", st == 200 and [v["id"] for v in a6["versions"]] == [v2], st)
+st, e4 = writer.call("GET", f"/api/episodes/{ep4['id']}")
+ch = e4["shots"][0]["characters"]
+check("shots switched to the active version", any(c["asset_id"] == alt["id"] and c["version_id"] == v2 for c in ch), ch)
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

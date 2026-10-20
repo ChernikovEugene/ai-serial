@@ -565,6 +565,74 @@ def activate_version(asset_id: int, version_id: int):
     return get_asset(asset_id)
 
 
+def _version_usage(c, asset_id: int, version_id: int) -> dict:
+    """Где используется версия персонажа или локации: шоты, «Версии для этой серии», участники арок."""
+    shots = []
+    for r in c.execute("SELECT id, characters, location_version_id FROM shots"):
+        chars = json.loads(r["characters"] or "[]")
+        if r["location_version_id"] == version_id or any(ch.get("version_id") == version_id for ch in chars):
+            shots.append(r["id"])
+    cast = c.execute("SELECT COUNT(*) FROM episode_cast WHERE version_id=?", (version_id,)).fetchone()[0]
+    arcs = [a["id"] for a in db.rows(c.execute("SELECT id, members FROM arcs"))
+            if any(m.get("version_id") == version_id for m in a["members"])]
+    return {"shots": shots, "cast": cast, "arcs": arcs}
+
+
+@app.get("/api/assets/{asset_id}/versions/{version_id}/usage")
+def version_usage(asset_id: int, version_id: int):
+    with db.connect() as c:
+        if not c.execute("SELECT 1 FROM asset_versions WHERE id=? AND asset_id=?", (version_id, asset_id)).fetchone():
+            raise HTTPException(404, "Версия не найдена")
+        u = _version_usage(c, asset_id, version_id)
+        eps = c.execute(f"SELECT COUNT(DISTINCT episode_id) FROM shots WHERE id IN ({','.join('?' * len(u['shots'])) or 'NULL'})",
+                        u["shots"]).fetchone()[0]
+    return {"shots": len(u["shots"]), "episodes": eps, "cast": u["cast"], "arcs": len(u["arcs"])}
+
+
+@app.delete("/api/assets/{asset_id}/versions/{version_id}", dependencies=[Depends(auth.need("library"))])
+def delete_version(asset_id: int, version_id: int):
+    """Удалить версию. Активную нельзя (у персонажа всегда есть рабочая версия). Где версия использовалась —
+    в шотах, «Версиях для этой серии», участниках арок — подставляется активная; промпты таких шотов пересобираются.
+    Фото версии удаляются с диска, если их не использует другая версия."""
+    with db.connect() as c:
+        a = c.execute("SELECT active_version_id FROM assets WHERE id=?", (asset_id,)).fetchone()
+        v = c.execute("SELECT images FROM asset_versions WHERE id=? AND asset_id=?", (version_id, asset_id)).fetchone()
+        if not a or not v:
+            raise HTTPException(404, "Версия не найдена")
+        active = a["active_version_id"]
+        if version_id == active:
+            raise HTTPException(400, "Это активная версия: сначала сделайте активной другую, потом удаляйте эту")
+        u = _version_usage(c, asset_id, version_id)
+        for sid in u["shots"]:
+            r = c.execute("SELECT characters, location_version_id FROM shots WHERE id=?", (sid,)).fetchone()
+            chars = [{**ch, "version_id": active} if ch.get("version_id") == version_id else ch
+                     for ch in json.loads(r["characters"] or "[]")]
+            loc = active if r["location_version_id"] == version_id else r["location_version_id"]
+            c.execute("UPDATE shots SET characters=?, location_version_id=? WHERE id=?", (db.dumps(chars), loc, sid))
+        c.execute("UPDATE episode_cast SET version_id=? WHERE version_id=?", (active, version_id))
+        for arc in db.rows(c.execute("SELECT id, members FROM arcs")):
+            if any(m.get("version_id") == version_id for m in arc["members"]):
+                members = [{**m, "version_id": None} if m.get("version_id") == version_id else m for m in arc["members"]]
+                c.execute("UPDATE arcs SET members=? WHERE id=?", (db.dumps(members), arc["id"]))
+        c.execute("UPDATE asset_versions SET parent_version_id=NULL WHERE parent_version_id=?", (version_id,))
+        images = json.loads(v["images"] or "[]")
+        c.execute("DELETE FROM asset_versions WHERE id=?", (version_id,))
+        still = {p for r in c.execute("SELECT images FROM asset_versions") for p in json.loads(r[0] or "[]")}
+    # пересобрать промпты затронутых шотов (кроме закреплённых вручную и выложенных серий)
+    ctx = Ctx()
+    with db.connect() as c:
+        for sh in db.rows(c.execute(f"SELECT s.* FROM shots s JOIN episodes e ON e.id=s.episode_id WHERE s.id IN "
+                                    f"({','.join('?' * len(u['shots'])) or 'NULL'}) AND e.status<>'posted'", u["shots"])):
+            refresh_shot(sh, ctx)
+            save_shot(c, sh)
+    root = db.MEDIA_DIR.resolve()
+    for rel in images:
+        f = (db.MEDIA_DIR / rel).resolve()
+        if rel not in still and root in f.parents:
+            f.unlink(missing_ok=True)
+    return get_asset(asset_id)
+
+
 def load_version(asset_id: int, version_id: int) -> tuple[dict, dict]:
     a = get_asset(asset_id)
     v = next((v for v in a["versions"] if v["id"] == version_id), None)

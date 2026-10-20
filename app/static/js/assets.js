@@ -79,7 +79,8 @@ export async function renderAsset(id) {
               <div class="small">${esc(v.description.slice(0, 160))}${v.description.length > 160 ? "…" : ""}</div></div>
             <div class="col">
               ${v.id === a.active_version_id ? `<span class="badge ok">активная</span>` : can.library() ? `<button data-activate="${v.id}">Сделать активной</button>` : ""}
-              ${can.library() ? `<button class="ghost" data-fork="${v.id}">Изменить → новая</button>` : ""}</div>
+              ${can.library() ? `<button class="ghost" data-fork="${v.id}">Изменить → новая</button>` : ""}
+              ${can.library() && v.id !== a.active_version_id ? `<button class="ghost small danger" data-delver="${v.id}" title="Удалить эту версию">🗑 Удалить</button>` : ""}</div>
           </div>`).join("")}</div>
       </div>
     </div>`;
@@ -120,6 +121,22 @@ export async function renderAsset(id) {
   };
   $("#new-ver").onclick = () => versionDialog({ kind: a.kind, asset: a, base: active });
   $$("[data-fork]").forEach((b) => (b.onclick = () => versionDialog({ kind: a.kind, asset: a, base: a.versions.find((v) => v.id === +b.dataset.fork) })));
+  $$("[data-delver]").forEach((b) => (b.onclick = async () => {
+    const v = a.versions.find((x) => x.id === +b.dataset.delver);
+    const u = await api(`/api/assets/${id}/versions/${v.id}/usage`);
+    const act = a.versions.find((x) => x.id === a.active_version_id);
+    const where = [
+      u.shots && `шоты — ${u.shots} (серий: ${u.episodes})`,
+      u.cast && `«Версии для серии» — ${u.cast}`,
+      u.arcs && `участники арок — ${u.arcs}`,
+    ].filter(Boolean);
+    const msg = `Удалить версию v${v.version_no} «${v.label}» у «${a.name}»? Её фото тоже удалятся. Вернуть будет нельзя.`
+      + (where.length ? `\n\nГде используется: ${where.join("; ")}. Там подставится активная версия v${act.version_no} «${act.label}».` : "");
+    if (!confirm(msg)) return;
+    await api(`/api/assets/${id}/versions/${v.id}`, { method: "DELETE" });
+    toast(`Версия v${v.version_no} удалена`);
+    renderAsset(id);
+  }));
   $$("[data-activate]").forEach((b) => (b.onclick = async () => {
     await api(`/api/assets/${id}/versions/${b.dataset.activate}/activate`, { json: {} });
     toast("Версия активирована. Она применится к сериям при следующем сохранении сценария."); renderAsset(id);
