@@ -666,6 +666,24 @@ st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
 b0 = q["body"]
 check("farm: request preview shows the fields the farm gets", "jobs/pending" in q["url"] and b0["line"] == "Привет всем!" and b0["voice"] == "excited fast voice"
       and b0["quality"] == "draft" and b0["action"].startswith("she waves") and "character" in b0 and "location" in b0, q)
+# шот без героя: уходит только картинка места; без героя и без места отправить нельзя
+st, epn = writer.call("POST", "/api/episodes", {"title": "Без героя", "script": "Шот 1\nЛОКАЦИЯ: @Лофт\nКамера медленно показывает комнату.\n"})
+st, epn2 = writer.call("POST", "/api/episodes", {"title": "Без героя и места", "script": "Шот 1\nКрупно монитор с игрой.\n"})
+n1, n2 = epn["shots"][0], epn2["shots"][0]
+for sh_ in (n1, n2):
+    admin.call("PUT", f"/api/shots/{sh_['id']}", {"engine": "renderfarm"})
+st, qn = admin.call("GET", f"/api/shots/{n1['id']}/request")
+check("farm: a shot without a hero is no error: only the location picture goes, no hero and no line",
+      st == 200 and "location" in qn["body"] and "character" not in qn["body"] and "face" not in qn["body"] and "line" not in qn["body"]
+      and not any(w in qn.get("warning", "") for w in ("Нужен герой", "нет картинки")), qn)
+check("farm: for a shot without a hero the action says there is nobody in the frame", qn["body"]["action"].endswith("В кадре нет персонажей и людей. [переведёт ферма]")
+      or "В кадре нет персонажей и людей." in qn["body"]["action"], qn["body"])
+admin.call("PUT", f"/api/shots/{n1['id']}", {"farm_action": "the camera slowly shows the room"})
+st, qn3 = admin.call("GET", f"/api/shots/{n1['id']}/request")
+check("farm: the same in English when the action is in English", qn3["body"]["action"] == "the camera slowly shows the room. No people or characters in the frame.", qn3["body"])
+admin.call("PUT", f"/api/shots/{n1['id']}", {"farm_action": ""})
+st, qn2 = admin.call("GET", f"/api/shots/{n2['id']}/request")
+check("farm: a shot with neither hero nor location is refused with the reason", "нет героя и нет картинки локации" in qn2.get("warning", ""), qn2)
 st, r2 = admin.call("GET", f"/api/shots/{f2['id']}/request")
 check("farm: a Russian action is no error: it goes as written and is marked for translation on the farm",
       "английск" not in r2.get("warning", "") and "по-русски" not in r2.get("warning", "") and r2["body"].get("translate") is True and "переведёт ферма" in r2["body"]["action"], r2)

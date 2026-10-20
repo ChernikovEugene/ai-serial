@@ -85,32 +85,39 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     Текст описаний уходит как есть, на любом языке: русский переводит ферма (см. needs_translation и build)."""
     errors, warns = [], []
     mode = shot.get("sound_mode") or ("off" if shot.get("sound_off") else "full")
+    chars = [(c, v_map.get(c.get("version_id"))) for c in shot.get("characters") or []]
     lines = [d for d in shot.get("dialogue") or [] if d.get("voice") != "voiceover" and (d.get("text") or "").strip()]
     line = lines[0] if lines and mode == "full" else None
-    if len(lines) > 1 and mode == "full":
+    if line and not chars:  # реплика нужна герою: губы синхронизируются по его картинке
+        warns.append("В шоте нет героя, а у фермы реплику произносит герой: реплика не уйдёт. Добавьте героя в шот или уберите реплику")
+        line = None
+    if len(lines) > 1 and mode == "full" and line:
         warns.append("Ферма делает одну реплику одного героя на шот: уйдёт первая, остальные нужно вынести в отдельные шоты")
     if mode == "off":
         warns.append("Ферма всегда делает звук: «без звука» не получится, звук можно убрать на монтаже")
 
-    chars = [(c, v_map.get(c.get("version_id"))) for c in shot.get("characters") or []]
     pick = next(((c, v) for c, v in chars if line and c.get("asset_id") == line.get("asset_id") and v and v["images"]), None) \
         or next(((c, v) for c, v in chars if v and v["images"]), None)
     if len(chars) > 1:
         warns.append("Ферма принимает одного героя на шот: уйдёт "
                      + (f"«{pick[0]['name']}»" if pick else "первый с фото") + ", остальные нужно вынести в отдельные шоты")
     images = {}
-    if not pick:
-        errors.append("Нужен герой с картинкой: добавьте в шот персонажа, у которого в библиотеке есть фото (ферма держит внешность по картинкам)")
-    else:
+    if pick:
         images["character"] = pick[1]["images"][0]
         if len(pick[1]["images"]) > 1:
             images["face"] = pick[1]["images"][1]
+    elif chars:  # герой в шоте есть, а фото у него нет: ферма держит внешность по картинкам
+        errors.append("У героя шота нет картинки: добавьте ему фото в библиотеке (ферма держит внешность по картинкам). "
+                      "Если героя в кадре нет, уберите его из шота")
     if shot.get("composition_image"):
         warns.append("Референс композиции на ферму не отправляется: у Пульта нет такого поля")
 
     text = {"action": (shot.get("farm_action") or "").strip() or _mention_names(shot.get("action") or "")}
     if not text["action"].strip():
-        errors.append("Нужно описание действия: заполните «Действие» (если действия нет, напишите, что персонаж просто смотрит в камеру)")
+        errors.append("Нужно описание действия: заполните «Действие» (что происходит в кадре)")
+    elif not chars:  # шот без героя: ферма пишет промпт сама, поэтому явно говорим ей, что людей в кадре нет
+        a = text["action"].rstrip()
+        text["action"] = a + ("" if a[-1] in ".!?…" else ".") + (" В кадре нет персонажей и людей." if CYR.search(a) else " No people or characters in the frame.")
     cam = (shot.get("farm_camera") or "").strip() or (shot.get("camera") or "").strip()
     if cam:
         text["camera"] = cam
@@ -134,6 +141,8 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
             loc_text = shot["scene"]
     if loc_text:
         text["location"] = loc_text
+    if not chars and "location" not in images:  # шот без героя (комната, предмет, вид): ферме нужна хотя бы картинка места
+        errors.append("В шоте нет героя и нет картинки локации: ферме нужна хотя бы одна картинка. Добавьте локацию с фото или героя")
 
     quality = shot.get("farm_quality") if shot.get("farm_quality") in ("draft", "final") else "final"
     fields = {"id": None, "batch": f"ep{shot.get('episode_id')}" if shot.get("episode_id") else None, "action": None, "quality": quality}
