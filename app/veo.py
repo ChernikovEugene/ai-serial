@@ -1,7 +1,7 @@
 """Video generation. Every run creates a take (дубль) for the shot.
 Where the shot goes is decided by models.route(): `stub` writes the exact request to disk and calls nothing;
 `magnific` sends it to Magnific API (all models, see app/models.py); `google` calls the Gemini API (Veo 3 / 3.1);
-`renderfarm` goes to the studio render farm through app/farm.py (a whole episode in one request)."""
+`renderfarm` goes to the studio render farm through app/farm.py (the farm hub fetches the shots itself)."""
 import base64
 import json
 import mimetypes
@@ -113,7 +113,7 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
         (db.MEDIA_DIR / req_rel).write_text(json.dumps(preview(shot, refs, settings), ensure_ascii=False, indent=2), "utf-8")
         where = models.route(shot.get("engine"), settings)
 
-        if where == "renderfarm":  # шоты фермы уходят пачкой через farm.start_many, сюда они не попадают
+        if where == "renderfarm":  # шоты фермы готовит farm.start_many, а забирает Пульт: сюда они не попадают
             raise RuntimeError("Шоты рендерфермы отправляются через farm.start_many")
         if where in ("stub", "manual"):
             time.sleep(1.5)
@@ -183,6 +183,8 @@ def start(shot: dict, refs: list[dict], settings: dict, user_id: int | None, rea
 def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
     """Readable request (images as file names, not base64): for Magnific the endpoint and body, for Google the Veo body."""
     engine = shot.get("engine") or "veo"
+    if engine == "renderfarm":  # сюда шот фермы попадает только в режиме «Заглушка»: настоящий запрос см. farm.preview
+        return {"model": models.spec(engine)["name"], "note": "Заглушка: шот ферме не отправлялся"}
     if engine == "veo" and models.veo_route(settings) == "google":
         return build_request(shot, refs, settings, inline_images=False)
     try:
@@ -201,12 +203,14 @@ def recover():
     помечаем ошибкой: их надо отправить ещё раз."""
     with db.connect() as c:
         rows = db.rows(c.execute(
-            "SELECT t.id, t.shot_id, t.take_no, t.remote_id, t.remote_path, t.request_path, s.episode_id, s.label, s.idx "
+            "SELECT t.id, t.shot_id, t.take_no, t.remote_id, t.remote_path, t.request_path, t.farm_payload, s.episode_id, s.label, s.idx "
             "FROM takes t JOIN shots s ON s.id=t.shot_id WHERE t.status IN ('queued','running')"))
     settings = db.get_settings()
     for r in rows:
-        if r["remote_path"] == "farmhub":
-            continue  # шоты фермы ждёт farm.poll_once: он забирает состояние из пачки на ферме
+        if r["remote_path"] == "farmhub":  # шоты фермы живут в базе: Пульт сам заберёт шот и пришлёт статусы и ролик
+            if not r["remote_id"] and not r["farm_payload"]:
+                _finish(r["id"], r["shot_id"], "error", "Студия перезапускалась до подготовки шота для фермы: отправьте шот ещё раз")
+            continue
         if not r["remote_id"]:
             _finish(r["id"], r["shot_id"], "error", "Студия перезапускалась до отправки в нейросеть: отправьте шот ещё раз")
             continue
@@ -224,17 +228,15 @@ def _resume(r: dict, base: str, settings: dict):
         _finish(r["id"], r["shot_id"], "error", str(e))
 
 
-def cancel(take_id: int, notify_farm: bool = True) -> bool:
+def cancel(take_id: int) -> bool:
     """Отмена дубля: студия перестаёт ждать результат. Задачу, которая уже ушла в нейросеть, та может всё равно
-    доделать (и списать кредиты), но в студию такой ролик уже не попадёт."""
+    доделать (и списать кредиты), но в студию такой ролик уже не попадёт. Шот, который Пульт ещё не забрал, он не получит;
+    уже принятый шот ферма доделает сама, отменить его можно только в Пульте."""
     with db.connect() as c:
-        t = c.execute("SELECT shot_id, status, provider, remote_id FROM takes WHERE id=?", (take_id,)).fetchone()
+        t = c.execute("SELECT shot_id, status FROM takes WHERE id=?", (take_id,)).fetchone()
         if not t or t["status"] not in ("queued", "running"):
             return False
         c.execute("UPDATE takes SET status='cancelled', error='Генерация отменена', finished_at=? WHERE id=?",
                   (db.now(), take_id))
         _after_take(c, take_id, t["shot_id"], "cancelled")
-    if notify_farm and t["provider"] == "renderfarm" and t["remote_id"]:
-        from . import farm
-        farm.cancel_job(t["remote_id"], db.get_settings())
     return True

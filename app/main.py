@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -53,14 +53,13 @@ HOLIDAYS = {
 
 db.init()
 veo.recover()
-farm.start_poller()
 exporter.recover()
 app = FastAPI(title="Студия сериала")
 
 
 # ---------- auth middleware ----------
 
-OPEN_PATHS = ("/api/auth/", "/api/farmhub/webhook")  # вебхук фермы ходит без входа, его защищает подпись
+OPEN_PATHS = ("/api/auth/",)
 VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+|auth/.*|reports|notifications/seen)$")
 
 
@@ -68,7 +67,14 @@ VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+|auth/.*
 async def session_guard(request: Request, call_next):
     path = request.url.path
     request.state.user = None
-    if path.startswith("/api/") or path.startswith("/media/"):
+    if path.startswith("/api/farmhub/"):  # Пульт фермы ходит без входа в студию: его пускает только секрет
+        want = farm.secret(db.get_settings())
+        if not want:
+            return JSONResponse({"detail": "Секрет связи с фермой не задан на сервере (FARMHUB_SECRET)"}, status_code=503)
+        if not farm.valid_auth(want, request.headers.get("Authorization", "")):
+            return JSONResponse({"detail": "Неверный секрет"}, status_code=401)
+        farm.touch()
+    elif path.startswith("/api/") or path.startswith("/media/"):
         user = auth.user_for_token(request.cookies.get(auth.COOKIE))
         request.state.user = user
         if not path.startswith(OPEN_PATHS):
@@ -352,6 +358,9 @@ def unready_items(s: dict) -> list[str]:
 
 
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
+    for t in takes:  # шот фермы подготовлен (переведён) и ждёт Пульт; сам текст шота клиенту не нужен
+        if "farm_payload" in t:
+            t["farm_ready"] = bool(t.pop("farm_payload"))
     _, refs, warns = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
     s["max_s"] = max_s = breakdown.engine_limit(s.get("engine"), ctx.settings)  # лимит шота у каждой нейросети свой
     w = breakdown.shot_warnings(s, max_s)
@@ -1796,7 +1805,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
     started = skipped = uploaded = 0
     unready = []
     farm_items = []  # шоты рендерфермы уходят одним запросом
-    ctx = Ctx() if any(s["engine"] == "renderfarm" for s in ep["shots"]) else None
+    ctx = Ctx() if any(models.route(s["engine"], settings) == "renderfarm" for s in ep["shots"]) else None
     for s in ep["shots"]:
         busy = s["gen_status"] in ("queued", "running")
         if busy:
@@ -1816,7 +1825,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
             unready.append({"id": s["id"], "label": s["label"], "items": unready_items(s)})
             continue
         why = "отправлено продюсером с незаполненными пунктами" if not s["ready"] else ""
-        if s["engine"] == "renderfarm":
+        if models.route(s["engine"], settings) == "renderfarm":  # в режиме «Заглушка» ферме ничего не уходит
             farm_items.append((s, ctx.v_map, ctx.a_map))
             continue
         veo.start(s, s["references"], settings, uid(request), why)
@@ -1826,7 +1835,7 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
         with db.connect() as c:
             c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=?", (db.now(), eid))
         db.log(eid, uid(request), f"Отправлено в генерацию шотов: {started}")
-    if farm_items:  # статус серии уже «Генерация»: если ферма отклонит шоты сразу, серия сама перейдёт дальше
+    if farm_items:  # статус серии уже «Генерация»: если шот не удастся подготовить, серия сама перейдёт дальше
         farm.start_many(farm_items, settings, uid(request), "отправлено продюсером с незаполненными пунктами" if any(not x[0]["ready"] for x in farm_items) else "")
     return {"started": started, "skipped": skipped, "uploaded": uploaded, "unready": unready}
 
@@ -2055,7 +2064,7 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     with db.connect() as c:
         c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=? AND status NOT IN ('posted')",
                   (db.now(), s["episode_id"]))
-    if s["engine"] == "renderfarm":
+    if models.route(s["engine"], db.get_settings()) == "renderfarm":
         ctx = Ctx()
         farm.start_many([(s, ctx.v_map, ctx.a_map)], ctx.settings, uid(request), g.reason)
     else:
@@ -2481,7 +2490,8 @@ def delete_template(tid: int):
 
 # ---------- settings ----------
 
-SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_api_key", "farmhub_webhook_secret", "anthropic_api_key")
+# farmhub_api_key и farmhub_webhook_secret: прежняя схема связи с фермой; значения, если их успели вписать, остаются в базе и не отдаются
+SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_secret", "farmhub_api_key", "farmhub_webhook_secret", "anthropic_api_key")
 PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
@@ -2491,8 +2501,8 @@ def read_settings():
     s.pop("media_secret", None)
     for k in SECRET_SETTINGS:
         s[k] = ("••••" + s[k][-4:]) if s.get(k) else ""
-    s["farmhub_env"] = {k: bool(os.environ.get(v)) for k, v in (("url", "FARMHUB_API_URL"), ("key", "FARMHUB_API_KEY"),
-                        ("secret", "FARMHUB_WEBHOOK_SECRET"), ("translate", "ANTHROPIC_API_KEY"))}  # что задано переменными сервера
+    s["farmhub_env"] = {k: bool(os.environ.get(v)) for k, v in (("secret", "FARMHUB_SECRET"), ("translate", "ANTHROPIC_API_KEY"))}  # что задано переменными сервера
+    s["farmhub_seen"] = farm.seen_ago()  # секунд назад Пульт в последний раз обращался к студии (пусто: с запуска не обращался)
     return s
 
 
@@ -2510,24 +2520,38 @@ def write_settings(values: dict):
     return read_settings()
 
 
-# ---------- рендерферма: события Пульта ----------
+# ---------- рендерферма: Пульт сам ходит на сайт (секрет проверяет session_guard) ----------
 
-@app.post("/api/farmhub/webhook")
-async def farmhub_webhook(request: Request):
-    """События Пульта (статус, процент, черновик, готовый ролик). Без входа в студию: подлинность — по подписи HMAC-SHA256
-    от сырого тела запроса секретом FARMHUB_WEBHOOK_SECRET."""
-    body = await request.body()
-    secret = farm.config(db.get_settings())["secret"]
-    if not secret:
-        return JSONResponse({"detail": "Секрет webhook не задан (FARMHUB_WEBHOOK_SECRET)"}, status_code=503)
-    if not farm.valid_signature(secret, body, request.headers.get("X-FarmHub-Signature", "")):
-        return JSONResponse({"detail": "Неверная подпись"}, status_code=401)
+@app.get("/api/farmhub/jobs/pending")
+def farmhub_pending(request: Request):
+    """Шоты, которые ждут ферму (не больше 50, что раньше — тем раньше). Картинки отдаются ссылками на этот же сайт."""
+    return {"shots": farm.pending(farm.site_base(db.get_settings(), request.headers, request.url.scheme))}
+
+
+@app.post("/api/farmhub/jobs/{ref}/status")
+def farmhub_status(ref: str, body: dict = Body(...)):
+    """Событие Пульта по шоту: принят, отклонён, старт, проценты, этап, конец. {ref} — наш id шота (take-N)."""
     try:
-        event = json.loads(body)
-    except ValueError:
-        return JSONResponse({"detail": "Не JSON"}, status_code=400)
-    farm.handle_event(event)  # отвечаем сразу, обработка и скачивание роликов в фоне
-    return Response(status_code=200)
+        return {"ok": True, **farm.apply_status(ref, body)}
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/farmhub/jobs/{ref}/files")
+def farmhub_files(ref: str, kind: str = Form(...), file: UploadFile = File(...), name: str = Form(""), job_id: str = Form("")):
+    """Черновик (kind=draft) или готовый ролик (kind=final) от Пульта; повторная загрузка заменяет файл."""
+    try:
+        return {"ok": True, **farm.save_file(ref, kind, file.file)}
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except OverflowError as e:
+        raise HTTPException(413, str(e)) from None
+    except OSError as e:
+        raise HTTPException(507, str(e)) from None
 
 
 # ---------- API keys of neural networks ----------
