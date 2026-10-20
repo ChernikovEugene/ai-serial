@@ -8,19 +8,16 @@
   4. `POST /api/farmhub/jobs/{id}/files`: черновик (`draft`, после генерации) и готовый ролик (`final`, перед `job.finished`).
 Все точки закрыты секретом FARMHUB_SECRET (`Authorization: Bearer`): переменная сервера, а если её нет, поле в
 «Настройки» → «Рендерферма». Описания шота (действие, камера, голос, место) ферма принимает только по-английски, реплика
-остаётся русской: русские описания студия переводит сама (ключ ANTHROPIC_API_KEY или поле в настройках) либо их можно
-вписать по-английски в блоке «Ферма» карточки шота.
+остаётся русской. Английский вариант автор вписывает в блоке «Ферма» карточки шота; если в настройках включён «Перевод описаний
+на ферме», русский текст уходит с пометкой `translate: true`, и Пульт переводит его сам (студия ничего не переводит).
 """
-import hashlib
 import hmac
 import json
 import os
 import re
 import shutil
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from . import db, models, veo
@@ -31,7 +28,7 @@ DISK_RESERVE_MB = 500
 SHOT_SIZES = ("medium shot", "close-up", "wide shot")
 ASPECTS = ("9:16", "16:9", "1:1", "3:4", "4:3")
 CYR = re.compile(r"[А-Яа-яЁё]")
-TRANSLATE_MODEL = "claude-haiku-5-5"
+STATIC_CAMERA = re.compile(r"\s*(статичн|неподвижн|без движени)", re.I)  # то же, что камера по умолчанию у фермы
 EVENTS = ("job.accepted", "job.rejected", "job.started", "job.progress", "job.requeued", "job.stage", "job.finished")
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="farm")
 _seen = {"at": 0.0}             # когда Пульт в последний раз обращался к студии (память процесса)
@@ -76,83 +73,6 @@ def image_url(rel: str, base: str) -> str:
     return f"{base}/pub/{models.sign(rel)}/{urllib.parse.quote(rel)}"
 
 
-def _detail(body: bytes) -> str:
-    try:
-        d = json.loads(body)
-        d = d.get("detail", d) if isinstance(d, dict) else d
-        return d if isinstance(d, str) else json.dumps(d, ensure_ascii=False)
-    except ValueError:
-        return body.decode(errors="replace")[:500]
-
-
-def _open(req: urllib.request.Request, timeout: int):
-    """Запрос к Anthropic (перевод описаний)."""
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read()
-    except urllib.error.HTTPError as e:
-        raise FarmError(f"HTTP {e.code}: {_detail(e.read())[:500]}") from None
-    except urllib.error.URLError as e:
-        raise FarmError(f"нет связи с {req.full_url.split('/')[2]}: {e.reason}") from None
-    except TimeoutError:
-        raise FarmError("сервис не ответил вовремя") from None
-
-
-# ---------- перевод описаний на английский ----------
-
-def _anthropic_key(settings: dict) -> str:
-    return (os.environ.get("ANTHROPIC_API_KEY") or settings.get("anthropic_api_key") or "").strip()
-
-
-TRANSLATE_RULES = (
-    "You translate short scene descriptions of a vertical TikTok series from Russian to English for a video model. "
-    "Input: a JSON object whose values are Russian (or mixed) texts. Output: ONLY a JSON object with the same keys and English values, "
-    "nothing else. Rules: concise visual wording in the present tense, no names of people or characters anywhere (use she, he, "
-    "the girl, the man, the character; if a text says the character with a given gender, keep it), do not quote or translate any "
-    "spoken lines, no Cyrillic in the output. Key 'voice': a short voice description like 'whisper', 'excited fast voice', "
-    "'normal calm voice'. Key 'camera': a short camera instruction like 'slow push-in'. Key 'location': the place in a few words. "
-    "Key 'action': what happens in the frame.")
-
-
-def translate(fields: dict[str, str], settings: dict) -> dict[str, str]:
-    """Переводит русские значения на английский (остальные не трогает). Результат кешируется по тексту."""
-    todo = {k: v for k, v in fields.items() if v and CYR.search(v)}
-    out = {k: v for k, v in fields.items() if k not in todo}
-    if not todo:
-        return out
-    digest = hashlib.sha256(json.dumps(todo, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    with db.connect() as c:
-        r = c.execute("SELECT result FROM translations WHERE hash=?", (digest,)).fetchone()
-    if r:
-        return {**out, **json.loads(r["result"])}
-    key = _anthropic_key(settings)
-    if not key:
-        raise FarmError("Описание шота написано по-русски, а ферма принимает его только по-английски. Впишите английский вариант "
-                        "в блоке «Ферма» карточки шота или укажите ключ перевода (ANTHROPIC_API_KEY на сервере или "
-                        "«Настройки» → «Рендерферма»)")
-    base = (os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com").rstrip("/")
-    req = urllib.request.Request(base + "/v1/messages", method="POST", headers={
-        "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        data=json.dumps({"model": TRANSLATE_MODEL, "max_tokens": 1500, "system": TRANSLATE_RULES,
-                         "messages": [{"role": "user", "content": json.dumps(todo, ensure_ascii=False)}]}).encode())
-    try:
-        resp = json.loads(_open(req, 60))
-        text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text")
-        tr = json.loads(text[text.index("{"):text.rindex("}") + 1])
-        if set(tr) != set(todo) or not all(isinstance(v, str) for v in tr.values()):
-            raise ValueError("не те ключи")
-    except FarmError as e:
-        raise FarmError(f"Перевод описания на английский не удался: {e}") from None
-    except (ValueError, KeyError, TypeError) as e:
-        raise FarmError(f"Перевод описания на английский не удался: ответ не разобран ({e})") from None
-    if any(CYR.search(v) for v in tr.values()):
-        raise FarmError("Перевод описания на английский не удался: в ответе осталась кириллица. Впишите английский вариант в блоке «Ферма»")
-    with db.connect() as c:
-        c.execute("INSERT OR REPLACE INTO translations(hash, result, created_at) VALUES (?,?,?)",
-                  (digest, json.dumps(tr, ensure_ascii=False), db.now()))
-    return {**out, **tr}
-
-
 # ---------- шот студии -> шот Пульта ----------
 
 def _mention_names(text: str) -> str:
@@ -161,9 +81,12 @@ def _mention_names(text: str) -> str:
 
 
 def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
-    """Что из шота пойдёт на ферму, пока без перевода и загрузки: поля, пути картинок, ошибки и предупреждения.
-    errors — отправить нельзя; warnings — отправить можно, но автору стоит знать."""
+    """Что из шота пойдёт на ферму: поля, пути картинок, ошибки и предупреждения.
+    errors — отправить нельзя; warnings — отправить можно, но автору стоит знать.
+    Русский текст вне реплики ферма принимает только вместе с `translate: true` (перевод на ферме, см. настройки);
+    без этого действие обязано быть по-английски, а русские камера, голос и место просто не отправляются."""
     errors, warns = [], []
+    tmode = translate_on_farm(settings)
     mode = shot.get("sound_mode") or ("off" if shot.get("sound_off") else "full")
     lines = [d for d in shot.get("dialogue") or [] if d.get("voice") != "voiceover" and (d.get("text") or "").strip()]
     line = lines[0] if lines and mode == "full" else None
@@ -191,13 +114,24 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     text = {"action": (shot.get("farm_action") or "").strip() or _mention_names(shot.get("action") or "")}
     if not text["action"].strip():
         errors.append("Нужно описание действия: заполните «Действие» (если действия нет, напишите, что персонаж просто смотрит в камеру)")
-    cam = (shot.get("camera") or "").strip()
+    elif CYR.search(text["action"]) and not tmode:
+        errors.append("Действие написано по-русски, а ферма принимает его по-английски: впишите английский вариант в блоке «Ферма» "
+                      "(«Действие по-английски») или включите «Перевод описаний на ферме» в «Настройки»")
+    cam = (shot.get("farm_camera") or "").strip() or (shot.get("camera") or "").strip()
+    if cam and CYR.search(cam) and not tmode:
+        if not STATIC_CAMERA.match(cam):
+            warns.append(f"Камера «{cam}» написана по-русски и на ферму не уйдёт (камера будет статичной): впишите английский вариант в блоке «Ферма»")
+        cam = ""
     if cam:
         text["camera"] = cam
     voice = (shot.get("farm_voice") or "").strip()
     if not voice and line:
-        how = " ".join(x for x in [(line.get("parenthetical") or "").strip(), ((pick[1] or {}).get("voice") or "").strip() if pick else ""] if x)
-        voice = how
+        paren, lib = (line.get("parenthetical") or "").strip(), ((pick[1] or {}).get("voice") or "").strip() if pick else ""
+        voice = " ".join(x for x in (paren, lib) if x)
+        if voice and CYR.search(voice) and not tmode:  # голос по умолчанию у фермы нормальный и спокойный
+            if CYR.search(paren):
+                warns.append(f"Интонация «{paren}» написана по-русски и на ферму не уйдёт: впишите английский вариант («Голос по-английски») в блоке «Ферма»")
+            voice = ""
     if voice:
         text["voice"] = voice
 
@@ -212,6 +146,9 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
             loc_text = f"{(a_map.get(lv['asset_id']) or {}).get('name', '')}. {lv.get('description') or ''}".strip(" .")
         elif shot.get("scene"):
             loc_text = shot["scene"]
+    if loc_text and CYR.search(loc_text) and not tmode:
+        warns.append(f"Локация «{loc_text[:60]}» описана словами по-русски и на ферму не уйдёт: добавьте ей картинку в библиотеке")
+        loc_text = ""
     if loc_text:
         text["location"] = loc_text
 
@@ -224,7 +161,7 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     if settings.get("aspect_ratio") in ASPECTS and settings["aspect_ratio"] != "9:16":
         fields["aspect"] = settings["aspect_ratio"]
     style = (settings.get("style") or "").strip()
-    if style and not CYR.search(style):
+    if style and (tmode or not CYR.search(style)):
         fields["style"] = style
     if shot.get("farm_len") == "shot" and shot.get("duration"):
         fields["seconds"] = max(1, min(10, int(shot["duration"])))
@@ -236,19 +173,25 @@ def warnings(shot: dict, v_map: dict, a_map: dict, settings: dict) -> list[str]:
     return [*p["errors"], *p["warnings"]]
 
 
+def translate_on_farm(settings: dict) -> bool:
+    return settings.get("farmhub_translate") == "farm"
+
+
 def build(p: dict, ref: str, settings: dict) -> dict:
-    """Готовый шот для Пульта: английские описания (перевод) и пути картинок; ссылки на них строятся при выдаче."""
+    """Готовый шот для Пульта; пути картинок остаются путями, ссылки на них строятся при выдаче.
+    Русский текст (если он остался) уходит с `translate: true`: перевод делает Пульт."""
     if p["errors"]:
         raise FarmError("; ".join(p["errors"]))
-    tr = translate(p["text"], settings)
     shot = {k: v for k, v in p["fields"].items() if v is not None}
     shot["id"] = ref
-    shot["action"] = tr["action"]
+    shot["action"] = p["text"]["action"]
     for k in ("camera", "voice"):
-        if tr.get(k):
-            shot[k] = tr[k]
-    if tr.get("location"):
-        shot["location_text"] = tr["location"]
+        if p["text"].get(k):
+            shot[k] = p["text"][k]
+    if p["text"].get("location"):
+        shot["location_text"] = p["text"]["location"]
+    if any(CYR.search(v) for k, v in shot.items() if k in ("action", "camera", "voice", "location_text", "style")):
+        shot["translate"] = True
     for k, rel in p["images"].items():
         if not (db.MEDIA_DIR / rel).is_file():
             raise FarmError(f"Картинка «{rel}» не найдена на сервере: загрузите её в библиотеку заново")
@@ -256,12 +199,15 @@ def build(p: dict, ref: str, settings: dict) -> dict:
 
 
 def preview(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
-    """Что уйдёт на ферму, читаемо (картинки по именам файлов, русские описания помечены: их переведёт студия перед отправкой)."""
+    """Что уйдёт на ферму, читаемо (картинки по именам файлов, русские описания помечены: их переведёт ферма)."""
     p = plan(shot, v_map, a_map, settings)
+    tmode = translate_on_farm(settings)
     body = {**{k: v for k, v in p["fields"].items() if v is not None},
-            **{("location_text" if k == "location" else k): (v if not CYR.search(v) else f"{v}  [переведётся на английский перед отправкой]")
+            **{("location_text" if k == "location" else k): (f"{v}  [переведёт ферма]" if tmode and CYR.search(v) else v)
                for k, v in p["text"].items()},
             **{k: f"<ссылка на картинку {rel}>" for k, rel in p["images"].items()}}
+    if tmode and any(CYR.search(v) for v in p["text"].values()):
+        body["translate"] = True
     out = {"model": "Рендерферма (Пульт, MiniMax H3)", "url": "GET /api/farmhub/jobs/pending (шот забирает Пульт)", "body": body}
     if not secret(settings):
         out["warning"] = "Не задан секрет связи с фермой (FARMHUB_SECRET): без него Пульт не сможет забрать шот"

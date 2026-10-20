@@ -667,13 +667,15 @@ b0 = q["body"]
 check("farm: request preview shows the fields the farm gets", "jobs/pending" in q["url"] and b0["line"] == "Привет всем!" and b0["voice"] == "excited fast voice"
       and b0["quality"] == "draft" and b0["action"].startswith("she waves") and "character" in b0 and "location" in b0, q)
 st, r2 = admin.call("GET", f"/api/shots/{f2['id']}/request")
-check("farm: Russian action is marked as to-be-translated", "переведётся" in r2["body"]["action"], r2)
+check("farm: a Russian action is flagged: the farm needs English (or translation on the farm)", "по-английски" in r2.get("warning", "") and "translate" not in r2["body"], r2)
+st, r = admin.call("PUT", f"/api/shots/{f2['id']}", {"farm_camera": "плавный наезд"})
+check("farm: Russian text in the English camera field is rejected", st == 400, st)
 
 st, r = admin.call("POST", f"/api/episodes/{epf['id']}/generate", {"mode": "all", "force": True})
 check("farm: both shots accepted", st == 200 and r["started"] == 2, (st, r))
 tk = lambda i=0: admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][i]["takes"][-1]
 got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "pending shot")
-check("farm: only the shot with ready English text is handed to the farm (the second one failed on translation)", got and len(got) == 1, got)
+check("farm: only the shot with ready English text is handed to the farm (the second one has a Russian action)", got and len(got) == 1, got)
 shot_f = got[0] if got else {}
 t1 = tk(0)
 check("farm: shot id is take-N, batch is the episode, Russian only in the line, pictures are links to the studio",
@@ -684,8 +686,8 @@ check("farm: shot id is take-N, batch is the episode, Russian only in the line, 
 with urllib.request.urlopen(urllib.request.Request(shot_f["character"], headers={"Authorization": "Bearer whsec_test"})) as resp:
     check("farm: the picture link opens without a studio login", resp.status == 200 and resp.read()[:4] == PNG[:4])
 check("farm: the shot is handed over again until the farm accepts or rejects it", pult("GET", "/api/farmhub/jobs/pending")[1]["shots"] == got)
-sh2 = wait_for(lambda: (x := admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][1])["gen_status"] == "error" and x, "translation error") or {"gen_status": "", "takes": []}
-check("farm: shot without English text and no translator key fails with an explanation",
+sh2 = wait_for(lambda: (x := admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][1])["gen_status"] == "error" and x, "english error") or {"gen_status": "", "takes": []}
+check("farm: a shot with a Russian action fails with an explanation when translation on the farm is off",
       sh2["gen_status"] == "error" and "по-английски" in sh2["takes"][-1]["error"], sh2["takes"])
 check("farm: take waits for the farm, no job id yet", t1["status"] == "queued" and not t1["remote_id"] and t1["farm_ready"] is True and "farm_payload" not in t1
       and t1["provider"] == "renderfarm", t1)
@@ -762,6 +764,30 @@ ref4 = got[0]["id"]
 check("farm: event and file for a cancelled take are ignored, the take stays cancelled",
       pult("POST", f"/api/farmhub/jobs/{ref4}/status", {"event": "job.finished", "job": {"id": "job-a4", "status": "done", "updated": 4000.0}})[1].get("ignored")
       and pult("POST", f"/api/farmhub/jobs/{ref4}/files", form={"kind": "final", "file": b"LATE"})[1].get("ignored") and tk(1)["status"] == "cancelled")
+# русские камера и голос не отправляются (ферма возьмёт свои по умолчанию), перевод на ферме включается настройкой
+admin.call("PUT", f"/api/shots/{f2['id']}", {"camera": "плавный наезд", "farm_action": "she looks out of the window"})
+sw = admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][1]
+check("farm: a Russian camera is flagged as not sent", any("плавный наезд" in w and "не уйдёт" in w for w in sw["warnings"]), sw["warnings"])
+admin.call("POST", f"/api/shots/{f2['id']}/generate", {"force": True})
+got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "camera pending shot")
+check("farm: the Russian camera is not sent, the shot has no translate flag", got and "camera" not in got[0] and "translate" not in got[0], got)
+admin.call("POST", f"/api/takes/{tk(1)['id']}/cancel", {})
+admin.call("PUT", f"/api/shots/{f2['id']}", {"farm_camera": "slow push-in"})
+admin.call("POST", f"/api/shots/{f2['id']}/generate", {"force": True})
+got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "english camera pending shot")
+check("farm: the English camera is sent as it is", got and got[0].get("camera") == "slow push-in", got)
+admin.call("POST", f"/api/takes/{tk(1)['id']}/cancel", {})
+admin.call("PUT", f"/api/shots/{f2['id']}", {"camera": "статичная", "farm_camera": ""})
+sw = admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][1]
+check("farm: the usual Russian 'static' camera needs no warning", not any("Камера" in w for w in sw["warnings"]), sw["warnings"])
+admin.call("PUT", "/api/settings", {"farmhub_translate": "farm"})
+admin.call("PUT", f"/api/shots/{f2['id']}", {"farm_action": ""})
+st, r = admin.call("POST", f"/api/shots/{f2['id']}/generate", {"force": True})
+got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "translate pending shot")
+check("farm: translation on the farm: the Russian action goes as it is with translate=true", st == 200 and got and got[0].get("translate") is True
+      and re.search("[А-Яа-я]", got[0]["action"]) and got[0].get("camera") == "статичная", (st, got))
+admin.call("POST", f"/api/takes/{tk(1)['id']}/cancel", {})
+admin.call("PUT", "/api/settings", {"farmhub_translate": ""})
 admin.call("PUT", "/api/settings", {"public_base_url": "https://studio.example/"})
 admin.call("POST", f"/api/shots/{f1['id']}/generate", {"force": True})
 got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "fifth pending shot")

@@ -62,9 +62,12 @@ export async function renderSettings() {
       <p class="muted small">Секрет владелец Пульта берёт в файле <code>site-credentials.txt</code> (строка <code>FARMHUB_SECRET=…</code>) и передаёт напрямую, в чаты его не присылают.
         Его же можно задать переменной сервера <code>FARMHUB_SECRET</code>: она главнее поля. Пульт ходит на <code>${esc((s.public_base_url || location.origin).replace(/\/$/, ""))}/api/farmhub/…</code>.
         ${farmSeen(s)}</p>
-      ${field("anthropic_api_key", `Ключ для перевода описаний на английский ${envMark(s, "translate")}`, "input", `type="password" placeholder="sk-ant-…" autocomplete="off"`)}
-      <p class="muted small">Ферма принимает действие, камеру и голос только по-английски. Если они написаны по-русски, студия переведёт их перед отправкой (Claude Haiku по этому ключу, перевод запоминается).
-        Без ключа английский вариант вписывают в блоке «Ферма» карточки шота.</p>
+      <label>Описания шота (действие, камера, голос, место)</label>
+      <select data-k="farmhub_translate" ${ro}>
+        <option value="" ${s.farmhub_translate ? "" : "selected"}>Пишу по-английски сам: поле «Действие по-английски» в блоке «Ферма»</option>
+        <option value="farm" ${s.farmhub_translate === "farm" ? "selected" : ""}>Переводит ферма: русский текст уходит с пометкой translate (Пульт должен это уметь)</option></select>
+      <p class="muted small">Ферма принимает описания только по-английски, реплика остаётся русской. Если выбрано «Переводит ферма», студия отправит русский текст как есть, а перевод сделает Пульт;
+        пока Пульт этого не умеет, он отклонит такой шот с причиной, поэтому оставляйте «Пишу по-английски сам».</p>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">GitHub (отправка заявок в правки Claude)</h2>

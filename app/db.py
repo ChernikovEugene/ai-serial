@@ -122,6 +122,7 @@ TABLES = {
         voiceover INTEGER NOT NULL DEFAULT 0,
         farm_action TEXT NOT NULL DEFAULT '',
         farm_voice TEXT NOT NULL DEFAULT '',
+        farm_camera TEXT NOT NULL DEFAULT '',
         farm_shot_size TEXT NOT NULL DEFAULT '',
         farm_quality TEXT NOT NULL DEFAULT '',
         farm_len TEXT NOT NULL DEFAULT '',
@@ -160,10 +161,6 @@ TABLES = {
         farm_payload TEXT NOT NULL DEFAULT '',
         farm_final TEXT NOT NULL DEFAULT '',
         farm_err TEXT NOT NULL DEFAULT ''""",
-    "translations": """
-        hash TEXT PRIMARY KEY,
-        result TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT ''""",
     "comments": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
@@ -250,7 +247,7 @@ DEFAULT_SETTINGS = {
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
     "farmhub_secret": "",            # Рендерферма: секрет, которым Пульт открывает точки /api/farmhub/…; переменная сервера FARMHUB_SECRET главнее
-    "anthropic_api_key": "",         # перевод описаний шота на английский перед отправкой на ферму (или переменная ANTHROPIC_API_KEY)
+    "farmhub_translate": "",         # "farm": русские описания шота уходят на ферму с translate:true, переводит Пульт; пусто: автор пишет по-английски
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",
     "aspect_ratio": "9:16",
