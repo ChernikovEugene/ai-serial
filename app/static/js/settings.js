@@ -55,19 +55,18 @@ export async function renderSettings() {
           ссылка Magnific на ролик живёт 30 минут.</p>
     </div>
     <div class="card" style="margin-top:14px">
-      <h2 style="margin-top:0">Рендерферма (MiniMax H3)</h2>
-      <p class="muted small">Шоты с нейросетью «Рендерферма (H3)» уходят напрямую в MiniMax, не через Magnific. Ключ — ниже,
-        в «Нейросети и API-ключи»: строка с видом «Рендерферма» (или с именем «рендерферма»). Режим «Заглушка / Реальная генерация» общий.</p>
-      ${field("renderfarm_base_url", "Адрес API", "input", `placeholder="https://api.minimax.io"`)}
-      <label>Модель</label>
-      <select data-k="renderfarm_model" ${ro} style="max-width:320px">
-        <option value="MiniMax-H3" ${s.renderfarm_model === "MiniMax-H3" ? "selected" : ""}>MiniMax H3 (4–15 с, 768P или 2K)</option>
-        <option value="MiniMax-H3-Max" ${s.renderfarm_model === "MiniMax-H3-Max" ? "selected" : ""}>MiniMax H3 Max (быстрее, 5–15 с, 480P или 768P)</option></select>
-      <label>Разрешение</label>
-      <select data-k="renderfarm_resolution" ${ro} style="max-width:260px">
-        ${["480P", "768P", "2K"].map((r) => `<option value="${r}" ${s.renderfarm_resolution === r ? "selected" : ""}>${r}</option>`).join("")}</select>
-      <p class="muted small">Если модель не умеет выбранное разрешение, берётся 768P. Картинки героев и локаций уходят прямо в запросе,
-        публичный адрес студии не нужен. Готовое видео студия скачивает сразу.</p>
+      <h2 style="margin-top:0">Рендерферма (Пульт, MiniMax H3)</h2>
+      <p class="muted small">Шоты с нейросетью «Рендерферма (H3)» уходят в Пульт студийной рендер-фермы, не в Magnific: кнопка «Сгенерировать» отправляет все такие шоты серии одним запросом,
+        а ферма присылает на сайт статус, процент (генерация 0–50 %, доводка до 1080p 50–100 %), черновик и готовое видео. Режим «Заглушка / Реальная генерация» общий.
+        Адрес, ключ и секрет можно задать переменными сервера <code>FARMHUB_API_URL</code>, <code>FARMHUB_API_KEY</code>, <code>FARMHUB_WEBHOOK_SECRET</code> (они главнее) или полями ниже.</p>
+      ${field("farmhub_api_url", `Адрес API фермы ${envMark(s, "url")}`, "input", `placeholder="https://api.<домен>/api/v1"`)}
+      ${field("farmhub_api_key", `Ключ API фермы ${envMark(s, "key")}`, "input", `type="password" placeholder="fh_…" autocomplete="off"`)}
+      ${field("farmhub_webhook_secret", `Секрет webhook: им ферма подписывает события ${envMark(s, "secret")}`, "input", `type="password" placeholder="whsec_…" autocomplete="off"`)}
+      <p class="muted small">События ферма присылает на <code>${esc((s.public_base_url || "https://<адрес студии>").replace(/\/$/, ""))}/api/farmhub/webhook</code>: для этого нужен «Публичный адрес студии» выше.
+        Без него студия сама опрашивает ферму раз в минуту, статусы приходят с задержкой. Если ключ фермы не вписан здесь и не задан на сервере, берётся ключ из «Нейросети и API-ключи» с видом «Рендерферма».</p>
+      ${field("anthropic_api_key", `Ключ для перевода описаний на английский ${envMark(s, "translate")}`, "input", `type="password" placeholder="sk-ant-…" autocomplete="off"`)}
+      <p class="muted small">Ферма принимает действие, камеру и голос только по-английски. Если они написаны по-русски, студия переведёт их перед отправкой (Claude Haiku по этому ключу, перевод запоминается).
+        Без ключа английский вариант вписывают в блоке «Ферма» карточки шота.</p>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">GitHub (отправка заявок в правки Claude)</h2>
@@ -102,6 +101,8 @@ export function renderPublish() {
     <p class="muted">Сейчас готовые видео лежат в папке <code>data/media/renders</code>, а серию целиком можно посмотреть во вкладке «Просмотр и правки».</p></div>`;
 }
 
+const envMark = (s, k) => (s.farmhub_env?.[k] ? `<span class="badge ok">задано на сервере</span>` : "");
+
 const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance25", "Seedance 2.5"], ["seedance", "Seedance 2.0"],
   ["seedance_fast", "Seedance 2.0 Fast"], ["hailuo", "Hailuo 3"], ["hailuo_max", "Hailuo 3 Max"], ["renderfarm", "Рендерферма (H3)"],
   ["wan", "WAN 2.7"], ["runway", "Runway Gen-4.5"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
@@ -111,7 +112,7 @@ async function drawIntegrations() {
   const list = await api("/api/integrations");
   const opts = (sel) => KINDS.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${n}</option>`).join("");
   box.innerHTML = `<h2 style="margin-top:0">Нейросети и API-ключи</h2>
-    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше), а шоты «Рендерфермы» — по ключу с видом «Рендерферма» отсюда; здесь же ключи других сервисов, например ElevenLabs.</p>
+    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше) или на рендер-ферме (её ключ можно держать и здесь, вид «Рендерферма»); здесь же ключи других сервисов, например ElevenLabs.</p>
     ${list.map((i) => `<div class="int-row" data-id="${i.id}">
       <input data-i="name" value="${esc(i.name)}" style="width:200px" placeholder="Имя">
       <select data-i="kind" style="width:auto">${opts(i.kind)}</select>

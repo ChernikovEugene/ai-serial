@@ -3,9 +3,14 @@
 Run the server on a FRESH data folder first, e.g.:  python tests/smoke_roles.py http://127.0.0.1:8766
 It creates users and data, so never point it at your real database.
 """
+import hashlib
+import hmac
 import http.cookiejar
+import http.server
 import json
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -377,10 +382,8 @@ for eng, url in (("seedance25", "/v1/ai/video/seedance-2-5-pro-720p"), ("seedanc
           and q["body"]["aspect_ratio"] == "social_story_9_16", (r.get("prompt"), q))
 st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "renderfarm"})
 st2, q = admin.call("GET", f"/api/shots/{s4['id']}/request")
-imgs = [x for x in q.get("body", {}).get("content", []) if x["type"] == "image_url"]
-check("renderfarm: MiniMax H3 request with reference images", st == 200 and "reference image 1" in r["prompt"]
-      and q["url"] == "https://api.minimax.io/v2/video_generation" and q["body"]["model"] == "MiniMax-H3"
-      and len(imgs) == 2 and all(x["role"] == "reference_image" for x in imgs) and q["body"]["ratio"] == "9:16", (r.get("prompt"), q))
+check("renderfarm: request preview has the farm fields (character and location pictures, no prompt)", st == 200
+      and q["url"].endswith("/batches") and {"character", "location", "action"} <= set(q["body"]["shots"][0]) and "prompt" not in q["body"]["shots"][0], q)
 st, ints = admin.call("POST", "/api/integrations", {"name": "рендерферма", "kind": "renderfarm", "api_key": "rf-secret-1234"})
 check("renderfarm: key saved as its own kind, masked", st == 200 and any(i["kind"] == "renderfarm" and i["key_mask"] == "••••1234" for i in ints), ints)
 st, r = admin.call("PUT", f"/api/shots/{s4['id']}", {"engine": "wan"})
@@ -594,6 +597,137 @@ st, _ = writer.call("DELETE", f"/api/trash/{drafts[0]}")
 check("trash: delete forever", st == 200 and drafts[0] not in [x["id"] for x in writer.call("GET", "/api/trash")[1]["episodes"]], st)
 st, arcs = writer.call("GET", "/api/arcs")
 check("trash: deleted episodes are not counted in the arc", next(a for a in arcs if a["id"] == arc_a["id"])["drafts"] == 0, arcs)
+
+# --- рендерферма: шоты серии уходят в Пульт одной пачкой, события приходят по webhook с подписью ---
+FARM = {"uploads": [], "batches": [], "deleted": [], "n": 0}
+
+
+class FakeFarm(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, data, code=200, ctype="application/json"):
+        b = data if isinstance(data, bytes) else json.dumps(data).encode()
+        self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.headers.get("Authorization") != "Bearer fh_test":
+            return self._send({"detail": "нет ключа"}, 401)
+        if self.path == "/api/v1/uploads":
+            FARM["uploads"].append(len(raw)); FARM["n"] += 1
+            return self._send({"id": f"up{FARM['n']}", "filename": "x.png", "size": len(raw)})
+        body = json.loads(raw)
+        FARM["batches"].append(body)
+        jobs = []
+        for i, s in enumerate(body["shots"]):
+            FARM["n"] += 1
+            jobs.append({"id": f"job{FARM['n']}", "ref": s["ref"], "status": "queued", "stage": "generate", "position": i + 1})
+        self._send({"batch": f"b{len(FARM['batches'])}", "jobs": jobs})
+
+    def do_DELETE(self):
+        FARM["deleted"].append(self.path); self._send({"canceled": True})
+
+    def do_GET(self):
+        self._send(b"FAKEMP4", ctype="video/mp4")
+
+
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeFarm)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+FARM_URL = f"http://127.0.0.1:{srv.server_port}/api/v1"
+
+
+def farm_event(event, secret="whsec_test", sign=True):
+    raw = json.dumps(event).encode()
+    hdr = {"Content-Type": "application/json", "X-FarmHub-Event": event.get("event", "")}
+    if sign:
+        hdr["X-FarmHub-Signature"] = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    try:
+        return urllib.request.urlopen(urllib.request.Request(BASE + "/api/farmhub/webhook", data=raw, headers=hdr)).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def wait_for(fn, what, secs=15):
+    end = time.time() + secs
+    while time.time() < end:
+        v = fn()
+        if v:
+            return v
+        time.sleep(0.3)
+    return None
+
+
+admin.call("PUT", "/api/settings", {"gen_mode": "live", "farmhub_api_url": FARM_URL, "farmhub_api_key": "fh_test", "farmhub_webhook_secret": "whsec_test",
+                                    "public_base_url": "https://studio.example"})
+st, sset = admin.call("GET", "/api/settings")
+check("farm: key and secret are masked in settings", sset["farmhub_api_key"].startswith("••••") and sset["farmhub_webhook_secret"].startswith("••••"), sset)
+st, epf = writer.call("POST", "/api/episodes", {"title": "Ферма", "script": "Шот 1\nЛОКАЦИЯ: @Лофт\nАЛЬТУШКА: Привет всем!\nАльтушка машет рукой.\nШот 2\nЛОКАЦИЯ: @Лофт\nАльтушка смотрит в окно.\n"})
+f1, f2 = epf["shots"][0], epf["shots"][1]
+admin.call("PUT", f"/api/shots/{f1['id']}", {"engine": "renderfarm", "farm_action": "she waves at the camera and smiles", "farm_voice": "excited fast voice", "farm_quality": "draft"})
+admin.call("PUT", f"/api/shots/{f2['id']}", {"engine": "renderfarm"})
+st, r = admin.call("PUT", f"/api/shots/{f1['id']}", {"farm_action": "она машет"})
+check("farm: Russian text in the English field is rejected", st == 400, st)
+st, r = admin.call("PUT", f"/api/shots/{f1['id']}", {"farm_shot_size": "huge"})
+check("farm: unknown shot size rejected", st == 400, st)
+st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
+b0 = q["body"]["shots"][0]
+check("farm: request preview shows the fields the farm gets", q["url"].endswith("/batches") and b0["line"] == "Привет всем!" and b0["voice"] == "excited fast voice"
+      and b0["quality"] == "draft" and b0["action"].startswith("she waves") and "character" in b0 and "location" in b0, q)
+st, r2 = admin.call("GET", f"/api/shots/{f2['id']}/request")
+check("farm: Russian action is marked as to-be-translated", "переведётся" in r2["body"]["shots"][0]["action"], r2)
+st, r = admin.call("POST", f"/api/episodes/{epf['id']}/generate", {"mode": "all", "force": True})
+check("farm: both shots accepted", st == 200 and r["started"] == 2, (st, r))
+wait_for(lambda: FARM["batches"], "batch")
+check("farm: all shots go in ONE batch request", len(FARM["batches"]) == 1, FARM["batches"])
+body = FARM["batches"][0] if FARM["batches"] else {"shots": []}
+check("farm: webhook url is sent", body.get("webhook_url") == "https://studio.example/api/farmhub/webhook", body.get("webhook_url"))
+shot_f = body["shots"][0] if body["shots"] else {}
+check("farm: batch shot fields (images by upload id, Russian only in the line)", len(body["shots"]) == 1 and shot_f.get("character", "").startswith("up")
+      and shot_f.get("location", "").startswith("up") and shot_f["line"] == "Привет всем!" and shot_f["action"] == "she waves at the camera and smiles"
+      and shot_f["quality"] == "draft" and shot_f["ref"].startswith("take-") and "Привет" not in json.dumps({k: v for k, v in shot_f.items() if k != "line"}, ensure_ascii=False), shot_f)
+check("farm: the same picture is uploaded once", len(FARM["uploads"]) <= 2, FARM["uploads"])
+st, e = admin.call("GET", f"/api/episodes/{epf['id']}")
+sh1 = next(s for s in e["shots"] if s["id"] == f1["id"]); sh2 = next(s for s in e["shots"] if s["id"] == f2["id"])
+check("farm: shot without English text and no translator key fails with an explanation",
+      sh2["gen_status"] == "error" and "по-английски" in sh2["takes"][-1]["error"], sh2["takes"])
+t1 = sh1["takes"][-1]
+check("farm: take is queued with the job id and batch", t1["status"] == "queued" and t1["remote_id"].startswith("job") and t1["batch_id"] == "b1" and t1["provider"] == "renderfarm", t1)
+job = {"id": t1["remote_id"], "ref": f"take-{t1['id']}", "batch": "b1", "status": "running", "stage": "generate", "progress": 0.3, "position": 0,
+       "message": "Farm-05 GPU1", "outputs": [], "raw_outputs": [], "updated": 1000.0}
+check("farm: unsigned webhook rejected", farm_event({"event": "job.progress", "job": job}, sign=False) == 401)
+check("farm: webhook with a wrong secret rejected", farm_event({"event": "job.progress", "job": job}, secret="nope") == 401)
+check("farm: signed webhook accepted", farm_event({"event": "job.progress", "job": job}) == 200)
+tk = lambda: admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][0]["takes"][-1]
+t = wait_for(lambda: (x := tk())["status"] == "running" and x, "progress")
+check("farm: progress and status shown", t and abs(t["progress"] - 0.3) < 1e-6 and t["stage"] == "generate" and t["farm_msg"] == "Farm-05 GPU1", t)
+farm_event({"event": "job.progress", "job": {**job, "progress": 0.1, "updated": 999.0}})
+time.sleep(1)
+check("farm: an older event is ignored", abs(tk()["progress"] - 0.3) < 1e-6, tk())
+draft = [{"name": "d.mp4", "kind": "video", "size": 7, "url": "/api/v1/jobs/x/files/d.mp4"}]
+farm_event({"event": "job.stage", "job": {**job, "stage": "finish", "progress": 0.5, "raw_outputs": draft, "updated": 1001.0}})
+t = wait_for(lambda: (x := tk())["draft_path"] and x, "draft")
+check("farm: draft downloaded after generation, stage is finish", t and t["stage"] == "finish" and t["draft_path"].endswith("_draft.mp4") and t["status"] == "running", t)
+final = [{"name": "f-1080p.mp4", "kind": "video", "size": 7, "url": "/api/v1/jobs/x/files/f-1080p.mp4"}]
+farm_event({"event": "job.finished", "job": {**job, "status": "done", "stage": "finish", "progress": 1.0, "raw_outputs": draft, "outputs": final, "updated": 1002.0}})
+t = wait_for(lambda: (x := tk())["status"] == "done" and x, "done")
+check("farm: final video downloaded and take is done", t and t["video_path"].endswith(".mp4") and "_draft" not in t["video_path"] and t["progress"] == 1, t)
+with urllib.request.urlopen(admin.op.open and BASE + "/media/" + t["video_path"]) if False else admin.op.open(BASE + "/media/" + t["video_path"]) as resp:
+    check("farm: downloaded file is stored in the studio", resp.read() == b"FAKEMP4")
+st, e = admin.call("GET", f"/api/episodes/{epf['id']}")
+check("farm: finished take is selected, episode moves on when nothing is running", e["shots"][0]["selected_take_id"] == t["id"] and e["status"] == "fixes", (e["shots"][0]["selected_take_id"], e["status"]))
+# повторная генерация и отмена: ферме уходит DELETE
+admin.call("PUT", f"/api/shots/{f2['id']}", {"farm_action": "she looks out of the window"})
+st, r = admin.call("POST", f"/api/shots/{f2['id']}/generate", {"force": True})
+check("farm: single shot can be sent again", st == 200 and r["gen_status"] in ("queued", "running"), (st, r.get("detail") or r.get("gen_status")))
+wait_for(lambda: len(FARM["batches"]) == 2, "second batch")
+t2 = wait_for(lambda: (x := admin.call("GET", f"/api/shots/{f2['id']}/request") and next(s for s in admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"] if s["id"] == f2["id"])["takes"][-1])["remote_id"] and x, "job id")
+st, r = admin.call("POST", f"/api/takes/{t2['id']}/cancel", {})
+wait_for(lambda: FARM["deleted"], "delete")
+check("farm: cancel asks the farm to delete the job", st == 200 and FARM["deleted"] == [f"/api/v1/jobs/{t2['remote_id']}"], (st, FARM["deleted"]))
+farm_event({"event": "job.finished", "job": {"id": t2["remote_id"], "ref": f"take-{t2['id']}", "status": "failed", "error": "поздно", "updated": 2000.0}})
+check("farm: event for a cancelled take does not revive it", admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][1]["takes"][-1]["status"] == "cancelled")
+admin.call("PUT", "/api/settings", {"gen_mode": "stub", "public_base_url": ""})
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

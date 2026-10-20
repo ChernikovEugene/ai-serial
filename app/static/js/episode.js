@@ -59,6 +59,17 @@ export async function renderEpisode(id, tab) {
 
 function signature(ep) { return ep.shots.map((s) => `${s.id}:${s.takes.map((t) => t.status).join(",")}:${s.selected_take_id}`).join("|") + ep.status; }
 
+function patchFarm(s) {
+  const prog = $(`#farm-prog-${s.id}`);
+  if (prog) prog.innerHTML = farmProgress(s);
+  const dr = $(`#farm-draft-${s.id}`);
+  if (dr) {
+    const t = farmTake(s);
+    const want = t && t.draft_path && t.status !== "done" ? t.draft_path : "";
+    if ((dr.querySelector("video")?.dataset.src || "") !== want) dr.innerHTML = farmDraft(s); // не перезапускаем играющий черновик
+  }
+}
+
 function schedulePoll() {
   stopEpisodePolling();
   const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status));
@@ -70,6 +81,9 @@ function schedulePoll() {
     if (sig !== E.sig) {
       E.ep = ep; E.sig = sig;
       if (!["script", "main"].includes(E.tab)) { drawTab(); drawHeader(); } // never wipe the text being edited
+    } else {
+      E.ep = ep;
+      ep.shots.forEach(patchFarm); // процент и черновик фермы меняются чаще статуса: обновляем на месте, поля не трогаем
     }
     schedulePoll();
   }, 4000);
@@ -102,6 +116,55 @@ function manualBlock(s) {
     <div class="row" style="margin-top:6px">${s.manual_refs.map((r) => `<a class="btn ghost small" href="${media(r.path)}" download="${esc(r.tag + ext(r.path))}"
         title="${r.kind === "composition" ? "Композиция" : esc(r.name)}">⬇ @${esc(r.tag)}</a>`).join("")}
       <div class="spacer"></div><button class="small" data-act="copymanual">Скопировать промпт</button></div></details>`;
+}
+
+/** Состояние шота на ферме (Пульт): подпись и процент по таблице из документации. Генерация 0–50 %, доводка 50–100 %. */
+function farmTake(s) {
+  const t = s.takes.at(-1);
+  return t && t.provider === "renderfarm" ? t : null;
+}
+
+function farmProgress(s) {
+  const t = farmTake(s);
+  if (!t || !["queued", "running"].includes(t.status)) return "";
+  const pct = Math.round((t.progress || 0) * 100);
+  let label;
+  if (t.stage === "finish") label = t.position > 0 ? "Черновик готов, ждёт доводки" : `Доводка до 1080p — ${pct}%`;
+  else if (t.status === "queued") label = t.position > 0 ? `В очереди: №${t.position}` : /рендер/i.test(t.farm_msg || "") ? "Карта занята рендером, ждём" : "Ожидает свободную карту";
+  else label = `Генерация видео — ${pct}%`;
+  const gen = t.stage === "finish" ? 100 : Math.min(100, pct * 2);
+  const fin = t.stage === "finish" ? Math.max(0, Math.min(100, (pct - 50) * 2)) : 0;
+  return `<div class="farm-prog" title="Генерация 0–50 %, доводка до 1080p 50–100 %">
+    <div class="farm-label small">${esc(label)}${t.status === "running" && pct > 0 && pct < 100 ? ` <span class="muted">· идёт…</span>` : ""}</div>
+    <div class="farm-bar"><span style="width:${gen / 2}%"></span><span class="fin" style="width:${fin / 2}%"></span></div>
+    <div class="farm-parts muted"><span>генерация</span><span>доводка</span></div>
+    ${t.farm_msg ? `<div class="muted small">${esc(t.farm_msg)}</div>` : ""}</div>`;
+}
+
+function farmDraft(s) {
+  const t = farmTake(s);
+  if (!t || !t.draft_path || t.status === "done") return "";
+  return `<div class="small muted">Черновик (быстрее и мыльнее финала, уже со звуком)</div><video src="${media(t.draft_path)}" data-src="${esc(t.draft_path)}" controls preload="metadata"></video>`;
+}
+
+function farmPanel(s) {
+  const ro = can.gen() ? "" : "disabled";
+  const sel = (f, opts) => `<select data-f="${f}" ${ro}>${opts.map(([v, n]) => `<option value="${v}" ${(s[f] || "") === v ? "selected" : ""}>${n}</option>`).join("")}</select>`;
+  return `<div class="farm-box">
+    <div class="row"><label style="margin:0">Ферма: Пульт, MiniMax H3</label><div class="spacer"></div><span class="badge">промпт пишет ферма</span></div>
+    <div class="muted small">Ферма сама собирает промпт по картинкам героя и локации, реплике и действию. Описания она принимает только по-английски:
+      если поля пустые, студия переведёт «Действие», «Камеру» и манеру речи сама перед отправкой. Реплика остаётся русской.</div>
+    <label>Действие по-английски <span class="muted small">(по желанию, иначе переведётся «Действие» слева)</span></label>
+    <textarea data-f="farm_action" rows="2" ${ro} placeholder="she sits at her computer with her headphones and looks into the camera">${esc(s.farm_action || "")}</textarea>
+    <div class="farm-grid">
+      <div><label>Голос по-английски</label><input data-f="farm_voice" value="${esc(s.farm_voice || "")}" ${ro} placeholder="normal calm voice, whisper, excited fast voice"></div>
+      <div><label>Крупность</label>${sel("farm_shot_size", [["", "по умолчанию (medium shot)"], ["medium shot", "средний план"], ["close-up", "крупный план"], ["wide shot", "общий план"]])}</div>
+      <div><label>Качество</label>${sel("farm_quality", [["", "Финал: 1080p, в ролик"], ["draft", "Черновик: пара минут, без доводки"]])}</div>
+      <div><label>Длина клипа</label>${sel("farm_len", [["", "ферма считает по реплике (рекомендуется)"], ["shot", "как в поле «Длина клипа»"]])}</div>
+    </div>
+    <details class="manual-prompt"><summary class="muted small" data-farmreq>Что уйдёт на ферму</summary>
+      <pre class="small" data-farmreq-out>нажмите, чтобы посмотреть</pre></details>
+  </div>`;
 }
 
 function refTag(s, r, i) {
@@ -589,6 +652,7 @@ function shotHtml(s) {
         ${s.takes.length ? `<span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span>` : ""}
         ${s.needs_redo ? `<span class="badge warn">нужна перегенерация</span>` : ""}</div>
       ${s.takes.at(-1)?.error ? `<div class="small err-t">${esc(s.takes.at(-1).error)}</div>` : ""}
+      <div id="farm-prog-${s.id}">${farmProgress(s)}</div><div id="farm-draft-${s.id}">${farmDraft(s)}</div>
       ${sel?.video_path ? `<video src="${media(sel.video_path)}" controls preload="metadata"></video>` : ""}
       ${can.gen() ? `${engineInfo(s.engine).api ? "" : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>`}
            <button data-act="copyprompt">Скопировать промпт</button>
@@ -654,9 +718,9 @@ function shotHtml(s) {
           : `<label class="comp-empty">Перетащите картинку или нажмите — раскадровка, скетч, кадр-образец<input type="file" accept="image/png,image/jpeg,image/webp" data-comp hidden></label>`}
       </div>
       <input data-f="composition_note" value="${esc(s.composition_note)}" placeholder="Пояснение к композиции (по желанию): героиня слева, окно справа…" ${roG} style="margin-top:6px">
-      <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
+      ${s.engine === "renderfarm" ? farmPanel(s) : `      <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
         <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
-      <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>
+      <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>`}
       <label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
       <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${refTag(s, r, i)} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
       ${manualBlock(s)}
@@ -773,6 +837,13 @@ function bindShot(s) {
     if (act === "copymanual") return copyText(s.prompt_manual);
     if (act === "cancel") return cancelTake(s);
   }));
+  const fr = $("[data-farmreq]", el);
+  if (fr) fr.onclick = async () => {
+    const out = $("[data-farmreq-out]", el);
+    out.textContent = "…";
+    const q = await api(`/api/shots/${s.id}/request`);
+    out.textContent = JSON.stringify(q, null, 2);
+  };
 }
 
 // ---------------- history tab ----------------
