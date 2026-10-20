@@ -62,6 +62,9 @@ function signature(ep) { return ep.shots.map((s) => `${s.id}:${s.takes.map((t) =
 function patchFarm(s) {
   const prog = $(`#farm-prog-${s.id}`);
   if (prog) prog.innerHTML = farmProgress(s);
+  const rev = $(`#farm-prog-r-${s.id}`);
+  if (rev) rev.innerHTML = farmProgress(s);
+  $$(`[data-farm-badge="${s.id}"]`).forEach((b) => (b.outerHTML = takeBadge(s)));
   const dr = $(`#farm-draft-${s.id}`);
   if (dr) {
     const t = farmTake(s);
@@ -124,7 +127,7 @@ function farmTake(s) {
   return t && t.provider === "renderfarm" ? t : null;
 }
 
-function farmProgress(s) {
+export function farmProgress(s) {
   const t = farmTake(s);
   if (!t || !["queued", "running"].includes(t.status)) return "";
   const pct = Math.round((t.progress || 0) * 100);
@@ -133,7 +136,7 @@ function farmProgress(s) {
     label = t.farm_ready ? "Отправлено, ждём ферму" : "Готовим шот к отправке";
     if (t.farm_ready) hint = "Пульт забирает шоты раз в 10 секунд. Если ферма выключена или нет связи, шот подождёт и уйдёт сам.";
   } else if (t.farm_err) label = "Ролик ещё не загрузился на сайт, Пульт догрузит";
-  else if (t.stage === "finish") label = t.position > 0 ? "Черновик готов, ждёт доводки" : `Доводка до 1080p — ${pct}%`;
+  else if (t.stage === "finish") label = t.position > 0 ? "Черновик готов, ждёт доводки" : pct >= 100 ? "Доводка закончена, ждём финальный ролик от Пульта" : `Доводка до 1080p — ${pct}%`;
   else if (t.status === "queued") label = t.position > 0 ? `В очереди фермы: №${t.position}` : /рендер|занят/i.test(t.farm_msg || "") ? "Видеокарта занята рендером, ждём" : "Принято фермой, ждёт видеокарту";
   else label = `Генерация видео — ${pct}%`;
   const gen = t.stage === "finish" ? 100 : Math.min(100, pct * 2);
@@ -618,7 +621,9 @@ function drawShots(el) {
 
 export function takeBadge(s) {
   const [label, cls] = TAKE_STATUS[s.gen_status] || [s.gen_status, ""];
-  return `<span class="badge ${cls}">${label}</span>`;
+  const t = farmTake(s);
+  const pct = t && t.status === "running" && !t.farm_err ? Math.round((t.progress || 0) * 100) : 0;  // процент фермы виден и без открытой карточки
+  return `<span class="badge ${cls}" data-farm-badge="${s.id}">${label}${pct > 0 ? ` · ${pct}%` : ""}</span>`;
 }
 
 // варианты камеры: подпись в списке -> текст, который уходит в промпт; первый вариант стоит по умолчанию

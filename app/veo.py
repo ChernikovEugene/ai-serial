@@ -203,12 +203,16 @@ def recover():
     помечаем ошибкой: их надо отправить ещё раз."""
     with db.connect() as c:
         rows = db.rows(c.execute(
-            "SELECT t.id, t.shot_id, t.take_no, t.remote_id, t.remote_path, t.request_path, t.farm_payload, s.episode_id, s.label, s.idx "
+            "SELECT t.id, t.shot_id, t.take_no, t.remote_id, t.remote_path, t.request_path, t.farm_payload, t.farm_final, s.episode_id, s.label, s.idx "
             "FROM takes t JOIN shots s ON s.id=t.shot_id WHERE t.status IN ('queued','running')"))
     settings = db.get_settings()
     for r in rows:
         if r["remote_path"] == "farmhub":  # шоты фермы живут в базе: Пульт сам заберёт шот и пришлёт статусы и ролик
-            if not r["remote_id"] and not r["farm_payload"]:
+            if r["farm_final"]:  # финал уже на сайте, а «готово» от Пульта не дошло
+                with db.connect() as c:
+                    c.execute("UPDATE takes SET progress=1, farm_err='' WHERE id=?", (r["id"],))
+                _finish(r["id"], r["shot_id"], "done", video=r["farm_final"])
+            elif not r["remote_id"] and not r["farm_payload"]:
                 _finish(r["id"], r["shot_id"], "error", "Студия перезапускалась до подготовки шота для фермы: отправьте шот ещё раз")
             continue
         if not r["remote_id"]:
