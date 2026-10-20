@@ -46,6 +46,7 @@ export function stopEpisodePolling() { clearTimeout(E.poll); stopReview(); }
 export async function renderEpisode(id, tab) {
   stopEpisodePolling();
   if (E.id !== id) { E.sel = null; }
+  const again = E.id === id && (!tab || tab === E.tab) && !!$("#ep-tab"); // тот же экран: набранное не должно пропасть
   E.id = id;
   if (tab) E.tab = ["script", "shots", "review", "main", "history"].includes(tab) ? tab : "script";
   const [ep] = await Promise.all([api(`/api/episodes/${id}`), loadAssets()]);
@@ -53,8 +54,45 @@ export async function renderEpisode(id, tab) {
   seenEpisode(id); // уведомление «серия сгенерировалась» прочитано
   if (!E.sel || !ep.shots.some((s) => s.id === E.sel)) E.sel = ep.shots[0]?.id ?? null;
   E.sig = signature(ep);
-  draw();
+  if (again) await redrawKeepingEdits(draw); else draw();
   schedulePoll();
+}
+
+// Перерисовка не должна стирать то, что человек сейчас печатает: текст в полях записывается на «change» (когда он
+// уходит из поля), а страница обновляется сама, пока идёт генерация.
+const TEXT_TYPES = new Set(["", "text", "number", "url", "search", "tel", "email"]);
+const isText = (el) => el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && TEXT_TYPES.has(el.getAttribute("type") || ""));
+const isDirty = (el) => isText(el) && !el.readOnly && !el.disabled && el.value !== el.defaultValue;
+function fieldKey(el) {
+  if (!(el.id || el.dataset.f || el.dataset.d)) return "";
+  return [el.closest("[id^='shot-']")?.id || "", el.id, el.dataset.f || "", el.dataset.d || "", el.closest(".dlg-line")?.dataset.line || ""].join("|");
+}
+const detailsKey = (d) => {
+  const t = d.querySelector(":scope > summary")?.textContent.trim().slice(0, 40);
+  return t ? [d.closest("[id^='shot-']")?.id || "", d.id, t].join("|") : "";
+};
+const typingNow = () => { const a = document.activeElement; return !!a && view().contains(a) && isDirty(a); };
+
+async function redrawKeepingEdits(redraw) {
+  const root = view();
+  const typed = new Map();
+  root.querySelectorAll("textarea, input").forEach((el) => { const k = fieldKey(el); if (k && isDirty(el)) typed.set(k, el.value); });
+  const a = document.activeElement;
+  const focus = a && root.contains(a) && fieldKey(a) ? { key: fieldKey(a), from: a.selectionStart, to: a.selectionEnd } : null;
+  const open = new Map();
+  root.querySelectorAll("details").forEach((d) => { const k = detailsKey(d); if (k) open.set(k, d.open); });
+  const y = window.scrollY;
+  await redraw(); // вкладка «Просмотр» дорисовывается после запроса: восстанавливаем поля, когда она готова
+  root.querySelectorAll("details").forEach((d) => { const k = detailsKey(d); if (open.has(k)) d.open = open.get(k); });
+  root.querySelectorAll("textarea, input").forEach((el) => {
+    const k = fieldKey(el);
+    if (k && typed.has(k)) { el.value = typed.get(k); el.dispatchEvent(new Event("input", { bubbles: true })); } // input: подсветка героев обновится
+    if (focus && k === focus.key) {
+      el.focus();
+      try { el.setSelectionRange(focus.from, focus.to); } catch { /* у поля нет выделения */ }
+    }
+  });
+  window.scrollTo(0, y);
 }
 
 function signature(ep) { return ep.shots.map((s) => `${s.id}:${s.takes.map((t) => t.status).join(",")}:${s.selected_take_id}`).join("|") + ep.status; }
@@ -75,19 +113,18 @@ function patchFarm(s) {
 
 function schedulePoll() {
   stopEpisodePolling();
-  const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status));
+  const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status)) || E.sig !== signature(E.ep); // второе: перерисовка отложена, пока человек печатает
   if (!busy) return;
   E.poll = setTimeout(async () => {
     if (!location.hash.startsWith(`#/episodes/${E.id}`)) return;
     const ep = await api(`/api/episodes/${E.id}`);
     const sig = signature(ep);
-    if (sig !== E.sig) {
-      E.ep = ep; E.sig = sig;
-      if (!["script", "main"].includes(E.tab)) { drawTab(); drawHeader(); } // never wipe the text being edited
-    } else {
-      E.ep = ep;
-      ep.shots.forEach(patchFarm); // процент и черновик фермы меняются чаще статуса: обновляем на месте, поля не трогаем
-    }
+    E.ep = ep;
+    if (sig !== E.sig && ["script", "main"].includes(E.tab)) E.sig = sig; // never wipe the text being edited
+    else if (sig !== E.sig && !typingNow()) {
+      E.sig = sig;
+      await redrawKeepingEdits(() => { drawHeader(); return drawTab(); });
+    } else ep.shots.forEach(patchFarm); // процент и черновик фермы меняются чаще статуса: обновляем на месте, поля не трогаем
     schedulePoll();
   }, 4000);
 }
@@ -101,7 +138,7 @@ function draw() {
     <div id="ep-tab"></div>`;
   $$("[data-tab]").forEach((b) => (b.onclick = () => replaceHash(`#/episodes/${E.id}/${b.dataset.tab}`)));
   drawHeader();
-  drawTab();
+  return drawTab();
 }
 
 // Длины клипа и подсказка для нейросети шота (список приходит с сервера в /api/meta).
