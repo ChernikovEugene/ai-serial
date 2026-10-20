@@ -676,6 +676,12 @@ st, qn = admin.call("GET", f"/api/shots/{n1['id']}/request")
 check("farm: a shot without a hero is no error: only the location picture goes, no hero and no line",
       st == 200 and "location" in qn["body"] and "character" not in qn["body"] and "face" not in qn["body"] and "line" not in qn["body"]
       and not any(w in qn.get("warning", "") for w in ("Нужен герой", "нет картинки")), qn)
+check("farm: for a shot without a hero the action says there is nobody in the frame", qn["body"]["action"].endswith("В кадре нет персонажей и людей. [переведёт ферма]")
+      or "В кадре нет персонажей и людей." in qn["body"]["action"], qn["body"])
+admin.call("PUT", f"/api/shots/{n1['id']}", {"farm_action": "the camera slowly shows the room"})
+st, qn3 = admin.call("GET", f"/api/shots/{n1['id']}/request")
+check("farm: the same in English when the action is in English", qn3["body"]["action"] == "the camera slowly shows the room. No people or characters in the frame.", qn3["body"])
+admin.call("PUT", f"/api/shots/{n1['id']}", {"farm_action": ""})
 st, qn2 = admin.call("GET", f"/api/shots/{n2['id']}/request")
 check("farm: a shot with neither hero nor location is refused with the reason", "нет героя и нет картинки локации" in qn2.get("warning", ""), qn2)
 st, r2 = admin.call("GET", f"/api/shots/{f2['id']}/request")

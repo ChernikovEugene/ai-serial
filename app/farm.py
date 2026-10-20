@@ -115,6 +115,9 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     text = {"action": (shot.get("farm_action") or "").strip() or _mention_names(shot.get("action") or "")}
     if not text["action"].strip():
         errors.append("Нужно описание действия: заполните «Действие» (что происходит в кадре)")
+    elif not chars:  # шот без героя: ферма пишет промпт сама, поэтому явно говорим ей, что людей в кадре нет
+        a = text["action"].rstrip()
+        text["action"] = a + ("" if a[-1] in ".!?…" else ".") + (" В кадре нет персонажей и людей." if CYR.search(a) else " No people or characters in the frame.")
     cam = (shot.get("farm_camera") or "").strip() or (shot.get("camera") or "").strip()
     if cam:
         text["camera"] = cam
