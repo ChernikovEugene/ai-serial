@@ -350,12 +350,24 @@ def init():
                   (datetime.now().date().isoformat(),))
         _migrate_arcs_v2(c)
         _seed_templates(c)
+        renumber_versions(c)  # версии без дыр в номерах (после удалений)
         # метка для промпта (@altushka) у каждого персонажа и локации; старым раздаём по названию
         taken = {r[0] for r in c.execute("SELECT tag FROM assets WHERE tag<>''")}
         for a in c.execute("SELECT id, name, kind FROM assets WHERE tag='' ORDER BY id").fetchall():
             tag = make_tag(a["name"], taken, a["kind"])
             taken.add(tag)
             c.execute("UPDATE assets SET tag=? WHERE id=?", (tag, a["id"]))
+
+
+def renumber_versions(c, asset_id: int | None = None) -> None:
+    """Номера версий без дыр: после удаления версии остальные перенумеровываются по порядку (v1, v2, …),
+    старшинство сохраняется. Без asset_id — у всех персонажей и локаций."""
+    ids = [asset_id] if asset_id else [r[0] for r in c.execute("SELECT id FROM assets")]
+    for aid in ids:
+        vs = c.execute("SELECT id, version_no FROM asset_versions WHERE asset_id=? ORDER BY version_no, id", (aid,)).fetchall()
+        for n, v in enumerate(vs, 1):
+            if v["version_no"] != n:
+                c.execute("UPDATE asset_versions SET version_no=? WHERE id=?", (n, v["id"]))
 
 
 _TRANSLIT = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",

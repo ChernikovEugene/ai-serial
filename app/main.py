@@ -617,6 +617,7 @@ def delete_version(asset_id: int, version_id: int):
         c.execute("UPDATE asset_versions SET parent_version_id=NULL WHERE parent_version_id=?", (version_id,))
         images = json.loads(v["images"] or "[]")
         c.execute("DELETE FROM asset_versions WHERE id=?", (version_id,))
+        db.renumber_versions(c, asset_id)
         still = {p for r in c.execute("SELECT images FROM asset_versions") for p in json.loads(r[0] or "[]")}
     # пересобрать промпты затронутых шотов (кроме закреплённых вручную и выложенных серий)
     ctx = Ctx()

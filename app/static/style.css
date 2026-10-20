@@ -206,14 +206,14 @@ video { width: 100%; border-radius: 8px; background: #000; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
 .tile { cursor: pointer; overflow: hidden; padding: 0; }
 .tile:hover { border-color: var(--accent); }
-.tile .thumb { aspect-ratio: 3/4; background: var(--panel2) center/cover no-repeat; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 40px; }
+.tile .thumb { aspect-ratio: 2/3; background: var(--panel2) center/contain no-repeat; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 40px; }
 .tile .meta { padding: 10px 12px; }
 .tile b { display: block; }
 .handle { cursor: pointer; background: var(--panel2); padding: 2px 8px; border-radius: 6px; }
 .versions { display: flex; flex-direction: column; gap: 8px; }
 .version { display: grid; grid-template-columns: 70px 1fr auto; gap: 12px; align-items: center; }
 .version.active { border-color: var(--accent); }
-.version .vthumb { width: 70px; height: 90px; border-radius: 8px; background: var(--panel2) center/cover no-repeat; }
+.version .vthumb { width: 70px; height: 105px; border-radius: 8px; background: var(--panel2) center/contain no-repeat; }
 .gallery { display: flex; gap: 8px; flex-wrap: wrap; }
 .gallery a { position: relative; }
 .gallery img { height: 180px; border-radius: 10px; border: 1px solid var(--line); }

@@ -741,6 +741,7 @@ st, _ = editor.call("DELETE", f"/api/assets/{alt['id']}/versions/{v1}")
 check("version: editor cannot delete", st == 403, st)
 st, a6 = writer.call("DELETE", f"/api/assets/{alt['id']}/versions/{v1}")
 check("version deleted", st == 200 and [v["id"] for v in a6["versions"]] == [v2], st)
+check("versions renumbered without gaps", a6["versions"][0]["version_no"] == 1, a6["versions"])
 st, e4 = writer.call("GET", f"/api/episodes/{ep4['id']}")
 ch = e4["shots"][0]["characters"]
 check("shots switched to the active version", any(c["asset_id"] == alt["id"] and c["version_id"] == v2 for c in ch), ch)
