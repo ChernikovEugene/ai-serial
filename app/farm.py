@@ -2,14 +2,14 @@
 
 Контракт Пульта: docs/FARMHUB_SITE_API.md. Ферма стоит в сети студии, куда снаружи не зайти, поэтому студия никуда не
 обращается сама: Пульт сам ходит на сайт.
-  1. «Сгенерировать» создаёт дубль и готовит шот (перевод описаний на английский); дубль ждёт ферму;
+  1. «Сгенерировать» создаёт дубль и готовит шот (текст как есть, перевод делает ферма); дубль ждёт ферму;
   2. `GET /api/farmhub/jobs/pending`: Пульт раз в 10 секунд забирает готовые шоты, картинки отдаются ссылками;
   3. `POST /api/farmhub/jobs/{id}/status`: принят, отклонён, старт, проценты, этап, конец (повторы отсекаются по `updated`);
   4. `POST /api/farmhub/jobs/{id}/files`: черновик (`draft`, после генерации) и готовый ролик (`final`, перед `job.finished`).
 Все точки закрыты секретом FARMHUB_SECRET (`Authorization: Bearer`): переменная сервера, а если её нет, поле в
-«Настройки» → «Рендерферма». Описания шота (действие, камера, голос, место) ферма принимает только по-английски, реплика
-остаётся русской. Английский вариант автор вписывает в блоке «Ферма» карточки шота; если в настройках включён «Перевод описаний
-на ферме», русский текст уходит с пометкой `translate: true`, и Пульт переводит его сам (студия ничего не переводит).
+«Настройки» → «Рендерферма». Описания шота (действие, камера, голос, место, стиль) студия отправляет как написал автор, на любом
+языке. Если в них есть русский текст, шот уходит с пометкой `translate: true`, и Пульт переводит его сам (студия ничего не
+переводит и ничего не требует). Автор может по желанию вписать своё английское описание в блоке «Ферма»: оно главнее.
 """
 import hmac
 import json
@@ -28,7 +28,6 @@ DISK_RESERVE_MB = 500
 SHOT_SIZES = ("medium shot", "close-up", "wide shot")
 ASPECTS = ("9:16", "16:9", "1:1", "3:4", "4:3")
 CYR = re.compile(r"[А-Яа-яЁё]")
-STATIC_CAMERA = re.compile(r"\s*(статичн|неподвижн|без движени)", re.I)  # то же, что камера по умолчанию у фермы
 EVENTS = ("job.accepted", "job.rejected", "job.started", "job.progress", "job.requeued", "job.stage", "job.finished")
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="farm")
 _seen = {"at": 0.0}             # когда Пульт в последний раз обращался к студии (память процесса)
@@ -83,10 +82,8 @@ def _mention_names(text: str) -> str:
 def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     """Что из шота пойдёт на ферму: поля, пути картинок, ошибки и предупреждения.
     errors — отправить нельзя; warnings — отправить можно, но автору стоит знать.
-    Русский текст вне реплики ферма принимает только вместе с `translate: true` (перевод на ферме, см. настройки);
-    без этого действие обязано быть по-английски, а русские камера, голос и место просто не отправляются."""
+    Текст описаний уходит как есть, на любом языке: русский переводит ферма (см. needs_translation и build)."""
     errors, warns = [], []
-    tmode = translate_on_farm(settings)
     mode = shot.get("sound_mode") or ("off" if shot.get("sound_off") else "full")
     lines = [d for d in shot.get("dialogue") or [] if d.get("voice") != "voiceover" and (d.get("text") or "").strip()]
     line = lines[0] if lines and mode == "full" else None
@@ -114,24 +111,13 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     text = {"action": (shot.get("farm_action") or "").strip() or _mention_names(shot.get("action") or "")}
     if not text["action"].strip():
         errors.append("Нужно описание действия: заполните «Действие» (если действия нет, напишите, что персонаж просто смотрит в камеру)")
-    elif CYR.search(text["action"]) and not tmode:
-        errors.append("Действие написано по-русски, а ферма принимает его по-английски: впишите английский вариант в блоке «Ферма» "
-                      "(«Действие по-английски») или включите «Перевод описаний на ферме» в «Настройки»")
     cam = (shot.get("farm_camera") or "").strip() or (shot.get("camera") or "").strip()
-    if cam and CYR.search(cam) and not tmode:
-        if not STATIC_CAMERA.match(cam):
-            warns.append(f"Камера «{cam}» написана по-русски и на ферму не уйдёт (камера будет статичной): впишите английский вариант в блоке «Ферма»")
-        cam = ""
     if cam:
         text["camera"] = cam
     voice = (shot.get("farm_voice") or "").strip()
     if not voice and line:
         paren, lib = (line.get("parenthetical") or "").strip(), ((pick[1] or {}).get("voice") or "").strip() if pick else ""
         voice = " ".join(x for x in (paren, lib) if x)
-        if voice and CYR.search(voice) and not tmode:  # голос по умолчанию у фермы нормальный и спокойный
-            if CYR.search(paren):
-                warns.append(f"Интонация «{paren}» написана по-русски и на ферму не уйдёт: впишите английский вариант («Голос по-английски») в блоке «Ферма»")
-            voice = ""
     if voice:
         text["voice"] = voice
 
@@ -146,9 +132,6 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
             loc_text = f"{(a_map.get(lv['asset_id']) or {}).get('name', '')}. {lv.get('description') or ''}".strip(" .")
         elif shot.get("scene"):
             loc_text = shot["scene"]
-    if loc_text and CYR.search(loc_text) and not tmode:
-        warns.append(f"Локация «{loc_text[:60]}» описана словами по-русски и на ферму не уйдёт: добавьте ей картинку в библиотеке")
-        loc_text = ""
     if loc_text:
         text["location"] = loc_text
 
@@ -161,7 +144,7 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     if settings.get("aspect_ratio") in ASPECTS and settings["aspect_ratio"] != "9:16":
         fields["aspect"] = settings["aspect_ratio"]
     style = (settings.get("style") or "").strip()
-    if style and (tmode or not CYR.search(style)):
+    if style:
         fields["style"] = style
     if shot.get("farm_len") == "shot" and shot.get("duration"):
         fields["seconds"] = max(1, min(10, int(shot["duration"])))
@@ -173,13 +156,16 @@ def warnings(shot: dict, v_map: dict, a_map: dict, settings: dict) -> list[str]:
     return [*p["errors"], *p["warnings"]]
 
 
-def translate_on_farm(settings: dict) -> bool:
-    return settings.get("farmhub_translate") == "farm"
+TEXT_KEYS = ("action", "camera", "voice", "location_text", "style")  # описания шота: если в них русский, их переводит ферма
+
+
+def needs_translation(shot: dict) -> bool:
+    return any(CYR.search(str(v)) for k, v in shot.items() if k in TEXT_KEYS)
 
 
 def build(p: dict, ref: str, settings: dict) -> dict:
     """Готовый шот для Пульта; пути картинок остаются путями, ссылки на них строятся при выдаче.
-    Русский текст (если он остался) уходит с `translate: true`: перевод делает Пульт."""
+    Русский текст в описаниях уходит как есть с `translate: true`: перевод делает Пульт."""
     if p["errors"]:
         raise FarmError("; ".join(p["errors"]))
     shot = {k: v for k, v in p["fields"].items() if v is not None}
@@ -190,7 +176,7 @@ def build(p: dict, ref: str, settings: dict) -> dict:
             shot[k] = p["text"][k]
     if p["text"].get("location"):
         shot["location_text"] = p["text"]["location"]
-    if any(CYR.search(v) for k, v in shot.items() if k in ("action", "camera", "voice", "location_text", "style")):
+    if needs_translation(shot):
         shot["translate"] = True
     for k, rel in p["images"].items():
         if not (db.MEDIA_DIR / rel).is_file():
@@ -201,12 +187,11 @@ def build(p: dict, ref: str, settings: dict) -> dict:
 def preview(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     """Что уйдёт на ферму, читаемо (картинки по именам файлов, русские описания помечены: их переведёт ферма)."""
     p = plan(shot, v_map, a_map, settings)
-    tmode = translate_on_farm(settings)
     body = {**{k: v for k, v in p["fields"].items() if v is not None},
-            **{("location_text" if k == "location" else k): (f"{v}  [переведёт ферма]" if tmode and CYR.search(v) else v)
+            **{("location_text" if k == "location" else k): (f"{v}  [переведёт ферма]" if CYR.search(v) else v)
                for k, v in p["text"].items()},
             **{k: f"<ссылка на картинку {rel}>" for k, rel in p["images"].items()}}
-    if tmode and any(CYR.search(v) for v in p["text"].values()):
+    if needs_translation({**p["fields"], **{("location_text" if k == "location" else k): v for k, v in p["text"].items()}}):
         body["translate"] = True
     out = {"model": "Рендерферма (Пульт, MiniMax H3)", "url": "GET /api/farmhub/jobs/pending (шот забирает Пульт)", "body": body}
     if not secret(settings):

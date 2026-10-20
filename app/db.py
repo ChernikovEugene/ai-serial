@@ -247,7 +247,6 @@ DEFAULT_SETTINGS = {
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
     "farmhub_secret": "",            # Рендерферма: секрет, которым Пульт открывает точки /api/farmhub/…; переменная сервера FARMHUB_SECRET главнее
-    "farmhub_translate": "",         # "farm": русские описания шота уходят на ферму с translate:true, переводит Пульт; пусто: автор пишет по-английски
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",
     "aspect_ratio": "9:16",

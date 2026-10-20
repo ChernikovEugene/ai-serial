@@ -62,12 +62,8 @@ export async function renderSettings() {
       <p class="muted small">Секрет владелец Пульта берёт в файле <code>site-credentials.txt</code> (строка <code>FARMHUB_SECRET=…</code>) и передаёт напрямую, в чаты его не присылают.
         Его же можно задать переменной сервера <code>FARMHUB_SECRET</code>: она главнее поля. Пульт ходит на <code>${esc((s.public_base_url || location.origin).replace(/\/$/, ""))}/api/farmhub/…</code>.
         ${farmSeen(s)}</p>
-      <label>Описания шота (действие, камера, голос, место)</label>
-      <select data-k="farmhub_translate" ${ro}>
-        <option value="" ${s.farmhub_translate ? "" : "selected"}>Пишу по-английски сам: поле «Действие по-английски» в блоке «Ферма»</option>
-        <option value="farm" ${s.farmhub_translate === "farm" ? "selected" : ""}>Переводит ферма: русский текст уходит с пометкой translate (Пульт должен это уметь)</option></select>
-      <p class="muted small">Ферма принимает описания только по-английски, реплика остаётся русской. Если выбрано «Переводит ферма», студия отправит русский текст как есть, а перевод сделает Пульт;
-        пока Пульт этого не умеет, он отклонит такой шот с причиной, поэтому оставляйте «Пишу по-английски сам».</p>
+      <p class="muted small">Описания шота (действие, камера, голос, место) студия отправляет как написаны, на любом языке: русский текст идёт с пометкой <code>translate</code>, и Пульт переводит его сам,
+        реплика остаётся русской. Другие нейросети (Magnific и др.) это не затрагивает. Пока Пульт перевод не умеет, он вернёт шот с причиной в карточке.</p>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">GitHub (отправка заявок в правки Claude)</h2>

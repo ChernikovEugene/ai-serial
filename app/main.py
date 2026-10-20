@@ -1872,7 +1872,7 @@ class ShotPatch(BaseModel):
     sound_mode: str | None = None
     no_characters: bool | None = None
     voiceover: bool | None = None
-    farm_action: str | None = None     # «Ферма»: описание действия по-английски (пусто: берётся «Действие», по-русски оно уйдёт только при переводе на ферме)
+    farm_action: str | None = None     # «Ферма»: своё описание действия по-английски (не обязательно; пусто: уходит «Действие» как есть, русский переведёт ферма)
     farm_voice: str | None = None      # голос по-английски: normal calm voice, whisper…
     farm_camera: str | None = None     # камера по-английски: slow push-in…
     farm_shot_size: str | None = None  # medium shot | close-up | wide shot
@@ -1942,8 +1942,8 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         raise HTTPException(400, "Неизвестное значение настройки фермы")
     for k in ("farm_action", "farm_voice", "farm_camera"):
         if data.get(k) and farm.CYR.search(data[k]):
-            raise HTTPException(400, "В этих полях ферме нужен английский: русский текст модель читает вслух. "
-                                     "Оставьте поле пустым, если не нужно")
+            raise HTTPException(400, "Это поле для своего английского текста. Русский пишите в обычных полях шота («Действие», «Камера»): "
+                                     "ферма переведёт его сама. Если поле не нужно, оставьте его пустым")
     for k, v in data.items():
         if v is not None or k == "location_version_id":
             s[k] = v
