@@ -1,6 +1,7 @@
 """Video generation. Every run creates a take (дубль) for the shot.
 Where the shot goes is decided by models.route(): `stub` writes the exact request to disk and calls nothing;
-`magnific` sends it to Magnific API (all models, see app/models.py); `google` calls the Gemini API (Veo 3 / 3.1)."""
+`magnific` sends it to Magnific API (all models, see app/models.py); `google` calls the Gemini API (Veo 3 / 3.1);
+`renderfarm` goes to the studio render farm through app/farm.py (a whole episode in one request)."""
 import base64
 import json
 import mimetypes
@@ -112,11 +113,13 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
         (db.MEDIA_DIR / req_rel).write_text(json.dumps(preview(shot, refs, settings), ensure_ascii=False, indent=2), "utf-8")
         where = models.route(shot.get("engine"), settings)
 
+        if where == "renderfarm":  # шоты фермы уходят пачкой через farm.start_many, сюда они не попадают
+            raise RuntimeError("Шоты рендерфермы отправляются через farm.start_many")
         if where in ("stub", "manual"):
             time.sleep(1.5)
             _finish(take_id, shot_id, "stub", "Заглушка: запрос сохранён, видео не создавалось", request=req_rel)
             return
-        if where in ("magnific", "renderfarm"):
+        if where == "magnific":
             tid, path = models.create(shot, refs, settings)
             _remember(take_id, tid, path)
             _wait_magnific(take_id, shot_id, base, tid, path, settings, req_rel)
@@ -186,7 +189,7 @@ def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
         req = models.build(shot, refs, settings, inline=False)
     except RuntimeError as e:
         return {"model": models.spec(engine)["name"], "error": str(e)}
-    out = {"model": models.spec(engine)["name"], "url": req["base"] + req["path"], "body": req["body"]}
+    out = {"model": models.spec(engine)["name"], "url": models.API_BASE + req["path"], "body": req["body"]}
     if warn := models.link_warning(shot, refs, settings):
         out["warning"] = warn
     return out
@@ -202,6 +205,8 @@ def recover():
             "FROM takes t JOIN shots s ON s.id=t.shot_id WHERE t.status IN ('queued','running')"))
     settings = db.get_settings()
     for r in rows:
+        if r["remote_path"] == "farmhub":
+            continue  # шоты фермы ждёт farm.poll_once: он забирает состояние из пачки на ферме
         if not r["remote_id"]:
             _finish(r["id"], r["shot_id"], "error", "Студия перезапускалась до отправки в нейросеть: отправьте шот ещё раз")
             continue
@@ -219,14 +224,17 @@ def _resume(r: dict, base: str, settings: dict):
         _finish(r["id"], r["shot_id"], "error", str(e))
 
 
-def cancel(take_id: int) -> bool:
+def cancel(take_id: int, notify_farm: bool = True) -> bool:
     """Отмена дубля: студия перестаёт ждать результат. Задачу, которая уже ушла в нейросеть, та может всё равно
     доделать (и списать кредиты), но в студию такой ролик уже не попадёт."""
     with db.connect() as c:
-        t = c.execute("SELECT shot_id, status FROM takes WHERE id=?", (take_id,)).fetchone()
+        t = c.execute("SELECT shot_id, status, provider, remote_id FROM takes WHERE id=?", (take_id,)).fetchone()
         if not t or t["status"] not in ("queued", "running"):
             return False
         c.execute("UPDATE takes SET status='cancelled', error='Генерация отменена', finished_at=? WHERE id=?",
                   (db.now(), take_id))
         _after_take(c, take_id, t["shot_id"], "cancelled")
+    if notify_farm and t["provider"] == "renderfarm" and t["remote_id"]:
+        from . import farm
+        farm.cancel_job(t["remote_id"], db.get_settings())
     return True

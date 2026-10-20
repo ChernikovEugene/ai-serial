@@ -786,3 +786,15 @@ textarea.need { border-color: var(--warn); }
 .cal-ribbon.last { margin-right: 0; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
 .cal-ribbon:hover { background: color-mix(in srgb, var(--a) 34%, transparent); }
 @media (max-width: 800px) { .cal-ribbon { margin: 0; border-radius: 6px; } }
+
+/* Рендерферма (Пульт): блок в карточке шота и полоса прогресса «генерация 0–50 % + доводка 50–100 %» */
+.farm-box { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
+.farm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.farm-grid select, .farm-grid input { width: 100%; }
+@media (max-width: 700px) { .farm-grid { grid-template-columns: 1fr; } }
+.farm-box pre { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; margin: 6px 0 0; }
+.farm-prog { margin: 4px 0; }
+.farm-bar { display: flex; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin-top: 4px; }
+.farm-bar span { display: block; background: var(--accent2); transition: width .4s; }
+.farm-bar span.fin { background: var(--ok); }
+.farm-parts { display: flex; justify-content: space-between; font-size: 10px; padding: 2px 2px 0; }

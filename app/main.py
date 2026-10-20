@@ -1,3 +1,4 @@
+import os
 import hmac
 import shutil
 import json
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, breakdown, db, exporter, feedback, models, schedule, veo
+from . import auth, breakdown, db, exporter, farm, feedback, models, schedule, veo
 from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -52,13 +53,14 @@ HOLIDAYS = {
 
 db.init()
 veo.recover()
+farm.start_poller()
 exporter.recover()
 app = FastAPI(title="Студия сериала")
 
 
 # ---------- auth middleware ----------
 
-OPEN_PATHS = ("/api/auth/",)
+OPEN_PATHS = ("/api/auth/", "/api/farmhub/webhook")  # вебхук фермы ходит без входа, его защищает подпись
 VIEWER_WRITE_OK = re.compile(r"^/api/(episodes/\d+/comments|comments/\d+|auth/.*|reports|notifications/seen)$")
 
 
@@ -365,6 +367,8 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
                          "«↻ пересобрать» соберёт его заново")
     if link := models.link_warning(s, refs, ctx.settings):
         warns.append(link)
+    if s.get("engine") == "renderfarm":
+        warns.extend(farm.warnings(s, ctx.v_map, ctx.a_map, ctx.settings))
     if not m["audio"] and sound_mode(s) != "off" and models.has_api(s.get("engine")):
         warns.append(f"{m['name']} не делает звук: видео придёт без звука, "
                      + ("фон" if sound_mode(s) == "ambient" else "речь и фон") + " придётся добавить на монтаже")
@@ -388,11 +392,13 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
 
 SHOT_COLS = ["idx", "label", "scene", "duration", "est_seconds", "speech_seconds", "words", "camera", "action",
              "dialogue", "characters", "location_version_id", "location_mode", "location_text", "composition_image",
-             "composition_mode", "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "sound_mode", "no_characters", "voiceover"]
+             "composition_mode", "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "sound_mode", "no_characters", "voiceover",
+             "farm_action", "farm_voice", "farm_shot_size", "farm_quality", "farm_len"]
 
 
 def save_shot(c, s: dict):
-    vals = [db.dumps(s[k]) if k in ("dialogue", "characters") else s.get(k) for k in SHOT_COLS]
+    vals = [db.dumps(s[k]) if k in ("dialogue", "characters") else (s.get(k) or "" if k.startswith("farm_") else s.get(k))
+            for k in SHOT_COLS]
     vals = [int(v) if isinstance(v, bool) else v for v in vals]
     if s.get("id"):
         c.execute(f"UPDATE shots SET {', '.join(f'{k}=?' for k in SHOT_COLS)}, updated_at=? WHERE id=?",
@@ -1720,6 +1726,8 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
     force = g.force and request.state.user["role"] == "admin"
     started = skipped = uploaded = 0
     unready = []
+    farm_items = []  # шоты рендерфермы уходят одним запросом
+    ctx = Ctx() if any(s["engine"] == "renderfarm" for s in ep["shots"]) else None
     for s in ep["shots"]:
         busy = s["gen_status"] in ("queued", "running")
         if busy:
@@ -1738,12 +1746,19 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
         if not s["ready"] and not force:  # защита от пустых шотов: незаполненное в нейросеть не уходит
             unready.append({"id": s["id"], "label": s["label"], "items": unready_items(s)})
             continue
-        veo.start(s, s["references"], settings, uid(request), "отправлено продюсером с незаполненными пунктами" if not s["ready"] else "")
+        why = "отправлено продюсером с незаполненными пунктами" if not s["ready"] else ""
+        if s["engine"] == "renderfarm":
+            farm_items.append((s, ctx.v_map, ctx.a_map))
+            continue
+        veo.start(s, s["references"], settings, uid(request), why)
         started += 1
+    started += len(farm_items)
     if started:
         with db.connect() as c:
             c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=?", (db.now(), eid))
         db.log(eid, uid(request), f"Отправлено в генерацию шотов: {started}")
+    if farm_items:  # статус серии уже «Генерация»: если ферма отклонит шоты сразу, серия сама перейдёт дальше
+        farm.start_many(farm_items, settings, uid(request), "отправлено продюсером с незаполненными пунктами" if any(not x[0]["ready"] for x in farm_items) else "")
     return {"started": started, "skipped": skipped, "uploaded": uploaded, "unready": unready}
 
 
@@ -1779,6 +1794,11 @@ class ShotPatch(BaseModel):
     sound_mode: str | None = None
     no_characters: bool | None = None
     voiceover: bool | None = None
+    farm_action: str | None = None     # «Ферма»: описание действия по-английски (пусто: студия переведёт «Действие» сама)
+    farm_voice: str | None = None      # голос по-английски: normal calm voice, whisper…
+    farm_shot_size: str | None = None  # medium shot | close-up | wide shot
+    farm_quality: str | None = None    # final | draft
+    farm_len: str | None = None        # "" — длину считает ферма по реплике, "shot" — берём «Длину клипа» шота
 
 
 def load_shot(sid: int) -> dict:
@@ -1802,7 +1822,7 @@ def shot_response(sid: int) -> dict:
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
                        "location_mode", "location_text", "sound_off", "sound_mode", "no_characters", "voiceover"}
 EDITOR_SHOT_FIELDS = {"sound_off", "sound_mode", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
-                      "prompt_locked", "needs_redo", "engine"}
+                      "prompt_locked", "needs_redo", "engine", "farm_action", "farm_voice", "farm_shot_size", "farm_quality", "farm_len"}
 
 
 @app.put("/api/shots/{sid}")
@@ -1838,6 +1858,13 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         raise HTTPException(400, "Неизвестный способ задать локацию")
     if data.get("composition_mode") not in (None, "reference", "first_frame"):
         raise HTTPException(400, "Неизвестный режим композиции")
+    if data.get("farm_shot_size") not in (None, "", *farm.SHOT_SIZES) or data.get("farm_quality") not in (None, "", "draft", "final") \
+            or data.get("farm_len") not in (None, "", "shot"):
+        raise HTTPException(400, "Неизвестное значение настройки фермы")
+    for k in ("farm_action", "farm_voice"):
+        if data.get(k) and farm.CYR.search(data[k]):
+            raise HTTPException(400, "Ферма принимает описание и голос только по-английски: русский текст модель читает вслух. "
+                                     "Оставьте поле пустым, и студия переведёт «Действие» сама")
     for k, v in data.items():
         if v is not None or k == "location_version_id":
             s[k] = v
@@ -1912,6 +1939,9 @@ def rebuild_prompt(sid: int):
 @app.get("/api/shots/{sid}/request")
 def shot_request(sid: int):
     s = shot_response(sid)
+    if s["engine"] == "renderfarm":
+        ctx = Ctx()
+        return farm.preview(s, ctx.v_map, ctx.a_map, ctx.settings)
     return veo.preview(s, s["references"], db.get_settings())
 
 
@@ -1953,10 +1983,14 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
     if not s["ready"] and not (g.force and request.state.user["role"] == "admin"):
         raise HTTPException(400, f"Шот {s['label']} не заполнен: " + "; ".join(unready_items(s))
                                  + ". Если пункт не нужен, закройте его явно («-», «без персонажей»).")
-    veo.start(s, s["references"], db.get_settings(), uid(request), g.reason)
     with db.connect() as c:
         c.execute("UPDATE episodes SET status='generating', updated_at=? WHERE id=? AND status NOT IN ('posted')",
                   (db.now(), s["episode_id"]))
+    if s["engine"] == "renderfarm":
+        ctx = Ctx()
+        farm.start_many([(s, ctx.v_map, ctx.a_map)], ctx.settings, uid(request), g.reason)
+    else:
+        veo.start(s, s["references"], db.get_settings(), uid(request), g.reason)
     note = f" — причина: {g.reason.strip()}" if g.reason.strip() else ""
     db.log(s["episode_id"], uid(request), f"Шот {s['label']}: новый дубль (№{len(s['takes']) + 1}) отправлен в {ENGINE_NAMES.get(s['engine'], s['engine'])}{note}")
     return shot_response(sid)
@@ -2378,7 +2412,7 @@ def delete_template(tid: int):
 
 # ---------- settings ----------
 
-SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key")
+SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_api_key", "farmhub_webhook_secret", "anthropic_api_key")
 PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
@@ -2388,6 +2422,8 @@ def read_settings():
     s.pop("media_secret", None)
     for k in SECRET_SETTINGS:
         s[k] = ("••••" + s[k][-4:]) if s.get(k) else ""
+    s["farmhub_env"] = {k: bool(os.environ.get(v)) for k, v in (("url", "FARMHUB_API_URL"), ("key", "FARMHUB_API_KEY"),
+                        ("secret", "FARMHUB_WEBHOOK_SECRET"), ("translate", "ANTHROPIC_API_KEY"))}  # что задано переменными сервера
     return s
 
 
@@ -2403,6 +2439,26 @@ def write_settings(values: dict):
     if PROMPT_SETTINGS & values.keys():
         refresh_all_prompts()
     return read_settings()
+
+
+# ---------- рендерферма: события Пульта ----------
+
+@app.post("/api/farmhub/webhook")
+async def farmhub_webhook(request: Request):
+    """События Пульта (статус, процент, черновик, готовый ролик). Без входа в студию: подлинность — по подписи HMAC-SHA256
+    от сырого тела запроса секретом FARMHUB_WEBHOOK_SECRET."""
+    body = await request.body()
+    secret = farm.config(db.get_settings())["secret"]
+    if not secret:
+        return JSONResponse({"detail": "Секрет webhook не задан (FARMHUB_WEBHOOK_SECRET)"}, status_code=503)
+    if not farm.valid_signature(secret, body, request.headers.get("X-FarmHub-Signature", "")):
+        return JSONResponse({"detail": "Неверная подпись"}, status_code=401)
+    try:
+        event = json.loads(body)
+    except ValueError:
+        return JSONResponse({"detail": "Не JSON"}, status_code=400)
+    farm.handle_event(event)  # отвечаем сразу, обработка и скачивание роликов в фоне
+    return Response(status_code=200)
 
 
 # ---------- API keys of neural networks ----------

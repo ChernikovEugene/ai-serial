@@ -120,6 +120,11 @@ TABLES = {
         sound_mode TEXT NOT NULL DEFAULT '',
         no_characters INTEGER NOT NULL DEFAULT 0,
         voiceover INTEGER NOT NULL DEFAULT 0,
+        farm_action TEXT NOT NULL DEFAULT '',
+        farm_voice TEXT NOT NULL DEFAULT '',
+        farm_shot_size TEXT NOT NULL DEFAULT '',
+        farm_quality TEXT NOT NULL DEFAULT '',
+        farm_len TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT ''""",
     "integrations": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +149,22 @@ TABLES = {
         reason TEXT NOT NULL DEFAULT '',
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT '',
-        finished_at TEXT""",
+        finished_at TEXT,
+        batch_id TEXT NOT NULL DEFAULT '',
+        stage TEXT NOT NULL DEFAULT '',
+        progress REAL NOT NULL DEFAULT 0,
+        position INTEGER NOT NULL DEFAULT 0,
+        farm_msg TEXT NOT NULL DEFAULT '',
+        draft_path TEXT NOT NULL DEFAULT '',
+        farm_updated REAL NOT NULL DEFAULT 0""",
+    "farm_uploads": """
+        hash TEXT PRIMARY KEY,
+        upload_id TEXT NOT NULL,
+        created_at REAL NOT NULL DEFAULT 0""",
+    "translations": """
+        hash TEXT PRIMARY KEY,
+        result TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT ''""",
     "comments": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
@@ -230,9 +250,10 @@ DEFAULT_SETTINGS = {
     "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
-    "renderfarm_base_url": "https://api.minimax.io",  # Рендерферма: MiniMax video API (ключ — в «Нейросети и API-ключи»)
-    "renderfarm_model": "MiniMax-H3",                  # MiniMax-H3 (768P / 2K) или MiniMax-H3-Max (480P / 768P)
-    "renderfarm_resolution": "768P",
+    "farmhub_api_url": "",           # Рендерферма (Пульт): адрес API, ключ и секрет webhook; переменные сервера FARMHUB_* главнее
+    "farmhub_api_key": "",
+    "farmhub_webhook_secret": "",
+    "anthropic_api_key": "",         # перевод описаний шота на английский перед отправкой на ферму (или переменная ANTHROPIC_API_KEY)
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",
     "aspect_ratio": "9:16",
