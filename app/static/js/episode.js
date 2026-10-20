@@ -156,13 +156,17 @@ function farmPanel(s) {
   const sel = (f, opts) => `<select data-f="${f}" ${ro}>${opts.map(([v, n]) => `<option value="${v}" ${(s[f] || "") === v ? "selected" : ""}>${n}</option>`).join("")}</select>`;
   return `<div class="farm-box">
     <div class="row"><label style="margin:0">Ферма: Пульт, MiniMax H3</label><div class="spacer"></div><span class="badge">промпт пишет ферма</span></div>
-    <div class="muted small">Ферма сама собирает промпт по картинкам героя и локации, реплике и действию. Описания она принимает только по-английски:
-      если поля пустые, студия переведёт «Действие», «Камеру» и манеру речи сама перед отправкой. Реплика остаётся русской.
-      Шот забирает Пульт: «Отменить» в студии снимает шот с очереди, а уже принятый фермой шот остановить можно только в Пульте.</div>
-    <label>Действие по-английски <span class="muted small">(по желанию, иначе переведётся «Действие» слева)</span></label>
-    <textarea data-f="farm_action" rows="2" ${ro} placeholder="she sits at her computer with her headphones and looks into the camera">${esc(s.farm_action || "")}</textarea>
+    <div class="muted small">Ферма сама собирает промпт по картинкам героя и локации, реплике и действию. Пишите «Действие», «Камеру» и интонацию как обычно, на любом языке:
+      русский текст ферма переведёт сама. Шот забирает Пульт: «Отменить» в студии снимает шот с очереди, а уже принятый фермой шот остановить можно только в Пульте.</div>
+    <details class="manual-prompt"><summary class="muted small">Своё описание по-английски (не обязательно)</summary>
+      <div class="muted small">Если вписать английский текст, на ферму уйдёт он, а не русский.</div>
+      <label>Действие по-английски</label>
+      <textarea data-f="farm_action" rows="2" ${ro} placeholder="she sits at her computer with her headphones and looks into the camera">${esc(s.farm_action || "")}</textarea>
+      <div class="farm-grid">
+        <div><label>Голос по-английски</label><input data-f="farm_voice" value="${esc(s.farm_voice || "")}" ${ro} placeholder="normal calm voice, whisper, excited fast voice"></div>
+        <div><label>Камера по-английски</label><input data-f="farm_camera" value="${esc(s.farm_camera || "")}" ${ro} placeholder="static camera, slow push-in"></div>
+      </div></details>
     <div class="farm-grid">
-      <div><label>Голос по-английски</label><input data-f="farm_voice" value="${esc(s.farm_voice || "")}" ${ro} placeholder="normal calm voice, whisper, excited fast voice"></div>
       <div><label>Крупность</label>${sel("farm_shot_size", [["", "по умолчанию (medium shot)"], ["medium shot", "средний план"], ["close-up", "крупный план"], ["wide shot", "общий план"]])}</div>
       <div><label>Качество</label>${sel("farm_quality", [["", "Финал: 1080p, в ролик"], ["draft", "Черновик: пара минут, без доводки"]])}</div>
       <div><label>Длина клипа</label>${sel("farm_len", [["", "ферма считает по реплике (рекомендуется)"], ["shot", "как в поле «Длина клипа»"]])}</div>

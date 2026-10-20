@@ -402,7 +402,7 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
 SHOT_COLS = ["idx", "label", "scene", "duration", "est_seconds", "speech_seconds", "words", "camera", "action",
              "dialogue", "characters", "location_version_id", "location_mode", "location_text", "composition_image",
              "composition_mode", "composition_note", "prompt", "negative_prompt", "prompt_locked", "selected_take_id", "needs_redo", "engine", "sound_off", "sound_mode", "no_characters", "voiceover",
-             "farm_action", "farm_voice", "farm_shot_size", "farm_quality", "farm_len"]
+             "farm_action", "farm_voice", "farm_camera", "farm_shot_size", "farm_quality", "farm_len"]
 
 
 def save_shot(c, s: dict):
@@ -1872,8 +1872,9 @@ class ShotPatch(BaseModel):
     sound_mode: str | None = None
     no_characters: bool | None = None
     voiceover: bool | None = None
-    farm_action: str | None = None     # «Ферма»: описание действия по-английски (пусто: студия переведёт «Действие» сама)
+    farm_action: str | None = None     # «Ферма»: своё описание действия по-английски (не обязательно; пусто: уходит «Действие» как есть, русский переведёт ферма)
     farm_voice: str | None = None      # голос по-английски: normal calm voice, whisper…
+    farm_camera: str | None = None     # камера по-английски: slow push-in…
     farm_shot_size: str | None = None  # medium shot | close-up | wide shot
     farm_quality: str | None = None    # final | draft
     farm_len: str | None = None        # "" — длину считает ферма по реплике, "shot" — берём «Длину клипа» шота
@@ -1900,7 +1901,7 @@ def shot_response(sid: int) -> dict:
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
                        "location_mode", "location_text", "sound_off", "sound_mode", "no_characters", "voiceover"}
 EDITOR_SHOT_FIELDS = {"sound_off", "sound_mode", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
-                      "prompt_locked", "needs_redo", "engine", "farm_action", "farm_voice", "farm_shot_size", "farm_quality", "farm_len"}
+                      "prompt_locked", "needs_redo", "engine", "farm_action", "farm_voice", "farm_camera", "farm_shot_size", "farm_quality", "farm_len"}
 
 
 @app.put("/api/shots/{sid}")
@@ -1939,10 +1940,10 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
     if data.get("farm_shot_size") not in (None, "", *farm.SHOT_SIZES) or data.get("farm_quality") not in (None, "", "draft", "final") \
             or data.get("farm_len") not in (None, "", "shot"):
         raise HTTPException(400, "Неизвестное значение настройки фермы")
-    for k in ("farm_action", "farm_voice"):
+    for k in ("farm_action", "farm_voice", "farm_camera"):
         if data.get(k) and farm.CYR.search(data[k]):
-            raise HTTPException(400, "Ферма принимает описание и голос только по-английски: русский текст модель читает вслух. "
-                                     "Оставьте поле пустым, и студия переведёт «Действие» сама")
+            raise HTTPException(400, "Это поле для своего английского текста. Русский пишите в обычных полях шота («Действие», «Камера»): "
+                                     "ферма переведёт его сама. Если поле не нужно, оставьте его пустым")
     for k, v in data.items():
         if v is not None or k == "location_version_id":
             s[k] = v
@@ -2490,7 +2491,7 @@ def delete_template(tid: int):
 
 # ---------- settings ----------
 
-# farmhub_api_key и farmhub_webhook_secret: прежняя схема связи с фермой; значения, если их успели вписать, остаются в базе и не отдаются
+# farmhub_api_key, farmhub_webhook_secret и anthropic_api_key: прежние схемы связи с фермой и перевода; значения, если их успели вписать, остаются в базе и не отдаются
 SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_secret", "farmhub_api_key", "farmhub_webhook_secret", "anthropic_api_key")
 PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
@@ -2501,7 +2502,7 @@ def read_settings():
     s.pop("media_secret", None)
     for k in SECRET_SETTINGS:
         s[k] = ("••••" + s[k][-4:]) if s.get(k) else ""
-    s["farmhub_env"] = {k: bool(os.environ.get(v)) for k, v in (("secret", "FARMHUB_SECRET"), ("translate", "ANTHROPIC_API_KEY"))}  # что задано переменными сервера
+    s["farmhub_env"] = {"secret": bool(os.environ.get("FARMHUB_SECRET"))}  # что задано переменными сервера
     s["farmhub_seen"] = farm.seen_ago()  # секунд назад Пульт в последний раз обращался к студии (пусто: с запуска не обращался)
     return s
 
