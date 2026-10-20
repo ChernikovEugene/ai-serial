@@ -1,6 +1,6 @@
 // «Просмотр и правки»: вся серия одним роликом в рамке соцсети, указатель шота на таймлайне, правки по точкам времени.
 import { $, $$, api, can, engineName, postTextFor, esc, fmtDateTime, media, state, toast } from "./core.js";
-import { E, TAKE_STATUS, archiveButton, cancelTake, drawHeader, renderEpisode, soundMode, takeBadge, videoTooBig } from "./episode.js";
+import { E, TAKE_STATUS, archiveButton, cancelTake, drawHeader, farmProgress, renderEpisode, soundMode, takeBadge, videoTooBig } from "./episode.js";
 
 const FEEDS = [["none", "Без ленты"], ["tiktok", "TikTok"], ["reels", "Reels"], ["shorts", "Shorts"]];
 const FEED_KEY = "reviewFeed";
@@ -346,6 +346,7 @@ function drawShotTools() {
   const draft = R.draft?.shot === s.id ? R.draft : {}; // набранное не пропадает, когда меняется нейросеть
   box.innerHTML = `<summary><b>Шот ${esc(s.label)}: дубли${can.gen() ? " и перегенерация" : ""}</b> ${takeBadge(s)}
       <span class="muted small">дублей: ${s.takes.length}${s.revisions ? ` · правок: ${s.revisions}` : ""}</span></summary>
+    <div id="farm-prog-r-${s.id}">${farmProgress(s)}</div>
     <div class="row" style="margin:8px 0">${can.gen() ? `<label class="btn" style="margin:0">Загрузить видео<input type="file" id="up-take" accept="video/mp4,video/quicktime,video/webm" hidden></label>` : ""}</div>
     <div class="muted small" style="margin:6px 0">${esc(s.action || "")} ${s.dialogue.map((d) => `<br><b>${esc(d.speaker)}</b>${d.voice === "voiceover" ? " <i>(за кадром)</i>" : ""}: ${esc(d.text)}`).join("")}</div>
     ${can.gen() ? `<details class="regen" id="regen" ${s.needs_redo || s.open_fixes || R.draft?.shot === s.id ? "open" : ""}>
