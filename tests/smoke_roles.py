@@ -728,9 +728,11 @@ t = tk(0)
 check("farm: finished with an upload error: the take keeps waiting for the file", t["status"] in ("queued", "running") and t["farm_err"] and not t["video_path"], t)
 st, r = pult("POST", f"/api/farmhub/jobs/{ref}/files", form={"kind": "final", "name": "f-1080p.mp4", "job_id": "job-a1", "file": b"FINALMP4"})
 check("farm: final accepted", st == 200 and r["url"].endswith(".mp4") and "_draft" not in r["url"], (st, r))
-check("farm: repeated job.finished (same updated, no error) is applied after the upload", pult("POST", f"/api/farmhub/jobs/{ref}/status", {"event": "job.finished", "job": fin})[0] == 200)
 t = tk(0)
-check("farm: take is done with the final video", t["status"] == "done" and t["video_path"].endswith(".mp4") and "_draft" not in t["video_path"] and t["progress"] == 1 and not t["error"], t)
+check("farm: the final on the site makes the take done at once, without waiting for job.finished",
+      t["status"] == "done" and t["video_path"].endswith(".mp4") and "_draft" not in t["video_path"] and t["progress"] == 1 and not t["error"] and not t["farm_err"], t)
+check("farm: the repeated job.finished after that is answered and changes nothing", pult("POST", f"/api/farmhub/jobs/{ref}/status", {"event": "job.finished", "job": fin})[1].get("ignored")
+      and tk(0)["status"] == "done")
 with admin.op.open(BASE + "/media/" + t["video_path"]) as resp:
     check("farm: final file is stored in the studio", resp.read() == b"FINALMP4")
 st, e = admin.call("GET", f"/api/episodes/{epf['id']}")
@@ -756,6 +758,14 @@ check("farm: a new take of the same shot gets a new id", ref3 != ref2, (ref2, re
 pult("POST", f"/api/farmhub/jobs/{ref3}/status", {"event": "job.accepted", "job": {"id": "job-a3", "ref": ref3, "status": "queued", "stage": "generate", "position": 1, "updated": 3000.0}})
 pult("POST", f"/api/farmhub/jobs/{ref3}/status", {"event": "job.finished", "job": {"id": "job-a3", "ref": ref3, "status": "failed", "error": "нет памяти", "updated": 3001.0}})
 check("farm: failed on the farm: error with the reason", tk(1)["status"] == "error" and "нет памяти" in tk(1)["error"], tk(1))
+# конец с тем же updated, что у прошлого события, применяется; статус в другом написании не даёт 400; «готово» без ролика — ошибка
+st, r = admin.call("POST", f"/api/shots/{f2['id']}/generate", {"force": True})
+got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "same-updated pending shot")
+ref5 = got[0]["id"]
+pult("POST", f"/api/farmhub/jobs/{ref5}/status", {"event": "job.progress", "job": {"id": "job-a5", "ref": ref5, "status": "running", "stage": "finish", "progress": 1.0, "updated": 5000.0}})
+st, r = pult("POST", f"/api/farmhub/jobs/{ref5}/status", {"event": "job.finished", "job": {"id": "job-a5", "ref": ref5, "status": "Completed", "updated": 5000.0}})
+check("farm: job.finished with the same updated and another spelling of the status is applied; done without a video is an error",
+      st == 200 and not r.get("ignored") and tk(1)["status"] == "error" and "не пришло" in tk(1)["error"], (st, r, tk(1)))
 # отмена: шот, который Пульт ещё не забрал, ему больше не отдаётся; поздние события не оживляют дубль
 st, r = admin.call("POST", f"/api/shots/{f2['id']}/generate", {"force": True})
 got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"]) and x, "fourth pending shot")

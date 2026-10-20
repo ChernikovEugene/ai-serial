@@ -278,7 +278,8 @@ def apply_status(ref: str, body: dict) -> dict:
     if not _live(take):
         return {"ignored": "дубль уже закончен или отменён"}
     updated = float(job.get("updated") or 0)
-    if updated and updated <= take["farm_updated"] and not (event in ("job.stage", "job.finished") and take["farm_err"]):
+    stale = updated and (updated < take["farm_updated"] if event == "job.finished" else updated <= take["farm_updated"])  # конец применяем и при равном updated
+    if stale and not (event in ("job.stage", "job.finished") and take["farm_err"]):
         return {"ignored": "повтор"}
     status, err = job.get("status") or "", (job.get("error") or "").strip()
     tid, sid = take["id"], take["shot_id"]
@@ -287,11 +288,12 @@ def apply_status(ref: str, body: dict) -> dict:
         veo._finish(tid, sid, "error", f"Ферма отклонила шот: {err or 'причина не указана'}")
         return {}
     if event == "job.finished":
-        if status == "failed":
+        st = str(status).lower()
+        if st in ("failed", "error"):
             veo._finish(tid, sid, "error", f"Ферма: {err or 'шот не получился'}")
-        elif status == "canceled":
+        elif st in ("canceled", "cancelled"):
             veo.cancel(tid)
-        elif status == "done":
+        elif st in ("done", "completed", "complete", "success", "succeeded", "finished", "ok"):
             final = take["farm_final"]
             if not final and err:  # ролик не загрузился: Пульт догрузит и повторит это событие
                 with db.connect() as c:
@@ -345,4 +347,13 @@ def save_file(ref: str, kind: str, src) -> dict:
         tmp.unlink(missing_ok=True)
     with db.connect() as c:
         c.execute("UPDATE takes SET draft_path=? WHERE id=?" if kind == "draft" else "UPDATE takes SET farm_final=? WHERE id=?", (rel, take["id"]))
+    if kind == "final":  # ролик уже на сайте: шот готов, не дожидаясь job.finished (он мог потеряться)
+        settle(take["id"], take["shot_id"], rel)
     return {"url": f"/media/{rel}"}
+
+
+def settle(tid: int, sid: int, final: str):
+    """Финальный ролик получен: дубль готов. Последующий job.finished уже ничего не меняет (событие для готового дубля игнорируется)."""
+    with db.connect() as c:
+        c.execute("UPDATE takes SET progress=1, farm_err='' WHERE id=?", (tid,))
+    veo._finish(tid, sid, "done", video=final)
