@@ -180,6 +180,7 @@ function render() {
     <div class="card sm-strip-card">
       <div class="sm-label">Весь ${mname.toLowerCase()} одним взглядом: 1 клетка = 1 серия = 1 день</div>
       <div class="sm-strip">
+        ${mrows.length ? "" : `<span class="muted small">В ${minn} выходов нет: сериал начинается позже.</span>`}
         ${mrows.map((r) => `<a class="sm-cell ${r.isToday ? "today" : ""} ${arcAt[r.number] ? "arc-start" : ""}" href="${r.ep && !r.ep.locked ? "#/episodes/" + r.ep.id : "#/series"}" title="${esc(epName(r))}${arcAt[r.number] ? " — начало арки" : ""}: ${esc(r.label)}">
           <span class="sm-arrow"></span>
           <span class="sm-sq" style="${r.stage ? `background:${STAGES[r.stage].color};color:#111317` : ""}">${r.d}${r.late ? `<i></i>` : ""}</span></a>`).join("")}
@@ -200,7 +201,7 @@ function render() {
       || `<div class="help">В этом фильтре серий нет.</div>`}</div>`;
 
   bindArcDividers(() => load(true));
-  const go = (m) => { S.month = m; load(true); };
+  const go = (m) => { S.month = m; S.monthPicked = true; load(true); };
   $("#sm-prev").onclick = () => go(shiftMonth(S.month, -1));
   $("#sm-next").onclick = () => go(shiftMonth(S.month, 1));
   $("#sm-now") && ($("#sm-now").onclick = () => go(today.slice(0, 7)));
@@ -221,7 +222,12 @@ function render() {
 async function load(force = false) {
   const data = await api("/api/status-window");
   if (!S.month) S.month = data.today.slice(0, 7);
-  const mdata = await api(`/api/status-window?month=${S.month}`);
+  let mdata = await api(`/api/status-window?month=${S.month}`);
+  // Сериал ещё не начался в текущем месяце (выходов нет) — сводка сразу за месяц первого выхода, а не нули
+  if (!mdata.slots.length && !S.monthPicked && data.slots.length && data.slots[0].date.slice(0, 7) !== S.month) {
+    S.month = data.slots[0].date.slice(0, 7);
+    mdata = await api(`/api/status-window?month=${S.month}`);
+  }
   const json = JSON.stringify([data, mdata]);
   if (!force && json === S.json) return; // ничего не изменилось — не перерисовываем
   S.json = json;
@@ -232,7 +238,8 @@ async function load(force = false) {
 
 export async function renderStatus() {
   stopStatusPolling();
-  S.month = ""; // при заходе на страницу — текущий месяц
+  S.month = ""; // при заходе на страницу — текущий месяц (или месяц первого выхода, если сериал ещё не начался)
+  S.monthPicked = false;
   S.stage = null;
   await ensureAssets();
   await load(true);
