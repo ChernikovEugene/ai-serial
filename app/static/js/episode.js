@@ -8,7 +8,7 @@ import { attachHighlight } from "./highlight.js";
 import { drawReview, stopReview } from "./review.js";
 import { seenEpisode } from "./notify.js";
 
-export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "" };
+export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "", gap: null };
 export const TAKE_STATUS = { queued: ["в очереди", "run"], running: ["генерация…", "run"], done: ["готово", "ok"],
   stub: ["заглушка", "warn"], error: ["ошибка", "err"], cancelled: ["отменено", ""], idle: ["не создано", ""] };
 
@@ -45,7 +45,7 @@ export function stopEpisodePolling() { clearTimeout(E.poll); stopReview(); }
 
 export async function renderEpisode(id, tab) {
   stopEpisodePolling();
-  if (E.id !== id) { E.sel = null; }
+  if (E.id !== id) { E.sel = null; E.gap = null; }
   const again = E.id === id && (!tab || tab === E.tab) && !!$("#ep-tab"); // тот же экран: набранное не должно пропасть
   E.id = id;
   if (tab) E.tab = ["script", "shots", "review", "main", "history"].includes(tab) ? tab : "script";
@@ -645,15 +645,77 @@ function drawCast(cast, a) {
 // ---------------- shots tab ----------------
 function drawShots(el) {
   const ep = E.ep;
+  const addHint = !canAddShot() ? ""
+    : ep.marked ? `Не хватает шота по режиссуре? Нажмите «＋ Добавить шот» между карточками: он получит номер вроде «2а», остальные шоты не сдвинутся. Это можно и после согласования ТЗ.`
+      : `Вставить шот между готовыми можно, когда в сценарии стоят пометки «Шот 1», «Шот 2»…: без них номера шотов идут по порядку и сдвинулись бы.`;
   el.innerHTML = ep.shots.length
-    ? `${writerLocked() ? `<div class="help warn-card" style="margin-bottom:12px">🔒 Сценарий согласован, править шоты может только продюсер. Чтобы внести правки, попросите вернуть серию в «В разработке».</div>` : ""}
+    ? `${writerLocked() ? `<div class="help warn-card" style="margin-bottom:12px">🔒 Сценарий согласован, править шоты может только продюсер. Чтобы внести правки, попросите вернуть серию в «В разработке».${canAddShot() && ep.marked ? " Новый шот между готовыми добавить можно." : ""}</div>` : ""}
        <div class="help" style="margin-bottom:12px">${can.write()
          ? `Шоты строятся из сценария. Здесь выбирают персонажей, локацию и тип озвучки реплик. Правки полей перезапишутся, если поменять текст этого шота в сценарии;
             референс композиции, дубли, комментарии и вручную изменённый промпт сохраняются.`
-         : `Сценарий этой серии согласован. Содержание шотов смотрите слева, а промпты и генерацию настраивайте справа.`}</div>
-       <div id="shots">${ep.shots.map(shotHtml).join("")}</div>`
+         : `Сценарий этой серии согласован. Содержание шотов смотрите слева, а промпты и генерацию настраивайте справа.`}${addHint ? `<br>${addHint}` : ""}</div>
+       <div id="shots">${ep.shots.map((s, i) => shotHtml(s) + gapHtml(s, ep.shots[i + 1])).join("")}</div>`
     : `<div class="card"><p>Шотов пока нет.</p><p class="muted">Напишите сценарий на вкладке «Сценарий» и нажмите «Сохранить и разбить на шоты».</p></div>`;
   ep.shots.forEach(bindShot);
+  ep.shots.forEach((s) => bindGap(s.id));
+}
+
+// ---------- промежуточный шот ----------
+// Между карточками шотов: «＋ шот между 2 и 3». Текст нового шота уходит в сценарий блоком «Шот 2а», номера остальных не сдвигаются.
+const canAddShot = () => can.write() || can.gen(); // дописать шот можно и после согласования ТЗ: существующие шоты не меняются
+function gapHtml(s, next) {
+  if (!canAddShot() || !E.ep.marked) return "";
+  const where = next ? `между ${esc(s.label)} и ${esc(next.label)}` : `в конец, после ${esc(s.label)}`;
+  return `<div class="shot-gap ${E.gap === s.id ? "open" : ""}" id="gap-${s.id}">${E.gap === s.id
+    ? `<div class="card gap-form">
+        <b>Новый шот ${where}</b>
+        <textarea id="gap-text" rows="4" placeholder="Что в кадре. Реплики как в сценарии: МАША: Привет! Камера: КАМЕРА: крупный план. Героев можно выбрать через @"></textarea>
+        <div class="row"><button class="primary small" data-gap-add>Добавить шот</button>
+          <button class="ghost small" data-gap-cancel>Отмена</button>
+          <span class="muted small">Шот встанет в сценарий с номером «${esc(s.label)}а» (или следующей буквой), номера остальных шотов не изменятся.</span></div>
+      </div>`
+    : `<button class="ghost small" data-gap-open>＋ Добавить шот ${where}</button>`}</div>`;
+}
+
+function refreshGap(sid) {
+  const box = $(`#gap-${sid}`);
+  const i = E.ep.shots.findIndex((s) => s.id === sid);
+  if (!box || i < 0) return;
+  box.outerHTML = gapHtml(E.ep.shots[i], E.ep.shots[i + 1]);
+  bindGap(sid);
+}
+
+function bindGap(sid) {
+  const box = $(`#gap-${sid}`);
+  if (!box) return;
+  const ta = $("#gap-text", box);
+  if (ta) attachMentions(ta);
+  $("[data-gap-open]", box)?.addEventListener("click", () => {
+    const prev = E.gap;
+    E.gap = sid;
+    if (prev && prev !== sid) refreshGap(prev);
+    refreshGap(sid);
+    $("#gap-text")?.focus();
+  });
+  $("[data-gap-cancel]", box)?.addEventListener("click", () => { E.gap = null; refreshGap(sid); });
+  const add = async () => {
+    const text = ta.value.trim();
+    if (!text) { toast("Опишите, что происходит в новом шоте", true); return; }
+    const btn = $("[data-gap-add]", box);
+    btn.disabled = true;
+    try {
+      const res = await api(`/api/episodes/${E.id}/shots`, { json: { after: sid, text } });
+      const made = res.shots.find((x) => x.id === res.inserted_shot_id);
+      E.gap = null; E.ep = res; E.sig = signature(res);
+      drawHeader();
+      drawShots($("#ep-tab"));
+      toast(`Шот ${made?.label || ""} добавлен`);
+      const card = $(`#shot-${res.inserted_shot_id}`);
+      if (card) { card.scrollIntoView({ block: "center", behavior: "smooth" }); card.classList.add("just-added"); setTimeout(() => card.classList.remove("just-added"), 2500); }
+    } catch { btn.disabled = false; }
+  };
+  $("[data-gap-add]", box)?.addEventListener("click", add);
+  ta?.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); add(); } });
 }
 
 export function takeBadge(s) {
@@ -752,7 +814,9 @@ function shotHtml(s) {
           <select data-d="voice" ${roW} title="Как звучит реплика">${Object.entries(VOICE).map(([k, n]) => `<option value="${k}" ${(d.voice || "direct") === k ? "selected" : ""}>${n}</option>`).join("")}</select>
           <input data-d="parenthetical" class="${d.auto && !d.parenthetical ? "need-red" : ""}" value="${esc(d.parenthetical)}" placeholder="как (тихо)" ${roW}>
           <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
-          ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
+          ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}
+          ${voiceHtml(s, i, d)}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
+      ${canVoice() && s.dialogue.length ? `<div class="muted small">🎙 «Записать голос»: образец для голосовой модели. Запись можно прослушать, увидеть её длину, оставить или удалить.</div>` : ""}
       ${canWrite() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
       </fieldset>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
@@ -797,6 +861,138 @@ async function uploadComposition(s, file) {
   const fd = new FormData(); fd.append("image", file);
   replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "POST", body: fd }));
   toast("Референс композиции добавлен — он попадёт в промпт и в запрос к нейросети");
+}
+
+// ---------- запись голоса к реплике ----------
+// Как в мессенджере: нажали «Записать голос», говорите, «Стоп», прослушали, увидели длину и решили: оставить или удалить.
+// Оставленная запись хранится у реплики и уходит на ферму вместе с описанием голоса как образец для голосовой модели.
+const MAX_VOICE_S = 60;
+const voiceDraft = new Map(); // «шот:реплика» -> записано, но ещё не оставлено: {url, blob, seconds}
+let rec = null;               // идёт запись: {key, sid, i, recorder, stream, chunks, t0, timer, cancelled}
+const vkey = (sid, i) => `${sid}:${i}`;
+const canVoice = () => can.write() || can.gen();
+const secText = (x) => `${(+x).toFixed(1).replace(".", ",")} с`;
+const clock = (ms) => { const t = Math.floor(ms / 1000); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+const curShot = (sid) => E.ep?.shots.find((x) => x.id === sid);
+
+function dropVoiceDrafts(sid) {
+  [...voiceDraft.keys()].filter((k) => k.startsWith(`${sid}:`)).forEach((k) => { URL.revokeObjectURL(voiceDraft.get(k).url); voiceDraft.delete(k); });
+}
+
+function voiceNote(s) {
+  return s.engine === "renderfarm"
+    ? "Запись уйдёт на ферму вместе с описанием голоса как образец (поле voice_ref)."
+    : `«${esc(engineName(s.engine))}» образец голоса не принимает: запись сохранена, её можно скачать и использовать вручную.`;
+}
+
+function voiceHtml(s, i, d) {
+  const key = vkey(s.id, i);
+  const ref = d.voice_ref;
+  let body;
+  if (rec?.key === key) {
+    body = `<span class="rec-dot"></span> <b data-rec-time>${clock(performance.now() - rec.t0)}</b>
+      <button class="small primary" data-vstop>■ Стоп</button> <button class="ghost small" data-vcancel>Отмена</button>
+      <span class="muted small">идёт запись, до ${MAX_VOICE_S} с</span>`;
+  } else if (voiceDraft.has(key)) {
+    const v = voiceDraft.get(key);
+    body = `<audio controls src="${v.url}"></audio> <b>${secText(v.seconds)}</b>
+      <button class="small primary" data-vkeep>Оставить</button> <button class="ghost small" data-vdiscard>Удалить</button>
+      <span class="muted small">пока не сохранено</span>`;
+  } else if (ref) {
+    body = `<audio controls preload="none" src="${media(ref.path)}"></audio> <b>${secText(ref.seconds)}</b>
+      ${canVoice() ? `<button class="ghost small" data-vrec>Записать заново</button> <button class="ghost small danger" data-vdel>Удалить</button>` : ""}
+      <a class="btn ghost small" href="${media(ref.path)}" download title="Скачать запись">⬇</a>
+      <span class="muted small">${s.dialogue.length === 1 && s.speech_seconds ? `по тексту ~${secText(s.speech_seconds)} · ` : ""}${voiceNote(s)}</span>`;
+  } else if (canVoice()) {
+    body = `<button class="ghost small" data-vrec>🎙 Записать голос</button>`;
+  } else return "";
+  return `<div class="dlg-voice ${ref || voiceDraft.has(key) || rec?.key === key ? "" : "empty"} ${rec?.key === key ? "rec" : ""}" id="voice-${s.id}-${i}">${body}</div>`;
+}
+
+function refreshVoice(sid, i) {
+  const s = curShot(sid), box = $(`#voice-${sid}-${i}`);
+  if (!s || !box || !s.dialogue[i]) return;
+  box.outerHTML = voiceHtml(s, i, s.dialogue[i]);
+  bindVoiceLine(s, i);
+}
+
+function bindVoiceLine(s, i) {
+  const box = $(`#voice-${s.id}-${i}`);
+  if (!box) return;
+  const key = vkey(s.id, i);
+  $("[data-vrec]", box)?.addEventListener("click", () => startVoice(s.id, i));
+  $("[data-vstop]", box)?.addEventListener("click", () => rec?.recorder.stop());
+  $("[data-vcancel]", box)?.addEventListener("click", () => { if (rec) { rec.cancelled = true; rec.recorder.stop(); } });
+  $("[data-vdiscard]", box)?.addEventListener("click", () => { dropVoiceDrafts(s.id); refreshVoice(s.id, i); });
+  $("[data-vkeep]", box)?.addEventListener("click", async (ev) => {
+    const v = voiceDraft.get(key);
+    if (!v) return;
+    ev.target.disabled = true;
+    const fd = new FormData();
+    fd.append("line", i); fd.append("seconds", v.seconds); fd.append("file", v.blob, v.blob.type === "audio/wav" ? "voice.wav" : "voice.webm");
+    try {
+      const res = await api(`/api/shots/${s.id}/voice`, { method: "POST", body: fd });
+      dropVoiceDrafts(s.id);
+      toast(`Голос к реплике сохранён (${secText(v.seconds)})`);
+      replaceShot(res);
+    } catch { ev.target.disabled = false; }
+  });
+  $("[data-vdel]", box)?.addEventListener("click", async () => replaceShot(await api(`/api/shots/${s.id}/voice?line=${i}`, { method: "DELETE" })));
+}
+
+function bindVoice(s, el) { s.dialogue.forEach((_, i) => bindVoiceLine(s, i)); }
+
+async function startVoice(sid, i) {
+  if (rec) return toast("Сначала остановите текущую запись", true);
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast("Этот браузер не записывает звук: откройте студию в Chrome, Edge, Firefox или Safari", true);
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch { return toast("Нет доступа к микрофону: разрешите его для сайта в браузере и нажмите ещё раз", true); }
+  const recorder = new MediaRecorder(stream);
+  const r = { key: vkey(sid, i), sid, i, recorder, stream, chunks: [], t0: performance.now(), cancelled: false, timer: null };
+  recorder.ondataavailable = (e) => e.data.size && r.chunks.push(e.data);
+  recorder.onstop = () => finishVoice(r);
+  dropVoiceDrafts(sid);
+  rec = r;
+  recorder.start();
+  r.timer = setInterval(() => {
+    const t = $(`#voice-${sid}-${i} [data-rec-time]`);
+    if (t) t.textContent = clock(performance.now() - r.t0);
+    if (!location.hash.startsWith("#/episodes/")) { r.cancelled = true; recorder.stop(); }       // ушли со страницы: микрофон не держим
+    else if (performance.now() - r.t0 >= MAX_VOICE_S * 1000 && recorder.state === "recording") recorder.stop();
+  }, 200);
+  refreshVoice(sid, i);
+}
+
+async function finishVoice(r) {
+  clearInterval(r.timer);
+  r.stream.getTracks().forEach((t) => t.stop());
+  if (rec === r) rec = null;
+  const elapsed = (performance.now() - r.t0) / 1000;
+  if (r.cancelled) return refreshVoice(r.sid, r.i);
+  const raw = new Blob(r.chunks, { type: r.recorder.mimeType || "audio/webm" });
+  let out = { blob: raw, seconds: elapsed };
+  try { out = await toWav(raw); } catch { /* браузер не раскодировал: отправим как записано, длина по таймеру */ }
+  if (out.seconds < 0.3) { toast("Слишком короткая запись: держите кнопку записи подольше", true); return refreshVoice(r.sid, r.i); }
+  voiceDraft.set(r.key, { ...out, url: URL.createObjectURL(out.blob) });
+  refreshVoice(r.sid, r.i);
+}
+
+/** Запись из браузера (webm/mp4) в обычный WAV: его принимает любая голосовая модель, а длина берётся из самой записи. */
+async function toWav(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const n = buf.length, mono = new Float32Array(n);
+    for (let c = 0; c < buf.numberOfChannels; c++) { const ch = buf.getChannelData(c); for (let k = 0; k < n; k++) mono[k] += ch[k] / buf.numberOfChannels; }
+    const dv = new DataView(new ArrayBuffer(44 + n * 2));
+    const text = (o, t) => [...t].forEach((c, k) => dv.setUint8(o + k, c.charCodeAt(0)));
+    text(0, "RIFF"); dv.setUint32(4, 36 + n * 2, true); text(8, "WAVEfmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+    dv.setUint16(22, 1, true); dv.setUint32(24, buf.sampleRate, true); dv.setUint32(28, buf.sampleRate * 2, true); dv.setUint16(32, 2, true);
+    dv.setUint16(34, 16, true); text(36, "data"); dv.setUint32(40, n * 2, true);
+    for (let k = 0; k < n; k++) dv.setInt16(44 + k * 2, Math.max(-1, Math.min(1, mono[k])) * 0x7fff, true);
+    return { blob: new Blob([dv], { type: "audio/wav" }), seconds: buf.duration };
+  } finally { ctx.close(); }
 }
 
 function bindShot(s) {
@@ -859,12 +1055,14 @@ function bindShot(s) {
     const speaker = $("[data-d=speaker]", row).value.trim();
     const a = state.assets.find((x) => x.kind === "character" && x.name.toLowerCase() === speaker.toLowerCase());
     const line = { speaker: a ? a.name : speaker, asset_id: a ? a.id : null, voice: $("[data-d=voice]", row).value,
-      parenthetical: $("[data-d=parenthetical]", row).value, text: $("[data-d=text]", row).value };
+      parenthetical: $("[data-d=parenthetical]", row).value, text: $("[data-d=text]", row).value,
+      voice_ref: s.dialogue[i]?.voice_ref || null };
     if (s.dialogue[i]?.auto && i !== edited) line.auto = true; // правка строки значит «проверено», красная подсветка уходит
     return line;
   });
   $$(".dlg-line input, .dlg-line select", el).forEach((inp) => (inp.onchange = () => save({ dialogue: readLines(+inp.closest(".dlg-line").dataset.line) })));
-  $$("[data-rmline]", el).forEach((b) => (b.onclick = () => save({ dialogue: readLines().filter((_, i) => i !== +b.dataset.rmline) })));
+  $$("[data-rmline]", el).forEach((b) => (b.onclick = () => { dropVoiceDrafts(s.id); save({ dialogue: readLines().filter((_, i) => i !== +b.dataset.rmline) }); }));
+  bindVoice(s, el);
 
   const comp = $("[data-comp]", el);
   if (comp) comp.onchange = () => comp.files[0] && uploadComposition(s, comp.files[0]);

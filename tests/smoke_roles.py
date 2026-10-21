@@ -690,6 +690,14 @@ check("farm: a Russian action is no error: it goes as written and is marked for 
 st, r = admin.call("PUT", f"/api/shots/{f2['id']}", {"farm_camera": "плавный наезд"})
 check("farm: Russian text in the English camera field is rejected", st == 400, st)
 
+# запись голоса к реплике: образец для голосовой модели уходит на ферму вместе с описанием голоса
+WAV = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\xbb\x00\x00\x00\x77\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+st, vr = admin.call("POST", f"/api/shots/{f1['id']}/voice", form={"line": "0", "seconds": "2.5", "file": ("voice.wav", WAV)})
+ref1 = (vr.get("dialogue") or [{}])[0].get("voice_ref") or {} if st == 200 else {}
+check("voice: a recording is attached to the line with its length", st == 200 and re.match(rf"^voice/{f1['id']}/[0-9a-f]{{12}}\.wav$", ref1.get("path", "")) and ref1.get("seconds") == 2.5, (st, vr))
+st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
+check("voice: the request preview shows the voice sample next to the voice description", "запись голоса" in str(q["body"].get("voice_ref")) and q["body"]["voice"] == "excited fast voice", q["body"])
+
 st, r = admin.call("POST", f"/api/episodes/{epf['id']}/generate", {"mode": "all", "force": True})
 check("farm: both shots accepted", st == 200 and r["started"] == 2, (st, r))
 tk = lambda i=0: admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][i]["takes"][-1]
@@ -706,6 +714,9 @@ check("farm: shot id is take-N, batch is the episode, Russian only in the line, 
       and "Привет" not in json.dumps({k: v for k, v in shot_f.items() if k != "line"}, ensure_ascii=False), shot_f)
 with urllib.request.urlopen(urllib.request.Request(shot_f["character"], headers={"Authorization": "Bearer whsec_test"})) as resp:
     check("farm: the picture link opens without a studio login", resp.status == 200 and resp.read()[:4] == PNG[:4])
+check("voice: the farm gets a link to the recording as voice_ref", shot_f.get("voice_ref", "").startswith(BASE + "/pub/") and shot_f["voice_ref"].endswith(".wav"), shot_f)
+with urllib.request.urlopen(urllib.request.Request(shot_f.get("voice_ref", BASE), headers={"Authorization": "Bearer whsec_test"})) as resp:
+    check("voice: the recording link opens without a studio login", resp.status == 200 and resp.read() == WAV)
 check("farm: the shot is handed over again until the farm accepts or rejects it", pult("GET", "/api/farmhub/jobs/pending")[1]["shots"] == got2)
 admin.call("POST", f"/api/takes/{tk(1)['id']}/cancel", {})  # дальше проверяем один шот; второй (русский) уже проверен
 got = [shot_f]
@@ -821,6 +832,118 @@ got = wait_for(lambda: (x := pult("GET", "/api/farmhub/jobs/pending")[1]["shots"
 check("farm: with the public address set, picture links use it", got and got[0]["character"].startswith("https://studio.example/pub/"), got)
 admin.call("POST", f"/api/takes/{tk(0)['id']}/cancel", {})
 admin.call("PUT", "/api/settings", {"gen_mode": "stub", "public_base_url": ""})
+
+# --- промежуточный шот в готовом сценарии: вставка «Шот 2а», остальные шоты не трогаем ---
+ins_script = ("Шот 1\nИНТ. КАФЕ — ДЕНЬ\nМаша сидит у окна.\n\nШот 2\nКостя входит в кафе.\nКАМЕРА: общий план\n\n"
+              "ИНТ. УЛИЦА — НОЧЬ\n\nШот 3\nМаша выходит на улицу.\n")
+st, ei = writer.call("POST", "/api/episodes", {"title": "Вставка", "script": ins_script})
+check("insert: episode with three marked shots", st == 200 and [s["label"] for s in ei["shots"]] == ["1", "2", "3"], st)
+iid = ei["id"]
+old = {s["label"]: s["id"] for s in ei["shots"]}
+kostya = next(a for a in assets if a["name"] == "Костя")
+writer.call("PUT", f"/api/shots/{old['3']}", {"characters": [{"asset_id": kostya["id"], "name": "Костя", "version_id": kostya["versions"][0]["id"]}]})
+writer.call("PUT", f"/api/shots/{old['2']}", {"location_mode": "text", "location_text": "Балкон с видом на двор"})
+st, r = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["2"], "text": "Крупно: чашка на столе.\nМАША: Ой!"})
+labels = [x["label"] for x in r["shots"]] if st == 200 else []
+check("insert: new shot goes after the chosen one and takes 2а", st == 200 and labels == ["1", "2", "2а", "3"], (st, labels, r if st != 200 else ""))
+check("insert: old shots keep their ids", st == 200 and {x["label"]: x["id"] for x in r["shots"] if x["label"] in old} == old)
+check("insert: response points at the new shot", st == 200 and r["inserted_shot_id"] == r["shots"][2]["id"])
+new_shot = r["shots"][2] if st == 200 else {}
+check("insert: new shot has the typed text and dialogue", "чашка" in (new_shot.get("action") or "") and len(new_shot.get("dialogue") or []) == 1, new_shot.get("action"))
+check("insert: scene of the new shot is the scene of the previous one", new_shot.get("scene") == r["shots"][1]["scene"], (new_shot.get("scene"), r["shots"][1]["scene"]))
+check("insert: script text got the «Шот 2а» block before the next scene heading",
+      st == 200 and re.search(r"КАМЕРА: общий план\n\nШот 2а\nКрупно: чашка на столе\.\nМАША: Ой!\n\nИНТ\. УЛИЦА", r["script"]) is not None, r.get("script"))
+check("insert: new shot takes the location from the card of the previous shot",
+      st == 200 and new_shot.get("location_mode") == "text" and new_shot.get("location_text") == "Балкон с видом на двор", (new_shot.get("location_mode"), new_shot.get("location_text")))
+check("insert: manual card choice of another shot survives", st == 200 and [c["name"] for c in r["shots"][3]["characters"]] == ["Костя"], r["shots"][3]["characters"] if st == 200 else "")
+check("insert: indexes are contiguous", st == 200 and [x["idx"] for x in r["shots"]] == [1, 2, 3, 4], [x["idx"] for x in r["shots"]])
+st, r2 = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": new_shot["id"], "text": "Костя замечает чашку."})
+check("insert: after 2а comes 2б", st == 200 and [x["label"] for x in r2["shots"]] == ["1", "2", "2а", "2б", "3"], (st, r2 if st != 200 else ""))
+st, r3 = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["3"], "text": "Огни города."})
+check("insert: after the last shot", st == 200 and [x["label"] for x in r3["shots"]][-2:] == ["3", "3а"], (st, r3 if st != 200 else ""))
+st, r4 = writer.call("POST", f"/api/episodes/{iid}/breakdown", {})
+check("insert: «Сохранить и разбить» keeps the same shots", st == 200 and [x["id"] for x in r4["shots"]] == [x["id"] for x in r3["shots"]], st)
+st, evs = writer.call("GET", f"/api/episodes/{iid}/events")
+check("insert: written to history", st == 200 and any("Добавлен шот 2а после шота 2" in e["text"] for e in evs), evs)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "   "})
+check("insert: empty text rejected", st == 400, st)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Шот 9\nЧто-то"})
+check("insert: «Шот N» inside the text rejected", st == 400, st)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": shot3["id"], "text": "Чужой шот"})
+check("insert: shot of another episode rejected", st == 404, st)
+st, _ = editor.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Редактор"})
+check("insert: editor does not see an episode that is not approved yet", st == 404, st)
+admin.call("POST", "/api/users", {"login": "vw", "password": "pass1234", "name": "vw", "role": "viewer"})
+viewer = Client()
+viewer.call("POST", "/api/auth/login", {"login": "vw", "password": "pass1234"})
+st, _ = viewer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Зритель"})
+check("insert: viewer cannot add shots", st == 403, st)
+st, eu = writer.call("POST", "/api/episodes", {"title": "Без пометок", "script": "Маша сидит.\n\nКостя входит.\n"})
+st, _ = writer.call("POST", f"/api/episodes/{eu['id']}/shots", {"after": eu["shots"][0]["id"], "text": "Новый"})
+check("insert: script without «Шот N» marks is refused", st == 400, st)
+st, _ = admin.call("POST", f"/api/episodes/{iid}/status", {"status": "approved", "force": True})
+check("insert: episode approved for the lock check", st == 200, st)
+st, r5 = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Сценарист добавил после согласования"})
+check("insert: writer can still add after the TZ is approved", st == 200 and len(r5["shots"]) == len(r3["shots"]) + 1, (st, r5 if st != 200 else ""))
+st, r6 = editor.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Нейронщик добавил"})
+check("insert: editor can add to an approved episode", st == 200 and len(r6["shots"]) == len(r5["shots"]) + 1, (st, r6 if st != 200 else ""))
+st, r7 = admin.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Продюсер добавил"})
+check("insert: producer can add after approval", st == 200 and len(r7["shots"]) == len(r6["shots"]) + 1, (st, r7 if st != 200 else ""))
+check("insert: the same place again takes the next free letter, the shot stays where it was added", [x["label"] for x in r7["shots"]][:5] == ["1", "1в", "1б", "1а", "2"], [x["label"] for x in r7["shots"]][:5])
+
+# --- запись голоса к реплике: хранение, замена, удаление, права ---
+st, ev = writer.call("POST", "/api/episodes", {"title": "Голос", "script": "Шот 1\nАЛЬТУШКА: Привет!\nАЛЬТУШКА: Пока!\nАльтушка машет рукой.\n"})
+vs = ev["shots"][0]
+lines = vs["dialogue"]
+check("voice: the test shot has two lines", len(lines) == 2, lines)
+forged = [{**lines[0], "voice_ref": {"path": f"voice/{vs['id']}/000000000000.wav", "seconds": 3}}, lines[1]]
+st, r = writer.call("PUT", f"/api/shots/{vs['id']}", {"dialogue": forged})
+check("voice: a forged recording path is dropped", st == 200 and "voice_ref" not in r["dialogue"][0], r.get("dialogue"))
+st, r = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "1", "seconds": "3.04", "file": ("voice.wav", WAV)})
+rel1 = r["dialogue"][1]["voice_ref"]["path"] if st == 200 else ""
+check("voice: writer can record a voice for a line", st == 200 and r["dialogue"][1]["voice_ref"]["seconds"] == 3.0 and "voice_ref" not in r["dialogue"][0], (st, r))
+with admin.op.open(BASE + "/media/" + rel1) as resp:
+    check("voice: the recording plays from the studio", resp.status == 200 and resp.read() == WAV)
+st, r = writer.call("PUT", f"/api/shots/{vs['id']}", {"dialogue": [{**d, "parenthetical": "тихо"} if i == 1 else d for i, d in enumerate(r["dialogue"])]})
+check("voice: editing the line keeps its recording", st == 200 and r["dialogue"][1].get("voice_ref", {}).get("path") == rel1, r.get("dialogue"))
+st, r = editor.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "1", "seconds": "1.2", "file": ("voice.wav", WAV)})
+check("voice: the editor cannot reach a shot of an episode that is not approved", st == 404, st)
+st, r = admin.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "1", "seconds": "1.2", "file": ("voice.wav", WAV)})
+rel2 = r["dialogue"][1]["voice_ref"]["path"] if st == 200 else ""
+check("voice: a new recording replaces the old one and the old file is removed", st == 200 and rel2 != rel1 and admin.call("GET", f"/api/shots/{vs['id']}")[0] in (200, 405, 404), (st, rel1, rel2))
+try:
+    admin.op.open(BASE + "/media/" + rel1)
+    old_gone = False
+except urllib.error.HTTPError as e:
+    old_gone = e.code == 404
+check("voice: the replaced file is gone", old_gone)
+st, _ = viewer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "1", "file": ("voice.wav", WAV)})
+check("voice: a viewer cannot record", st == 403, st)
+st, _ = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "1", "file": ("voice.wav", b"not audio at all")})
+check("voice: not an audio file is refused", st == 400, st)
+st, _ = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "500", "file": ("voice.wav", WAV)})
+check("voice: a too long recording is refused", st == 400, st)
+st, _ = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "7", "seconds": "2", "file": ("voice.wav", WAV)})
+check("voice: a line that does not exist is refused", st == 400, st)
+st, r = writer.call("POST", f"/api/episodes/{ev['id']}/breakdown", {})
+check("voice: re-splitting the script keeps the recording of an unchanged line", st == 200 and r["shots"][0]["dialogue"][1].get("voice_ref", {}).get("path") == rel2, r["shots"][0]["dialogue"] if st == 200 else st)
+st, r = writer.call("DELETE", f"/api/shots/{vs['id']}/voice?line=1")
+check("voice: the recording can be deleted", st == 200 and "voice_ref" not in r["dialogue"][1], (st, r))
+try:
+    admin.op.open(BASE + "/media/" + rel2)
+    gone = False
+except urllib.error.HTTPError as e:
+    gone = e.code == 404
+check("voice: the deleted file is gone", gone)
+st, r = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "2", "file": ("voice.wav", WAV)})
+rel3 = r["dialogue"][0]["voice_ref"]["path"] if st == 200 else ""
+st, r = writer.call("PUT", f"/api/shots/{vs['id']}", {"dialogue": r["dialogue"][1:]})
+try:
+    admin.op.open(BASE + "/media/" + rel3)
+    gone = False
+except urllib.error.HTTPError as e:
+    gone = e.code == 404
+check("voice: removing the line removes its recording file", st == 200 and gone, (st, rel3))
 
 # --- удаление версии персонажа ---
 v1 = alt["versions"][0]["id"]

@@ -71,6 +71,7 @@ GET /api/farmhub/jobs/pending
 | `action` | **да** | **англ.** | что происходит в кадре: `she sits at her computer with her headphones and looks into the camera` |
 | `line` | нет | **рус.** | реплика, одна, одного персонажа. Пусто — шот без речи |
 | `voice` | нет | **англ.** | как говорит: `normal calm voice`, `excited fast voice`, `whisper` (по умолчанию `normal calm voice`) |
+| `voice_ref` | нет | — | **ссылка** на запись голоса (wav, обычно 2–20 с): образец для голосовой модели, как должна звучать `line`. **Расширение студии, в базовом протоколе его не было: Пульт должен его принимать или хотя бы игнорировать.** Приходит только если в студии к реплике записан голос; ссылка открывается так же, как картинки |
 | `shot_size` | нет | **англ.** | крупность: `medium shot` (по умолчанию), `close-up`, `wide shot` |
 | `camera` | нет | **англ.** | камера; по умолчанию `static camera, locked-off, no camera movement` |
 | `style` | нет | **англ.** | стиль; по умолчанию `Cinematic vertical TikTok series, realistic, natural lighting, shallow depth of field` |

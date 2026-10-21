@@ -225,7 +225,7 @@ video { width: 100%; border-radius: 8px; background: #000; }
 .img-pick input:not(:checked) + img { border-color: var(--line); opacity: .35; }
 
 pre.code { background: #0d0f12; border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 60vh; font-size: 12px; white-space: pre-wrap; }
-#toast { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+#toast { position: fixed; right: 20px; bottom: 72px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
 #toast div { background: var(--panel2); border: 1px solid var(--line); padding: 10px 14px; border-radius: 10px; max-width: 420px; }
 #toast div.err { border-color: var(--err); }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; width: min(620px, 94vw); padding: 20px; }
@@ -798,3 +798,31 @@ textarea.need { border-color: var(--warn); }
 .farm-bar span { display: block; background: var(--accent2); transition: width .4s; }
 .farm-bar span.fin { background: var(--ok); }
 .farm-parts { display: flex; justify-content: space-between; font-size: 10px; padding: 2px 2px 0; }
+
+/* кнопка «Наверх» */
+.to-top { position: fixed; right: 20px; bottom: 20px; width: 44px; height: 44px; padding: 0; border-radius: 50%; z-index: 40;
+  display: flex; align-items: center; justify-content: center; background: var(--panel); color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25); opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .2s, transform .2s; }
+.to-top.show { opacity: .92; transform: none; pointer-events: auto; }
+.to-top:hover { opacity: 1; border-color: var(--accent); }
+.to-top svg { width: 20px; height: 20px; }
+@media print { .to-top { display: none; } }
+
+/* промежуточный шот между карточками */
+.shot-gap { margin: -4px 0 14px; text-align: center; }
+.shot-gap > button { border-style: dashed; color: var(--muted); }
+.shot-gap > button:hover { color: var(--text); }
+.gap-form { display: flex; flex-direction: column; gap: 8px; text-align: left; border-style: dashed; }
+.gap-form textarea { width: 100%; }
+.shot.just-added { animation: shot-added 2.5s ease-out; }
+@keyframes shot-added { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: none; } }
+
+/* запись голоса к реплике */
+.dlg-voice { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -2px 0 2px; padding: 6px 8px;
+  border: 1px dashed var(--line); border-radius: 8px; }
+.dlg-voice.empty { border: 0; padding: 0; }
+.dlg-voice.rec { border-color: var(--err); }
+.dlg-line .dlg-voice button { padding: 3px 8px; }
+.dlg-voice audio { height: 32px; max-width: 100%; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); animation: rec-pulse 1s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { opacity: .25; } }
