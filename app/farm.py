@@ -128,8 +128,12 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     if voice:
         text["voice"] = voice
     ref = (line or {}).get("voice_ref")
-    if isinstance(ref, dict) and ref.get("path"):  # записанный голос: образец для голосовой модели, уходит с описанием голоса
+    if isinstance(ref, dict) and ref.get("path"):  # записанный голос: ферма берёт из него слова, голос и темп, губы идут по записи
         images["voice_ref"] = ref["path"]
+        if float(ref.get("seconds") or 0) + 2 > 10:
+            warns.append(f"Запись голоса {ref['seconds']} с: ферма делает шот длиной запись + около 2 с, а не больше 10 с. Запишите короче или разбейте реплику на два шота")
+    elif any(isinstance(d.get("voice_ref"), dict) for d in shot.get("dialogue") or []):
+        warns.append("Запись голоса есть у реплики, которая на ферму не уйдёт: ферма берёт одну (первую) реплику шота")
 
     loc_text = ""
     if shot.get("location_mode") == "text":
@@ -158,7 +162,7 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     style = (settings.get("style") or "").strip()
     if style:
         fields["style"] = style
-    if shot.get("farm_len") == "shot" and shot.get("duration"):
+    if shot.get("farm_len") == "shot" and shot.get("duration") and "voice_ref" not in images:  # с записью длину считает ферма
         fields["seconds"] = max(1, min(10, int(shot["duration"])))
     return {"fields": fields, "text": text, "images": images, "errors": errors, "warnings": warns}
 

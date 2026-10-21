@@ -816,7 +816,7 @@ function shotHtml(s) {
           <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
           ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}
           ${voiceHtml(s, i, d)}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
-      ${canVoice() && s.dialogue.length ? `<div class="muted small">🎙 «Записать голос»: образец для голосовой модели. Запись можно прослушать, увидеть её длину, оставить или удалить.</div>` : ""}
+      ${canVoice() && s.dialogue.length ? `<div class="muted small">🎙 «Записать голос»: на ферме запись становится речью шота, остальные нейросети её не берут. Запись можно прослушать, увидеть её длину, оставить или удалить.</div>` : ""}
       ${canWrite() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
       </fieldset>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
@@ -881,7 +881,7 @@ function dropVoiceDrafts(sid) {
 
 function voiceNote(s) {
   return s.engine === "renderfarm"
-    ? "Запись уйдёт на ферму вместе с описанием голоса как образец (поле voice_ref)."
+    ? "Уйдёт на ферму как сама речь: слова, голос и темп берутся из записи, губы идут по ней, длину шота ферма считает по записи (запись + около 2 с, не меньше 5 и не больше 10 с). Говорите реплику так, как она должна звучать."
     : `«${esc(engineName(s.engine))}» образец голоса не принимает: запись сохранена, её можно скачать и использовать вручную.`;
 }
 

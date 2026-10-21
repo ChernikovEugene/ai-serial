@@ -698,6 +698,15 @@ check("voice: a recording is attached to the line with its length", st == 200 an
 st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
 check("voice: the request preview shows the voice sample next to the voice description", "запись голоса" in str(q["body"].get("voice_ref")) and q["body"]["voice"] == "excited fast voice", q["body"])
 
+st, _ = admin.call("POST", f"/api/shots/{f1['id']}/voice", form={"line": "0", "seconds": "9.5", "file": ("voice.wav", WAV)})
+st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
+check("voice: a recording too long for a farm shot is warned about", "не больше 10 с" in q.get("warning", ""), q.get("warning"))
+admin.call("PUT", f"/api/shots/{f1['id']}", {"farm_len": "shot"})
+st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
+check("voice: with a recording the farm counts the length itself", "seconds" not in q["body"], q["body"])
+admin.call("PUT", f"/api/shots/{f1['id']}", {"farm_len": ""})
+admin.call("POST", f"/api/shots/{f1['id']}/voice", form={"line": "0", "seconds": "2.5", "file": ("voice.wav", WAV)})
+
 st, r = admin.call("POST", f"/api/episodes/{epf['id']}/generate", {"mode": "all", "force": True})
 check("farm: both shots accepted", st == 200 and r["started"] == 2, (st, r))
 tk = lambda i=0: admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][i]["takes"][-1]
