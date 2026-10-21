@@ -816,3 +816,13 @@ textarea.need { border-color: var(--warn); }
 .gap-form textarea { width: 100%; }
 .shot.just-added { animation: shot-added 2.5s ease-out; }
 @keyframes shot-added { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: none; } }
+
+/* запись голоса к реплике */
+.dlg-voice { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -2px 0 2px; padding: 6px 8px;
+  border: 1px dashed var(--line); border-radius: 8px; }
+.dlg-voice.empty { border: 0; padding: 0; }
+.dlg-voice.rec { border-color: var(--err); }
+.dlg-line .dlg-voice button { padding: 3px 8px; }
+.dlg-voice audio { height: 32px; max-width: 100%; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); animation: rec-pulse 1s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { opacity: .25; } }

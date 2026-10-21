@@ -36,6 +36,7 @@ def _site_version() -> str:
 SITE_VERSION = _site_version()
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
+AUDIO_EXT = {".wav", ".webm", ".ogg", ".m4a", ".mp3"}  # запись голоса к реплике
 # Лимиты загрузки: один ролик шота — до VIDEO_MAX_MB, картинка — до IMAGE_MAX_MB. И не загружаем, если на диске
 # с данными (на сервере — 10 ГБ) остаётся меньше DISK_RESERVE_MB: иначе студия перестанет сохранять базу.
 VIDEO_MAX_MB, IMAGE_MAX_MB, DISK_RESERVE_MB = 300, 20, 1024
@@ -1731,6 +1732,21 @@ def analyze(a: AnalyzeIn):
     }
 
 
+def carry_voice(old: list[dict], new: list[dict]) -> list[dict]:
+    """Сценарий разобран заново: записи голоса остаются у реплик с тем же текстом, у пропавших реплик файлы стираем."""
+    left = [d for d in old or [] if isinstance(d.get("voice_ref"), dict)]
+    norm = lambda t: " ".join(str(t or "").split()).casefold()  # noqa: E731
+    out = []
+    for d in new:
+        hit = next((o for o in left if norm(o.get("text")) == norm(d.get("text"))), None)
+        if hit:
+            left.remove(hit)
+            d = {**d, "voice_ref": hit["voice_ref"]}
+        out.append(d)
+    drop_voice_files(old, out)
+    return out
+
+
 def apply_breakdown(eid: int, only_new: bool = False):
     """Re-parse the script and merge into existing shots by shot label, keeping composition refs,
     takes, comments and manually locked prompts. only_new: уже существующие шоты не трогаем (только их порядок),
@@ -1767,6 +1783,8 @@ def apply_breakdown(eid: int, only_new: bool = False):
                                            "location_mode": "library", "location_text": ""}
             s.update({k: n[k] for k in ("idx", "label", "scene", "duration", "camera", "action", "dialogue",
                                         "characters", "location_version_id")})
+            if match:
+                s["dialogue"] = carry_voice(match["dialogue"], s["dialogue"])
             refresh_shot(s, ctx)
             save_shot(c, s)
             keep_ids.add(s["id"])
@@ -2009,6 +2027,8 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         if data.get(k) and farm.CYR.search(data[k]):
             raise HTTPException(400, "Это поле для своего английского текста. Русский пишите в обычных полях шота («Действие», «Камера»): "
                                      "ферма переведёт его сама. Если поле не нужно, оставьте его пустым")
+    if data.get("dialogue") is not None:
+        data["dialogue"] = clean_voice_refs(sid, data["dialogue"])
     for k, v in data.items():
         if v is not None or k == "location_version_id":
             s[k] = v
@@ -2020,8 +2040,112 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
     refresh_shot(s, ctx)
     with db.connect() as c:
         save_shot(c, s)
+    if data.get("dialogue") is not None:
+        drop_voice_files(before["dialogue"], s["dialogue"])
     promote_if_ready(s["episode_id"], uid(request))
     return {**shot_response(sid), "episode_status": load_episode_row(s["episode_id"])["status"]}
+
+
+# ---------- запись голоса к реплике: образец для голосовой модели ----------
+
+VOICE_PATH_RE = re.compile(r"^voice/(\d+)/[0-9a-f]{12}\.(?:wav|webm|ogg|m4a|mp3)$")
+VOICE_MAX_MB, VOICE_MAX_SECONDS = 10, 120
+
+
+def voice_paths(lines: list[dict]) -> set[str]:
+    return {d["voice_ref"]["path"] for d in lines or [] if isinstance(d.get("voice_ref"), dict) and d["voice_ref"].get("path")}
+
+
+def clean_voice_refs(sid: int, lines: list[dict]) -> list[dict]:
+    """Запись голоса у реплики приходит с клиента вместе со строками: оставляем только настоящие файлы этого шота."""
+    out = []
+    for d in lines:
+        d = dict(d)
+        ref = d.get("voice_ref")
+        m = VOICE_PATH_RE.match(str(ref.get("path"))) if isinstance(ref, dict) else None
+        if m and int(m.group(1)) == sid and (db.MEDIA_DIR / ref["path"]).is_file():
+            try:
+                seconds = round(float(ref.get("seconds") or 0), 1)
+            except (TypeError, ValueError):
+                seconds = 0
+            d["voice_ref"] = {"path": ref["path"], "seconds": seconds}
+        else:
+            d.pop("voice_ref", None)
+        out.append(d)
+    return out
+
+
+def drop_voice_files(before: list[dict], after: list[dict]) -> None:
+    """Реплику удалили или запись заменили: файл, на который больше никто не ссылается, стираем."""
+    for rel in voice_paths(before) - voice_paths(after):
+        if VOICE_PATH_RE.match(rel):
+            (db.MEDIA_DIR / rel).unlink(missing_ok=True)
+
+
+def sniff_audio(head: bytes) -> str | None:
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return ".wav"
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    if head[:4] == b"OggS":
+        return ".ogg"
+    if head[4:8] == b"ftyp":
+        return ".m4a"
+    if head[:3] == b"ID3" or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
+        return ".mp3"
+    return None
+
+
+@app.post("/api/shots/{sid}/voice", dependencies=[Depends(auth.need("script", "generation"))])
+def upload_voice(sid: int, request: Request, line: int = Form(...), seconds: float = Form(...), file: UploadFile = File(...)):
+    """Запись голоса к реплике шота (с микрофона в браузере): образец для голосовой модели. Одна запись на реплику, новая заменяет прежнюю."""
+    s = load_shot(sid)
+    visible_or_404(request, s["episode_id"])
+    if not 0 <= line < len(s["dialogue"]):
+        raise HTTPException(400, "Такой реплики в шоте нет: обновите страницу и запишите ещё раз")
+    if not 0.2 <= seconds <= VOICE_MAX_SECONDS:
+        raise HTTPException(400, f"Запись должна быть от 0,2 до {VOICE_MAX_SECONDS} секунд")
+    ext = sniff_audio(file.file.read(16))
+    file.file.seek(0)
+    if not ext:
+        raise HTTPException(400, "Это не аудиозапись: подходят wav, webm, ogg, m4a или mp3")
+    db.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(db.MEDIA_DIR).free // (1 << 20) < DISK_RESERVE_MB:
+        raise HTTPException(507, "На сервере почти закончилось место: удалите старые видео или увеличьте диск")
+    rel = f"voice/{sid}/{uuid.uuid4().hex[:12]}{ext}"
+    dest = db.MEDIA_DIR / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    with dest.open("wb") as out:
+        while chunk := file.file.read(1 << 20):
+            size += len(chunk)
+            if size > VOICE_MAX_MB << 20:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"Запись больше {VOICE_MAX_MB} МБ: запишите покороче")
+            out.write(chunk)
+    before = list(s["dialogue"])
+    s["dialogue"] = [{**d, "voice_ref": {"path": rel, "seconds": round(seconds, 1)}} if i == line else d for i, d in enumerate(before)]
+    with db.connect() as c:
+        save_shot(c, s)
+    drop_voice_files(before, s["dialogue"])
+    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: записан голос к реплике {line + 1} ({round(seconds, 1)} с)")
+    return shot_response(sid)
+
+
+@app.delete("/api/shots/{sid}/voice", dependencies=[Depends(auth.need("script", "generation"))])
+def delete_voice(sid: int, request: Request, line: int):
+    s = load_shot(sid)
+    visible_or_404(request, s["episode_id"])
+    if not 0 <= line < len(s["dialogue"]):
+        raise HTTPException(400, "Такой реплики в шоте нет: обновите страницу")
+    before = list(s["dialogue"])
+    s["dialogue"] = [{k: v for k, v in d.items() if k != "voice_ref"} if i == line else d for i, d in enumerate(before)]
+    with db.connect() as c:
+        save_shot(c, s)
+    drop_voice_files(before, s["dialogue"])
+    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: запись голоса к реплике {line + 1} удалена")
+    return shot_response(sid)
 
 
 def shot_texts(s: dict) -> str:
@@ -2682,11 +2806,11 @@ except Exception as e:  # noqa: BLE001 - запуск студии важнее
 
 @app.get("/pub/{sig}/{rel:path}")
 def public_media(sig: str, rel: str):
-    """Картинка по подписанной ссылке: так её забирает Magnific у моделей, которые принимают картинки только ссылкой.
+    """Картинка (и запись голоса для фермы) по подписанной ссылке: так её забирает Magnific у моделей, которые принимают картинки только ссылкой.
     Подпись привязана к пути файла, поэтому по ней нельзя открыть другие файлы студии."""
     f = (db.MEDIA_DIR / rel).resolve()
     if not hmac.compare_digest(sig, models.sign(rel)) or db.MEDIA_DIR.resolve() not in f.parents or not f.is_file() \
-            or f.suffix.lower() not in IMAGE_EXT:
+            or f.suffix.lower() not in IMAGE_EXT | AUDIO_EXT:
         raise HTTPException(404, "Не найдено")
     return FileResponse(f)
 

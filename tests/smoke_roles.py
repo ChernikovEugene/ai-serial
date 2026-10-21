@@ -690,6 +690,14 @@ check("farm: a Russian action is no error: it goes as written and is marked for 
 st, r = admin.call("PUT", f"/api/shots/{f2['id']}", {"farm_camera": "плавный наезд"})
 check("farm: Russian text in the English camera field is rejected", st == 400, st)
 
+# запись голоса к реплике: образец для голосовой модели уходит на ферму вместе с описанием голоса
+WAV = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\xbb\x00\x00\x00\x77\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+st, vr = admin.call("POST", f"/api/shots/{f1['id']}/voice", form={"line": "0", "seconds": "2.5", "file": ("voice.wav", WAV)})
+ref1 = (vr.get("dialogue") or [{}])[0].get("voice_ref") or {} if st == 200 else {}
+check("voice: a recording is attached to the line with its length", st == 200 and re.match(rf"^voice/{f1['id']}/[0-9a-f]{{12}}\.wav$", ref1.get("path", "")) and ref1.get("seconds") == 2.5, (st, vr))
+st, q = admin.call("GET", f"/api/shots/{f1['id']}/request")
+check("voice: the request preview shows the voice sample next to the voice description", "запись голоса" in str(q["body"].get("voice_ref")) and q["body"]["voice"] == "excited fast voice", q["body"])
+
 st, r = admin.call("POST", f"/api/episodes/{epf['id']}/generate", {"mode": "all", "force": True})
 check("farm: both shots accepted", st == 200 and r["started"] == 2, (st, r))
 tk = lambda i=0: admin.call("GET", f"/api/episodes/{epf['id']}")[1]["shots"][i]["takes"][-1]
@@ -706,6 +714,9 @@ check("farm: shot id is take-N, batch is the episode, Russian only in the line, 
       and "Привет" not in json.dumps({k: v for k, v in shot_f.items() if k != "line"}, ensure_ascii=False), shot_f)
 with urllib.request.urlopen(urllib.request.Request(shot_f["character"], headers={"Authorization": "Bearer whsec_test"})) as resp:
     check("farm: the picture link opens without a studio login", resp.status == 200 and resp.read()[:4] == PNG[:4])
+check("voice: the farm gets a link to the recording as voice_ref", shot_f.get("voice_ref", "").startswith(BASE + "/pub/") and shot_f["voice_ref"].endswith(".wav"), shot_f)
+with urllib.request.urlopen(urllib.request.Request(shot_f.get("voice_ref", BASE), headers={"Authorization": "Bearer whsec_test"})) as resp:
+    check("voice: the recording link opens without a studio login", resp.status == 200 and resp.read() == WAV)
 check("farm: the shot is handed over again until the farm accepts or rejects it", pult("GET", "/api/farmhub/jobs/pending")[1]["shots"] == got2)
 admin.call("POST", f"/api/takes/{tk(1)['id']}/cancel", {})  # дальше проверяем один шот; второй (русский) уже проверен
 got = [shot_f]
@@ -879,6 +890,60 @@ check("insert: editor can add to an approved episode", st == 200 and len(r6["sho
 st, r7 = admin.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Продюсер добавил"})
 check("insert: producer can add after approval", st == 200 and len(r7["shots"]) == len(r6["shots"]) + 1, (st, r7 if st != 200 else ""))
 check("insert: the same place again takes the next free letter, the shot stays where it was added", [x["label"] for x in r7["shots"]][:5] == ["1", "1в", "1б", "1а", "2"], [x["label"] for x in r7["shots"]][:5])
+
+# --- запись голоса к реплике: хранение, замена, удаление, права ---
+st, ev = writer.call("POST", "/api/episodes", {"title": "Голос", "script": "Шот 1\nАЛЬТУШКА: Привет!\nАЛЬТУШКА: Пока!\nАльтушка машет рукой.\n"})
+vs = ev["shots"][0]
+lines = vs["dialogue"]
+check("voice: the test shot has two lines", len(lines) == 2, lines)
+forged = [{**lines[0], "voice_ref": {"path": f"voice/{vs['id']}/000000000000.wav", "seconds": 3}}, lines[1]]
+st, r = writer.call("PUT", f"/api/shots/{vs['id']}", {"dialogue": forged})
+check("voice: a forged recording path is dropped", st == 200 and "voice_ref" not in r["dialogue"][0], r.get("dialogue"))
+st, r = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "1", "seconds": "3.04", "file": ("voice.wav", WAV)})
+rel1 = r["dialogue"][1]["voice_ref"]["path"] if st == 200 else ""
+check("voice: writer can record a voice for a line", st == 200 and r["dialogue"][1]["voice_ref"]["seconds"] == 3.0 and "voice_ref" not in r["dialogue"][0], (st, r))
+with admin.op.open(BASE + "/media/" + rel1) as resp:
+    check("voice: the recording plays from the studio", resp.status == 200 and resp.read() == WAV)
+st, r = writer.call("PUT", f"/api/shots/{vs['id']}", {"dialogue": [{**d, "parenthetical": "тихо"} if i == 1 else d for i, d in enumerate(r["dialogue"])]})
+check("voice: editing the line keeps its recording", st == 200 and r["dialogue"][1].get("voice_ref", {}).get("path") == rel1, r.get("dialogue"))
+st, r = editor.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "1", "seconds": "1.2", "file": ("voice.wav", WAV)})
+check("voice: the editor cannot reach a shot of an episode that is not approved", st == 404, st)
+st, r = admin.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "1", "seconds": "1.2", "file": ("voice.wav", WAV)})
+rel2 = r["dialogue"][1]["voice_ref"]["path"] if st == 200 else ""
+check("voice: a new recording replaces the old one and the old file is removed", st == 200 and rel2 != rel1 and admin.call("GET", f"/api/shots/{vs['id']}")[0] in (200, 405, 404), (st, rel1, rel2))
+try:
+    admin.op.open(BASE + "/media/" + rel1)
+    old_gone = False
+except urllib.error.HTTPError as e:
+    old_gone = e.code == 404
+check("voice: the replaced file is gone", old_gone)
+st, _ = viewer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "1", "file": ("voice.wav", WAV)})
+check("voice: a viewer cannot record", st == 403, st)
+st, _ = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "1", "file": ("voice.wav", b"not audio at all")})
+check("voice: not an audio file is refused", st == 400, st)
+st, _ = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "500", "file": ("voice.wav", WAV)})
+check("voice: a too long recording is refused", st == 400, st)
+st, _ = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "7", "seconds": "2", "file": ("voice.wav", WAV)})
+check("voice: a line that does not exist is refused", st == 400, st)
+st, r = writer.call("POST", f"/api/episodes/{ev['id']}/breakdown", {})
+check("voice: re-splitting the script keeps the recording of an unchanged line", st == 200 and r["shots"][0]["dialogue"][1].get("voice_ref", {}).get("path") == rel2, r["shots"][0]["dialogue"] if st == 200 else st)
+st, r = writer.call("DELETE", f"/api/shots/{vs['id']}/voice?line=1")
+check("voice: the recording can be deleted", st == 200 and "voice_ref" not in r["dialogue"][1], (st, r))
+try:
+    admin.op.open(BASE + "/media/" + rel2)
+    gone = False
+except urllib.error.HTTPError as e:
+    gone = e.code == 404
+check("voice: the deleted file is gone", gone)
+st, r = writer.call("POST", f"/api/shots/{vs['id']}/voice", form={"line": "0", "seconds": "2", "file": ("voice.wav", WAV)})
+rel3 = r["dialogue"][0]["voice_ref"]["path"] if st == 200 else ""
+st, r = writer.call("PUT", f"/api/shots/{vs['id']}", {"dialogue": r["dialogue"][1:]})
+try:
+    admin.op.open(BASE + "/media/" + rel3)
+    gone = False
+except urllib.error.HTTPError as e:
+    gone = e.code == 404
+check("voice: removing the line removes its recording file", st == 200 and gone, (st, rel3))
 
 # --- удаление версии персонажа ---
 v1 = alt["versions"][0]["id"]

@@ -127,6 +127,9 @@ def plan(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
         voice = " ".join(x for x in (paren, lib) if x)
     if voice:
         text["voice"] = voice
+    ref = (line or {}).get("voice_ref")
+    if isinstance(ref, dict) and ref.get("path"):  # записанный голос: образец для голосовой модели, уходит с описанием голоса
+        images["voice_ref"] = ref["path"]
 
     loc_text = ""
     if shot.get("location_mode") == "text":
@@ -189,7 +192,8 @@ def build(p: dict, ref: str, settings: dict) -> dict:
         shot["translate"] = True
     for k, rel in p["images"].items():
         if not (db.MEDIA_DIR / rel).is_file():
-            raise FarmError(f"Картинка «{rel}» не найдена на сервере: загрузите её в библиотеку заново")
+            raise FarmError("Запись голоса не найдена на сервере: запишите её заново" if k == "voice_ref"
+                            else f"Картинка «{rel}» не найдена на сервере: загрузите её в библиотеку заново")
     return {"shot": shot, "images": p["images"]}
 
 
@@ -199,7 +203,7 @@ def preview(shot: dict, v_map: dict, a_map: dict, settings: dict) -> dict:
     body = {**{k: v for k, v in p["fields"].items() if v is not None},
             **{("location_text" if k == "location" else k): (f"{v}  [переведёт ферма]" if CYR.search(v) else v)
                for k, v in p["text"].items()},
-            **{k: f"<ссылка на картинку {rel}>" for k, rel in p["images"].items()}}
+            **{k: (f"<ссылка на запись голоса {rel}>" if k == "voice_ref" else f"<ссылка на картинку {rel}>") for k, rel in p["images"].items()}}
     if needs_translation({**p["fields"], **{("location_text" if k == "location" else k): v for k, v in p["text"].items()}}):
         body["translate"] = True
     out = {"model": "Рендерферма (Пульт, MiniMax H3)", "url": "GET /api/farmhub/jobs/pending (шот забирает Пульт)", "body": body}
