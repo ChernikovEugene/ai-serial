@@ -1789,13 +1789,14 @@ class ShotInsertIn(BaseModel):
     text: str   # что в кадре, в формате сценария (реплики «МАША: Привет!», камера «КАМЕРА: …»)
 
 
-@app.post("/api/episodes/{eid}/shots", dependencies=[Depends(auth.need("script"))])
+@app.post("/api/episodes/{eid}/shots", dependencies=[Depends(auth.need("script", "generation"))])
 def insert_shot(eid: int, p: ShotInsertIn, request: Request):
     """Промежуточный шот в готовом сценарии: текст вставляется в сценарий блоком «Шот 2а» после выбранного шота.
     Номера остальных шотов не меняются, поэтому дубли и комментарии остаются у своих шотов, а карточки других шотов
-    не перечитываются из сценария."""
+    не перечитываются из сценария. Добавлять может любой, кто пишет сценарий или генерирует (в том числе после согласования
+    ТЗ): существующий текст не меняется, шот только добавляется."""
+    visible_or_404(request, eid)
     ep = load_episode_row(eid)
-    writer_may_edit(request, ep["status"])
     body = p.text.strip()
     if not body:
         raise HTTPException(400, "Опишите, что происходит в новом шоте")
