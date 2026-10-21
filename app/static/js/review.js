@@ -22,21 +22,29 @@ const versionCount = () => Math.max(0, ...shots().flatMap((s) => s.takes.filter(
 const versionLabel = (v) => (+v ? `v${v}` : "нет видео");
 
 export function stopReview() {
+  if (R.root?.isConnected || R.playing) R.last = { ep: E.id, sid: E.sel, local: R.local, playing: R.playing, at: Date.now() }; // где остановились: перерисовка продолжит с этого места
   R.playing = false;
   clearInterval(R.timer);
   clearTimeout(R.poll);
   $("video", R.root || document)?.pause?.();
 }
 
+/** Идёт ли просмотр серии: пока смотрят, страница не перерисовывается сама (иначе ролик останавливался и шёл сначала). */
+export const reviewPlaying = () => R.playing && !!R.root?.isConnected && !!$("#ph-media video");
+
 export async function drawReview(el) {
+  // перерисовка (смена статуса дубля, действие на странице) не должна сбивать просмотр: запоминаем, где остановились
   stopReview();
+  const keep = R.last && R.last.ep === E.id && Date.now() - R.last.at < 5000 ? R.last : null; // перерисовка сразу после остановки, а не возврат на вкладку позже
+  R.last = null;
   R.root = el;
   const ep = E.ep;
   if (!ep.shots.length) { el.innerHTML = `<div class="card muted">Шотов нет — сначала разбейте сценарий.</div>`; return; }
   R.comments = await api(`/api/episodes/${E.id}/comments`);
   R.dur = ep.shots.map((s) => s.duration);
   R.i = Math.max(0, ep.shots.findIndex((s) => s.id === E.sel));
-  R.local = 0;
+  const resume = keep && keep.sid === ep.shots[R.i]?.id;
+  R.local = resume ? keep.local : 0;
   const vs = versionCount();
   if (!R.version || +R.version > vs || (+R.version < 1 && vs)) R.version = String(vs); // по умолчанию показывается последняя версия
   const redo = ep.shots.filter((x) => x.needs_redo || x.open_fixes).length;
@@ -77,7 +85,9 @@ export async function drawReview(el) {
   if (ep.export_status === "building") {
     R.poll = setTimeout(async () => { if (E.tab === "review" && R.root?.isConnected) renderEpisode(E.id); }, 3000); // ждём, пока соберётся архив
   }
-  mount(R.i, 0, false);
+  R.playing = !!(resume && keep.playing);
+  setPlayBtn();
+  mount(R.i, R.local, R.playing);
   drawTrack();
   drawComments();
   drawShotTools();

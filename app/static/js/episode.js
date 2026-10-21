@@ -5,7 +5,7 @@ import {
 } from "./core.js";
 import { attachMentions } from "./mention.js";
 import { attachHighlight } from "./highlight.js";
-import { drawReview, stopReview } from "./review.js";
+import { drawReview, reviewPlaying, stopReview } from "./review.js";
 import { seenEpisode } from "./notify.js";
 
 export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "", gap: null };
@@ -72,6 +72,7 @@ const detailsKey = (d) => {
   return t ? [d.closest("[id^='shot-']")?.id || "", d.id, t].join("|") : "";
 };
 const typingNow = () => { const a = document.activeElement; return !!a && view().contains(a) && isDirty(a); };
+const busyNow = () => typingNow() || (E.tab === "review" && reviewPlaying()); // печатают или смотрят серию: перерисовку откладываем
 
 async function redrawKeepingEdits(redraw) {
   const root = view();
@@ -112,7 +113,7 @@ function patchFarm(s) {
 }
 
 function schedulePoll() {
-  stopEpisodePolling();
+  clearTimeout(E.poll); // только таймер опроса: просмотр серии не трогаем, иначе он останавливался после каждой перерисовки
   const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status)) || E.sig !== signature(E.ep); // второе: перерисовка отложена, пока человек печатает
   if (!busy) return;
   E.poll = setTimeout(async () => {
@@ -121,7 +122,7 @@ function schedulePoll() {
     const sig = signature(ep);
     E.ep = ep;
     if (sig !== E.sig && ["script", "main"].includes(E.tab)) E.sig = sig; // never wipe the text being edited
-    else if (sig !== E.sig && !typingNow()) {
+    else if (sig !== E.sig && !busyNow()) {
       E.sig = sig;
       await redrawKeepingEdits(() => { drawHeader(); return drawTab(); });
     } else ep.shots.forEach(patchFarm); // процент и черновик фермы меняются чаще статуса: обновляем на месте, поля не трогаем
