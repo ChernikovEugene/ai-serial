@@ -150,6 +150,13 @@ async function renderLogin() {
 }
 
 $("#foot").textContent = `© ${new Date().getFullYear()} Студия сериала`;
+
+// «Наверх»: кнопка появляется, когда страницу пролистали вниз (длинные серии с десятками шотов)
+const toTop = $("#to-top");
+const showToTop = () => toTop.classList.toggle("show", window.scrollY > 600);
+window.addEventListener("scroll", showToTop, { passive: true });
+toTop.onclick = () => window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+showToTop();
 window.addEventListener("hashchange", route);
 window.addEventListener("unhandledrejection", (e) => { if (e.reason?.message !== "auth") console.error(e.reason); });
 if (!location.hash) location.hash = "#/"; else route();

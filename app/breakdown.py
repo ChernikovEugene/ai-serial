@@ -277,6 +277,63 @@ def has_markers(text: str) -> bool:
     return any(SHOT_MARK_RE.match(l.strip()) for l in text.splitlines())
 
 
+SHOT_LETTERS = "абвгдежзиклмнопрстуфхцчшщэюя"  # без «й», «ъ», «ы», «ь»: их легко спутать с соседними буквами
+
+
+def _belongs_to_next(line: str) -> bool:
+    """Пустая строка, разделитель или заголовок сцены в хвосте блока шота: это уже контекст следующего шота."""
+    s = line.strip()
+    return not s or bool(BREAK_RE.match(s)) or (bool(SCENE_RE.match(s)) and not s[:1].islower())
+
+
+def has_scene_heading(text: str) -> bool:
+    return any(SCENE_RE.match(l.strip()) and not l.strip()[:1].islower() for l in text.splitlines())
+
+
+def insert_shot_block(text: str, label: str, occurrence: int, body: str) -> tuple[str, str]:
+    """Вставляет в сценарий с пометками «Шот N» новый шот сразу после шота `label` (occurrence — какой он по счёту,
+    если номер в сценарии повторяется). Новый шот получает номер с буквой («2а» после «2»), поэтому номера остальных
+    шотов не сдвигаются и дубли, комментарии и промпты остаются у своих шотов. Возвращает (новый текст, номер нового шота)."""
+    lines = text.splitlines(keepends=True)
+    marks = []
+    for i, l in enumerate(lines):
+        m = SHOT_MARK_RE.match(l.strip())
+        if m:
+            marks.append((i, m.group(1), m.group(2).strip(" *_")))
+    same = [k for k, (_, lab, _) in enumerate(marks) if lab == label]
+    if occurrence >= len(same):
+        raise ValueError(f"В сценарии не нашёлся шот {label}. Нажмите «Сохранить и разбить на шоты» на вкладке «Сценарий» и повторите")
+    k = same[occurrence]
+    start = marks[k][0]
+    end = marks[k + 1][0] if k + 1 < len(marks) else len(lines)
+    for l in body.splitlines():
+        if SHOT_MARK_RE.match(l.strip()):
+            raise ValueError("В тексте нового шота не должно быть строки «Шот N»: номер шоту даст студия")
+
+    def has_text(l: str) -> bool:
+        return not _belongs_to_next(l) and not (CAMERA_RE.match(l.strip()) or BRACKET_RE.match(l.strip()))
+    at = end
+    if marks[k][2] or any(has_text(l) for l in lines[start + 1:end]):  # у пустого шота заголовок сцены в хвосте принадлежит ему
+        while at > start + 1 and _belongs_to_next(lines[at - 1]):
+            at -= 1
+
+    taken = {lab.lower() for _, lab, _ in marks}
+    m = re.match(r"(\d+)([a-zа-я]?)$", label, re.I)
+    base, suffix = (m.group(1), m.group(2).lower()) if m else (label, "")
+    new_label = next((f"{base}{ch}" for ch in SHOT_LETTERS if (not suffix or ch > suffix) and f"{base}{ch}" not in taken), None)
+    if not new_label:
+        raise ValueError(f"После шота {label} уже не осталось свободных номеров с буквой")
+
+    eol = next((l[len(l.rstrip("\r\n")):] for l in lines[start:end] if l.endswith(("\n", "\r"))), "\n")
+    block = ["", f"Шот {new_label}", *[l.rstrip() for l in body.strip().splitlines()]]
+    head = lines[:at]
+    if head and not head[-1].endswith(("\n", "\r")):
+        head[-1] += eol
+    tail = lines[at:]
+    out = head + [l + eol for l in block] + ([eol] if tail and tail[0].strip() else []) + tail
+    return "".join(out), new_label
+
+
 def parse_script(text: str, assets: list[dict], settings: dict, cast: dict | None = None) -> tuple[list[dict], list[str]]:
     """Returns (shots, episode-level notes)."""
     idx = AssetIndex(assets, cast)

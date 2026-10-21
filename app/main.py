@@ -1731,9 +1731,10 @@ def analyze(a: AnalyzeIn):
     }
 
 
-def apply_breakdown(eid: int):
+def apply_breakdown(eid: int, only_new: bool = False):
     """Re-parse the script and merge into existing shots by shot label, keeping composition refs,
-    takes, comments and manually locked prompts."""
+    takes, comments and manually locked prompts. only_new: уже существующие шоты не трогаем (только их порядок),
+    создаём лишь те, которых ещё нет: так добавление шота не сбрасывает персонажей и локации, выбранные в карточках."""
     ep = load_episode_row(eid)
     ctx = Ctx()
     new, notes = breakdown.parse_script(ep["script"], ctx.assets, ctx.settings, episode_cast(eid))
@@ -1742,9 +1743,22 @@ def apply_breakdown(eid: int):
         pool = {}
         for o in old:
             pool.setdefault(o["label"] or str(o["idx"]), []).append(o)
+        if only_new:
+            left = {}
+            for n in new:
+                left[n["label"]] = left.get(n["label"], 0) + 1
+            for o in old:
+                key = o["label"] or str(o["idx"])
+                if not left.get(key):
+                    raise ValueError(f"шот {key} есть в базе, но пропал из разбора сценария")
+                left[key] -= 1
         keep_ids = set()
         for n in new:
             match = (pool.get(n["label"]) or [None]).pop(0) if pool.get(n["label"]) else None
+            if match and only_new:
+                c.execute("UPDATE shots SET idx=? WHERE id=?", (n["idx"], match["id"]))
+                keep_ids.add(match["id"])
+                continue
             s = dict(match) if match else {"episode_id": eid, "composition_image": "", "composition_mode": "reference",
                                            "composition_note": "", "prompt": "", "prompt_locked": 0,
                                            "negative_prompt": ctx.settings.get("negative_prompt", ""),
@@ -1768,6 +1782,56 @@ def breakdown_episode(eid: int, request: Request):
     apply_breakdown(eid)
     promote_if_ready(eid, uid(request))
     return get_episode(eid)
+
+
+class ShotInsertIn(BaseModel):
+    after: int  # id шота, после которого появится новый
+    text: str   # что в кадре, в формате сценария (реплики «МАША: Привет!», камера «КАМЕРА: …»)
+
+
+@app.post("/api/episodes/{eid}/shots", dependencies=[Depends(auth.need("script"))])
+def insert_shot(eid: int, p: ShotInsertIn, request: Request):
+    """Промежуточный шот в готовом сценарии: текст вставляется в сценарий блоком «Шот 2а» после выбранного шота.
+    Номера остальных шотов не меняются, поэтому дубли и комментарии остаются у своих шотов, а карточки других шотов
+    не перечитываются из сценария."""
+    ep = load_episode_row(eid)
+    writer_may_edit(request, ep["status"])
+    body = p.text.strip()
+    if not body:
+        raise HTTPException(400, "Опишите, что происходит в новом шоте")
+    if not breakdown.has_markers(ep["script"]):
+        raise HTTPException(400, "В сценарии нет пометок «Шот 1», «Шот 2»… — номера шотов выдаются по порядку, и вставка сдвинула бы "
+                                 "дубли на чужие шоты. Расставьте пометки на вкладке «Сценарий» или допишите шот в сценарий")
+    after = load_shot(p.after)
+    if after["episode_id"] != eid:
+        raise HTTPException(404, "Шот не найден")
+    with db.connect() as c:
+        same = [r["id"] for r in c.execute("SELECT id FROM shots WHERE episode_id=? AND label=? ORDER BY idx", (eid, after["label"]))]
+    try:
+        script, label = breakdown.insert_shot_block(ep["script"], after["label"], same.index(after["id"]), body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with db.connect() as c:
+        c.execute("UPDATE episodes SET script=?, updated_at=? WHERE id=?", (script, db.now(), eid))
+    try:
+        apply_breakdown(eid, only_new=True)
+    except ValueError as e:  # шоты разошлись со сценарием: возвращаем прежний текст, ничего не меняя
+        with db.connect() as c:
+            c.execute("UPDATE episodes SET script=? WHERE id=?", (ep["script"], eid))
+        raise HTTPException(409, f"Не получилось добавить шот: {e}. Нажмите «Сохранить и разбить на шоты» на вкладке «Сценарий» и повторите")
+    with db.connect() as c:
+        new_id = next((r["id"] for r in c.execute("SELECT id FROM shots WHERE episode_id=? AND label=?", (eid, label))), None)
+    if new_id and not breakdown.has_scene_heading(body):  # промежуточный шот снимают там же, где предыдущий: локация с его карточки
+        s = load_shot(new_id)
+        s.update({k: after[k] for k in ("location_version_id", "location_mode", "location_text")})
+        refresh_shot(s, Ctx())
+        with db.connect() as c:
+            save_shot(c, s)
+    db.log(eid, uid(request), f"Добавлен шот {label} после шота {after['label']}")
+    promote_if_ready(eid, uid(request))
+    out = get_episode(eid)
+    out["inserted_shot_id"] = new_id
+    return out
 
 
 class CastIn(BaseModel):

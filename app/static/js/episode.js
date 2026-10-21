@@ -8,7 +8,7 @@ import { attachHighlight } from "./highlight.js";
 import { drawReview, stopReview } from "./review.js";
 import { seenEpisode } from "./notify.js";
 
-export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "" };
+export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "", gap: null };
 export const TAKE_STATUS = { queued: ["в очереди", "run"], running: ["генерация…", "run"], done: ["готово", "ok"],
   stub: ["заглушка", "warn"], error: ["ошибка", "err"], cancelled: ["отменено", ""], idle: ["не создано", ""] };
 
@@ -45,7 +45,7 @@ export function stopEpisodePolling() { clearTimeout(E.poll); stopReview(); }
 
 export async function renderEpisode(id, tab) {
   stopEpisodePolling();
-  if (E.id !== id) { E.sel = null; }
+  if (E.id !== id) { E.sel = null; E.gap = null; }
   const again = E.id === id && (!tab || tab === E.tab) && !!$("#ep-tab"); // тот же экран: набранное не должно пропасть
   E.id = id;
   if (tab) E.tab = ["script", "shots", "review", "main", "history"].includes(tab) ? tab : "script";
@@ -649,11 +649,71 @@ function drawShots(el) {
     ? `${writerLocked() ? `<div class="help warn-card" style="margin-bottom:12px">🔒 Сценарий согласован, править шоты может только продюсер. Чтобы внести правки, попросите вернуть серию в «В разработке».</div>` : ""}
        <div class="help" style="margin-bottom:12px">${can.write()
          ? `Шоты строятся из сценария. Здесь выбирают персонажей, локацию и тип озвучки реплик. Правки полей перезапишутся, если поменять текст этого шота в сценарии;
-            референс композиции, дубли, комментарии и вручную изменённый промпт сохраняются.`
+            референс композиции, дубли, комментарии и вручную изменённый промпт сохраняются.${!canWrite() ? "" : `<br>
+            ${ep.marked ? `Не хватает шота по режиссуре? Нажмите «＋ Добавить шот» между карточками: он получит номер вроде «2а», остальные шоты не сдвинутся.`
+              : `Чтобы добавлять шоты между готовыми, поставьте в сценарии пометки «Шот 1», «Шот 2»… — без них номера шотов идут по порядку и сдвинулись бы.`}`}`
          : `Сценарий этой серии согласован. Содержание шотов смотрите слева, а промпты и генерацию настраивайте справа.`}</div>
-       <div id="shots">${ep.shots.map(shotHtml).join("")}</div>`
+       <div id="shots">${ep.shots.map((s, i) => shotHtml(s) + gapHtml(s, ep.shots[i + 1])).join("")}</div>`
     : `<div class="card"><p>Шотов пока нет.</p><p class="muted">Напишите сценарий на вкладке «Сценарий» и нажмите «Сохранить и разбить на шоты».</p></div>`;
   ep.shots.forEach(bindShot);
+  ep.shots.forEach((s) => bindGap(s.id));
+}
+
+// ---------- промежуточный шот ----------
+// Между карточками шотов: «＋ шот между 2 и 3». Текст нового шота уходит в сценарий блоком «Шот 2а», номера остальных не сдвигаются.
+function gapHtml(s, next) {
+  if (!canWrite() || !E.ep.marked) return "";
+  const where = next ? `между ${esc(s.label)} и ${esc(next.label)}` : `в конец, после ${esc(s.label)}`;
+  return `<div class="shot-gap ${E.gap === s.id ? "open" : ""}" id="gap-${s.id}">${E.gap === s.id
+    ? `<div class="card gap-form">
+        <b>Новый шот ${where}</b>
+        <textarea id="gap-text" rows="4" placeholder="Что в кадре. Реплики как в сценарии: МАША: Привет! Камера: КАМЕРА: крупный план. Героев можно выбрать через @"></textarea>
+        <div class="row"><button class="primary small" data-gap-add>Добавить шот</button>
+          <button class="ghost small" data-gap-cancel>Отмена</button>
+          <span class="muted small">Шот встанет в сценарий с номером «${esc(s.label)}а» (или следующей буквой), номера остальных шотов не изменятся.</span></div>
+      </div>`
+    : `<button class="ghost small" data-gap-open>＋ Добавить шот ${where}</button>`}</div>`;
+}
+
+function refreshGap(sid) {
+  const box = $(`#gap-${sid}`);
+  const i = E.ep.shots.findIndex((s) => s.id === sid);
+  if (!box || i < 0) return;
+  box.outerHTML = gapHtml(E.ep.shots[i], E.ep.shots[i + 1]);
+  bindGap(sid);
+}
+
+function bindGap(sid) {
+  const box = $(`#gap-${sid}`);
+  if (!box) return;
+  const ta = $("#gap-text", box);
+  if (ta) attachMentions(ta);
+  $("[data-gap-open]", box)?.addEventListener("click", () => {
+    const prev = E.gap;
+    E.gap = sid;
+    if (prev && prev !== sid) refreshGap(prev);
+    refreshGap(sid);
+    $("#gap-text")?.focus();
+  });
+  $("[data-gap-cancel]", box)?.addEventListener("click", () => { E.gap = null; refreshGap(sid); });
+  const add = async () => {
+    const text = ta.value.trim();
+    if (!text) { toast("Опишите, что происходит в новом шоте", true); return; }
+    const btn = $("[data-gap-add]", box);
+    btn.disabled = true;
+    try {
+      const res = await api(`/api/episodes/${E.id}/shots`, { json: { after: sid, text } });
+      const made = res.shots.find((x) => x.id === res.inserted_shot_id);
+      E.gap = null; E.ep = res; E.sig = signature(res);
+      drawHeader();
+      drawShots($("#ep-tab"));
+      toast(`Шот ${made?.label || ""} добавлен`);
+      const card = $(`#shot-${res.inserted_shot_id}`);
+      if (card) { card.scrollIntoView({ block: "center", behavior: "smooth" }); card.classList.add("just-added"); setTimeout(() => card.classList.remove("just-added"), 2500); }
+    } catch { btn.disabled = false; }
+  };
+  $("[data-gap-add]", box)?.addEventListener("click", add);
+  ta?.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); add(); } });
 }
 
 export function takeBadge(s) {

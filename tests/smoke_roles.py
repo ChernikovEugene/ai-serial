@@ -822,6 +822,56 @@ check("farm: with the public address set, picture links use it", got and got[0][
 admin.call("POST", f"/api/takes/{tk(0)['id']}/cancel", {})
 admin.call("PUT", "/api/settings", {"gen_mode": "stub", "public_base_url": ""})
 
+# --- промежуточный шот в готовом сценарии: вставка «Шот 2а», остальные шоты не трогаем ---
+ins_script = ("Шот 1\nИНТ. КАФЕ — ДЕНЬ\nМаша сидит у окна.\n\nШот 2\nКостя входит в кафе.\nКАМЕРА: общий план\n\n"
+              "ИНТ. УЛИЦА — НОЧЬ\n\nШот 3\nМаша выходит на улицу.\n")
+st, ei = writer.call("POST", "/api/episodes", {"title": "Вставка", "script": ins_script})
+check("insert: episode with three marked shots", st == 200 and [s["label"] for s in ei["shots"]] == ["1", "2", "3"], st)
+iid = ei["id"]
+old = {s["label"]: s["id"] for s in ei["shots"]}
+kostya = next(a for a in assets if a["name"] == "Костя")
+writer.call("PUT", f"/api/shots/{old['3']}", {"characters": [{"asset_id": kostya["id"], "name": "Костя", "version_id": kostya["versions"][0]["id"]}]})
+writer.call("PUT", f"/api/shots/{old['2']}", {"location_mode": "text", "location_text": "Балкон с видом на двор"})
+st, r = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["2"], "text": "Крупно: чашка на столе.\nМАША: Ой!"})
+labels = [x["label"] for x in r["shots"]] if st == 200 else []
+check("insert: new shot goes after the chosen one and takes 2а", st == 200 and labels == ["1", "2", "2а", "3"], (st, labels, r if st != 200 else ""))
+check("insert: old shots keep their ids", st == 200 and {x["label"]: x["id"] for x in r["shots"] if x["label"] in old} == old)
+check("insert: response points at the new shot", st == 200 and r["inserted_shot_id"] == r["shots"][2]["id"])
+new_shot = r["shots"][2] if st == 200 else {}
+check("insert: new shot has the typed text and dialogue", "чашка" in (new_shot.get("action") or "") and len(new_shot.get("dialogue") or []) == 1, new_shot.get("action"))
+check("insert: scene of the new shot is the scene of the previous one", new_shot.get("scene") == r["shots"][1]["scene"], (new_shot.get("scene"), r["shots"][1]["scene"]))
+check("insert: script text got the «Шот 2а» block before the next scene heading",
+      st == 200 and re.search(r"КАМЕРА: общий план\n\nШот 2а\nКрупно: чашка на столе\.\nМАША: Ой!\n\nИНТ\. УЛИЦА", r["script"]) is not None, r.get("script"))
+check("insert: new shot takes the location from the card of the previous shot",
+      st == 200 and new_shot.get("location_mode") == "text" and new_shot.get("location_text") == "Балкон с видом на двор", (new_shot.get("location_mode"), new_shot.get("location_text")))
+check("insert: manual card choice of another shot survives", st == 200 and [c["name"] for c in r["shots"][3]["characters"]] == ["Костя"], r["shots"][3]["characters"] if st == 200 else "")
+check("insert: indexes are contiguous", st == 200 and [x["idx"] for x in r["shots"]] == [1, 2, 3, 4], [x["idx"] for x in r["shots"]])
+st, r2 = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": new_shot["id"], "text": "Костя замечает чашку."})
+check("insert: after 2а comes 2б", st == 200 and [x["label"] for x in r2["shots"]] == ["1", "2", "2а", "2б", "3"], (st, r2 if st != 200 else ""))
+st, r3 = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["3"], "text": "Огни города."})
+check("insert: after the last shot", st == 200 and [x["label"] for x in r3["shots"]][-2:] == ["3", "3а"], (st, r3 if st != 200 else ""))
+st, r4 = writer.call("POST", f"/api/episodes/{iid}/breakdown", {})
+check("insert: «Сохранить и разбить» keeps the same shots", st == 200 and [x["id"] for x in r4["shots"]] == [x["id"] for x in r3["shots"]], st)
+st, evs = writer.call("GET", f"/api/episodes/{iid}/events")
+check("insert: written to history", st == 200 and any("Добавлен шот 2а после шота 2" in e["text"] for e in evs), evs)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "   "})
+check("insert: empty text rejected", st == 400, st)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Шот 9\nЧто-то"})
+check("insert: «Шот N» inside the text rejected", st == 400, st)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": shot3["id"], "text": "Чужой шот"})
+check("insert: shot of another episode rejected", st == 404, st)
+st, _ = editor.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Редактор"})
+check("insert: editor cannot add shots", st in (403, 404), st)
+st, eu = writer.call("POST", "/api/episodes", {"title": "Без пометок", "script": "Маша сидит.\n\nКостя входит.\n"})
+st, _ = writer.call("POST", f"/api/episodes/{eu['id']}/shots", {"after": eu["shots"][0]["id"], "text": "Новый"})
+check("insert: script without «Шот N» marks is refused", st == 400, st)
+st, _ = admin.call("POST", f"/api/episodes/{iid}/status", {"status": "approved", "force": True})
+check("insert: episode approved for the lock check", st == 200, st)
+st, _ = writer.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Поздно"})
+check("insert: writer cannot add after the TZ is approved", st == 403, st)
+st, r5 = admin.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Продюсер добавил"})
+check("insert: producer can add after approval", st == 200 and len(r5["shots"]) == len(r3["shots"]) + 1, (st, r5 if st != 200 else ""))
+
 # --- удаление версии персонажа ---
 v1 = alt["versions"][0]["id"]
 st, a5 = writer.call("POST", f"/api/assets/{alt['id']}/versions", form={"label": "Зима", "images": ("w.png", PNG)})
