@@ -302,6 +302,13 @@ def run():
     st, r = admin.call("DELETE", f"/api/shots/{s3['id']}/frames/start")
     check("frame can be reset", st == 200 and r["frames"]["start"]["status"] == "" and r["frames"]["start"]["prompt"] == "x y z", r["frames"]["start"])
 
+    # --- готовая картинка вместо кадра ---
+    st, r = admin.call("POST", f"/api/shots/{s3['id']}/frames/end/image", form={"image": ("mine.png", PNG)})
+    fe = r["frames"]["end"] if st == 200 else {}
+    check("own image makes the frame ready", st == 200 and fe.get("ready") and fe.get("own") and (DATA / "media" / fe["path"]).exists(), r)
+    st, r = admin.call("DELETE", f"/api/shots/{s3['id']}/frames/end")
+    check("own image can be removed", st == 200 and not r["frames"]["end"]["ready"] and not (DATA / "media" / fe["path"]).exists(), r)
+
     # --- удаление версии убирает картинки состояний ---
     st, a = admin.call("POST", f"/api/assets/{maria['id']}/versions", form={"label": "Зима", "images": ("w.png", PNG)})
     old_state_files = [i["path"] for i in maria_states(admin, maria["id"], vid)]

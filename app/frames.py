@@ -227,7 +227,7 @@ def reset(shot_id: int, side: str) -> None:
     f = load(shot_id, side)
     if f.get("path"):
         _drop_file(f["path"], shot_id)
-    update(shot_id, side, status="", path="", error="", task_id="", started="")
+    update(shot_id, side, status="", path="", error="", task_id="", started="", own=False)
 
 
 def remove_files(shot_id: int) -> None:

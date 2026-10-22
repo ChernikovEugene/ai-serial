@@ -2462,6 +2462,21 @@ def generate_frame(sid: int, side: str, request: Request, p: FrameIn | None = No
     return shot_response(sid)
 
 
+@app.post("/api/shots/{sid}/frames/{side}/image", dependencies=[Depends(auth.need("generation"))])
+def set_frame_image(sid: int, side: str, image: UploadFile = File(...)):
+    """Готовая картинка вместо кадра Nano Banana: свой реф, который не нужно рисовать. Кадр сразу «готов»."""
+    omni_shot(sid)
+    frame_side(side)
+    cur = frames.load(sid, side)
+    if cur.get("status") in ("queued", "running"):
+        raise HTTPException(400, "Этот кадр сейчас рисуется: дождитесь результата или сбросьте его")
+    rel = save_upload(image, f"frames/{sid}")
+    if cur.get("path"):
+        frames._drop_file(cur["path"], sid)
+    frames.update(sid, side, status="done", path=rel, own=True, error="", task_id="", started="", request="")
+    return shot_response(sid)
+
+
 @app.delete("/api/shots/{sid}/frames/{side}", dependencies=[Depends(auth.need("generation"))])
 def reset_frame(sid: int, side: str):
     """Убрать готовый кадр или сбросить зависший: промпт и референсы остаются."""

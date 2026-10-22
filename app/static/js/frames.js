@@ -80,11 +80,14 @@ function pickerHtml(s, side, f) {
 
 function frameHtml(s, side, title) {
   const f = s.frames[side];
-  const [label, cls] = STATUS[f.status] || ["Не сделан", ""];
+  const [label0, cls] = STATUS[f.status] || ["Не сделан", ""];
+  const label = f.own && f.status === "done" ? "Своя картинка" : label0;
   const busy = ["queued", "running"].includes(f.status);
   const startReady = s.frames.start.ready;
   const img = f.ready ? `<a href="${media(f.path)}" target="_blank"><img src="${media(f.path)}" alt="${esc(title)}"></a>`
-    : `<div class="frame-ph">${busy ? `<span class="spin"></span>Рисуется…` : "9:16"}</div>`;
+    : busy ? `<div class="frame-ph"><span class="spin"></span>Рисуется…</div>`
+    : `<div class="frame-ph own-drop" data-fimg tabindex="0" title="Готовое изображение вместо кадра из Nano Banana">9:16<small>Есть готовый кадр? Перетащите, вставьте (Ctrl+V) или нажмите</small>
+        <input type="file" accept="image/png,image/jpeg,image/webp" hidden></div>`;
   const k = `${s.id}:${side}`;
   return `<div class="frame ${f.ready ? "ready" : ""} ${f.status === "error" ? "bad" : ""}" data-frame="${side}">
     <div class="row"><b>${title}</b><span class="badge ${cls}">${label}</span><div class="spacer"></div>
@@ -187,6 +190,8 @@ const pasteImages = (e) => [...(e.clipboardData?.files || [])].filter((f) => /^i
 document.addEventListener("paste", (e) => {
   const files = pasteImages(e);
   if (!files.length) return;
+  const slot = $("[data-fimg]:hover") || (document.activeElement?.matches?.("[data-fimg]") ? document.activeElement : null);
+  if (slot) { e.preventDefault(); return slot.closest("[data-frame]")._setImage?.(files); } // над пустым местом кадра: это сам кадр, а не референс
   const fr = document.activeElement?.closest?.("[data-frame]") || $("[data-frame]:hover");
   if (!fr?._upload) return;
   e.preventDefault();
@@ -247,6 +252,25 @@ export function bindFrames(s, hooks) {
       out.textContent = "…";
       out.textContent = JSON.stringify(await api(`/api/shots/${s.id}/frames/${side}/request`), null, 2);
     };
+    const own = $("[data-fimg]", fr);
+    if (own) {
+      const put = async (files) => {
+        const x = [...files].find((f) => /^image\/(png|jpeg|webp)$/.test(f.type));
+        if (!x) return toast("Подходят PNG, JPG и WEBP", true);
+        const fd = new FormData();
+        fd.append("image", x);
+        redraw(await api(`/api/shots/${s.id}/frames/${side}/image`, { method: "POST", body: fd }));
+        toast("Готовая картинка установлена: кадр считается готовым");
+      };
+      fr._setImage = put;
+      const inp = $("input", own);
+      own.onclick = () => inp.click();
+      inp.onclick = (e) => e.stopPropagation();
+      inp.onchange = () => { put(inp.files); inp.value = ""; };
+      own.addEventListener("dragover", (e) => { e.preventDefault(); own.classList.add("drop-over"); });
+      own.addEventListener("dragleave", () => own.classList.remove("drop-over"));
+      own.addEventListener("drop", (e) => { e.preventDefault(); own.classList.remove("drop-over"); put(e.dataTransfer.files); });
+    }
     const drop = $("[data-fdrop]", fr);
     const input = $("input", drop);
     const upload = async (files) => {

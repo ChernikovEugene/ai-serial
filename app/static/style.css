@@ -918,3 +918,7 @@ fieldset.sound-zone legend { display: none; }
 .mention-item img { width: 28px; height: 36px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
 .mention-item span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-empty { padding: 8px; font-size: 12px; color: var(--muted); }
+
+.own-drop { cursor: pointer; text-align: center; padding: 6px; border: 2px dashed transparent; border-radius: 8px; }
+.own-drop small { font-size: 10px; line-height: 1.25; }
+.own-drop:hover, .own-drop.drop-over, .own-drop:focus { border-color: var(--accent2); color: var(--text); outline: none; }
