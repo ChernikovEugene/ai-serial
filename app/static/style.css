@@ -828,10 +828,11 @@ textarea.need { border-color: var(--warn); }
 @keyframes rec-pulse { 50% { opacity: .25; } }
 
 /* Gemini Omni: кадры для видео (Nano Banana 2.1) */
-.frames-box { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.frames-box { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
 .frames-box.ready { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 7%, transparent); box-shadow: 0 0 0 2px var(--ok) inset; }
 .frames-head { gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
-.frames-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.frames-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.shot.omni { grid-template-columns: 190px minmax(0, 1fr) minmax(360px, 1.15fr); }
 .frame { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; background: var(--panel); }
 .frame.ready { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok) inset; background: color-mix(in srgb, var(--ok) 9%, var(--panel)); }
 .frame.bad { border-color: var(--err); }
@@ -859,7 +860,8 @@ textarea.need { border-color: var(--warn); }
 .fthumb.on { border-color: var(--ok); }
 .small-drop { flex: 1; padding: 8px; font-size: 12px; }
 .frame pre { white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; margin: 6px 0 0; }
-@media (max-width: 900px) { .frames-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1200px) { .shot.omni { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 800px) { .shot.omni { grid-template-columns: 1fr; } }
 
 /* состояния версии в «Библиотеке» */
 .states { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }

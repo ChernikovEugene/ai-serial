@@ -753,7 +753,7 @@ function shotHtml(s) {
   const sel = s.selected_take;
   const omni = !!engineInfo(s.engine).frames; // Gemini Omni: на вход старт- и финальный кадры (блок «Кадры для Gemini Omni»), композиция и референсы к видео не нужны
   return `
-  <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
+  <div class="card shot ${omni && can.gen() ? "omni" : ""} ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
     <div class="side">
       <div class="shot-no">Шот ${esc(s.label)}</div>
       <div>${fitMeter(s.est_seconds, s.max_s)}
@@ -842,8 +842,8 @@ function shotHtml(s) {
       ${omni ? `<div class="muted small" style="margin-top:8px">${esc(engineInfo(s.engine).refs_note)}</div>` : `<label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
       <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${refTag(s, r, i)} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
       ${manualBlock(s)}`}
+      ${omni ? framesHtml(s) : ""}
     </div>` : ""}
-    ${omni && can.gen() ? framesHtml(s) : ""}
   </div>`;
 }
 
