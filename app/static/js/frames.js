@@ -182,6 +182,17 @@ function attachMentions(ta, getRefs) {
   ta.addEventListener("blur", () => setTimeout(close, 120));
 }
 
+// Ctrl+V с картинкой в буфере: кладём её в тот кадр, над которым курсор или в котором стоит фокус (например, в его промпте).
+const pasteImages = (e) => [...(e.clipboardData?.files || [])].filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type));
+document.addEventListener("paste", (e) => {
+  const files = pasteImages(e);
+  if (!files.length) return;
+  const fr = document.activeElement?.closest?.("[data-frame]") || $("[data-frame]:hover");
+  if (!fr?._upload) return;
+  e.preventDefault();
+  fr._upload(files);
+});
+
 export function bindFrames(s, hooks) {
   const box = $(`#frames-${s.id}`);
   if (!box) return;
@@ -246,6 +257,7 @@ export function bindFrames(s, hooks) {
       toast(`Загружаю картинок: ${imgs.length}…`);
       redraw(await api(`/api/shots/${s.id}/frames/${side}/upload`, { method: "POST", body: fd }));
     };
+    fr._upload = upload; // Ctrl+V: см. слушатель ниже
     drop.onclick = () => input.click();
     input.onclick = (e) => e.stopPropagation();
     input.onchange = () => { upload(input.files); input.value = ""; };

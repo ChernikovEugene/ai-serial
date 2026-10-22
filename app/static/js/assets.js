@@ -320,8 +320,21 @@ function dropzone(el, onFiles) {
     if (!files.length) return toast("Перетащите файлы PNG, JPG или WEBP", true);
     onFiles(files);
   });
-  el.addEventListener("paste", (e) => { const files = images(e.clipboardData.files); if (files.length) { e.preventDefault(); onFiles(files); } });
+  el._onFiles = onFiles;
 }
+
+// Ctrl+V с картинкой в буфере: в зону, над которой курсор, или в зону рядом с полем, где стоит фокус
+document.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])].filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type));
+  if (!files.length) return;
+  const zones = $$(".dropzone").filter((z) => z._onFiles && z.isConnected);
+  const a = document.activeElement;
+  const zone = zones.find((z) => z.matches(":hover")) || zones.find((z) => z.contains(a) || z.parentElement?.contains(a))
+    || (zones.length === 1 ? zones[0] : null);
+  if (!zone) return;
+  e.preventDefault();
+  zone._onFiles(files);
+});
 
 /** Копирует фото в буфер как картинку (для вставки в видеогенератор). Браузер принимает только PNG, поэтому JPG/WEBP перекодируются. */
 async function copyImage(url) {
