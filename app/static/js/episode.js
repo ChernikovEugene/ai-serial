@@ -740,6 +740,14 @@ const customCam = new Set(); // шоты, где выбран «свой вар�
 
 const VOICE = { direct: "в кадре", voiceover: "закадр" };
 
+/** Цвет полоски реплики: цвет героя, у закадра свой, у неопознанной серый. */
+function lineColor(d, chars) {
+  if (d.voice === "voiceover") return "var(--accent2)";
+  const a = chars.find((x) => x.id === d.asset_id);
+  return a ? assetColor(a) : "var(--line)";
+}
+const speechWords = (d) => (d.text || "").trim().split(/\s+/).filter(Boolean).length;
+
 function shotHtml(s) {
   const max = state.meta.max_shot_seconds;
   const chars = state.assets.filter((a) => a.kind === "character");
@@ -777,7 +785,8 @@ function shotHtml(s) {
            <button data-act="copyprompt">Скопировать промпт</button>
            <label class="btn primary up-label">Загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>` : ""}
     </div>
-    <div>
+    <div class="shot-main">
+      <section class="sec sec-scene"><h4 class="sec-h"><span class="sec-i">📍</span>Сцена <span class="sec-sum">где и кто в кадре</span></h4>
       <div class="row loc-head"><label style="margin:0">Локация</label><div class="spacer"></div>
         <label class="check small" title="Для одноразовой локации: вместо выбора из библиотеки просто опишите, где происходит действие">
           <input type="checkbox" data-locmode ${locText ? "checked" : ""} ${roW}> текстом</label></div>
@@ -798,36 +807,41 @@ function shotHtml(s) {
         ${canWrite() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>
           ${s.characters.length || s.no_characters ? "" : `<option value="none">— без персонажей (пейзаж, макро)</option>`}
           ${chars.filter((a) => !s.characters.some((c) => c.asset_id === a.id)).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>` : ""}
-      </div>
+      </div></section>
+      <section class="sec sec-act"><h4 class="sec-h"><span class="sec-i">🎬</span>Действие и камера <span class="sec-sum">что происходит в кадре</span></h4>
       <label>Действие</label><textarea data-f="action" rows="3" ${roW}>${esc(s.action)}</textarea>
       <label>Камера</label>
       <div class="cam-pick">
         <select data-camsel ${roW}>${CAMERA_PRESETS.map(([n, v]) => `<option value="${esc(v)}" ${!camCustom && s.camera === v ? "selected" : ""}>${n}</option>`).join("")}
           <option value="" ${camCustom ? "selected" : ""}>свой вариант…</option></select>
         ${camCustom ? `<input data-f="camera" value="${esc(CAMERA_PRESETS.some(([, v]) => v === s.camera) ? "" : s.camera)}" placeholder="Опишите камеру: например, медленный облёт вокруг героини" ${roW}>` : ""}
-      </div>
-      <label>Звук</label>
-      <div class="seg sound-mode">${Object.entries(state.meta.sound_modes).map(([k, n]) => `<button data-sound="${k}" class="${soundMode(s) === k ? "on" : ""}" ${canWrite() || can.gen() ? "" : "disabled"}>${n}</button>`).join("")}</div>
+      </div></section>
+      <section class="sec sec-sound"><h4 class="sec-h"><span class="sec-i">🔊</span>Звук и речь
+        <span class="sec-sum ${s.over_limit ? "warn-t" : ""}">${s.speech_seconds ? `речь ${s.speech_seconds} с · ${s.words} сл. · клип ${s.duration} с` : "без реплик"}</span></h4>
+      <div class="seg sound-mode">${Object.entries(state.meta.sound_modes).map(([k, n]) => `<button data-sound="${k}" class="${soundMode(s) === k ? "on" : ""}" ${canWrite() || can.gen() ? "" : "disabled"}><i>${{ full: "🗣", ambient: "🍃", off: "🔇" }[k] || ""}</i> ${n}</button>`).join("")}</div>
       <fieldset class="sound-zone" ${soundMode(s) === "full" ? "" : "disabled"}>
         <legend>Речь</legend>
         ${engineInfo(s.engine).audio
           ? `<div class="muted small">${esc(engineName(s.engine))} сразу генерирует звук вместе с видео: речь и шумы.</div>`
           : `<label class="check"><input type="checkbox" data-f="voiceover" ${s.voiceover ? "checked" : ""}> Озвучить реплики в ElevenLabs</label>`}
-      <label>Реплики <span class="muted small">— берутся из кавычек в сценарии; красным подсвечено то, что не удалось определить. «в кадре»: персонаж говорит, идёт в промпт нейросети; «закадр»: голос за кадром, озвучивается отдельно</span></label>
+      <div class="row lines-head"><label style="margin:0">Реплики · ${s.dialogue.length}</label>
+        <details class="hint"><summary>как это работает</summary>Реплики берутся из кавычек в сценарии; красным подсвечено то, что не удалось определить.
+          «В кадре»: персонаж говорит, реплика идёт в промпт нейросети. «Закадр»: голос за кадром, озвучивается отдельно.</details></div>
       <div class="dialogue">${s.dialogue.map((d, i) => `
-        <div class="dlg-line ${d.voice === "voiceover" ? "vo" : ""} ${d.auto ? "auto" : ""}" data-line="${i}">
+        <div class="dlg-line ${d.voice === "voiceover" ? "vo" : ""} ${d.auto ? "auto" : ""}" data-line="${i}" style="--c:${lineColor(d, chars)}">
           <input data-d="speaker" class="${!d.speaker || (d.voice !== "voiceover" && !d.asset_id) ? "need-red" : ""}" value="${esc(d.speaker)}" placeholder="Кто говорит" list="char-names-${s.id}" ${roW}>
           <select data-d="voice" ${roW} title="Как звучит реплика">${Object.entries(VOICE).map(([k, n]) => `<option value="${k}" ${(d.voice || "direct") === k ? "selected" : ""}>${n}</option>`).join("")}</select>
           <input data-d="parenthetical" class="${d.auto && !d.parenthetical ? "need-red" : ""}" value="${esc(d.parenthetical)}" placeholder="как (тихо)" ${roW}>
-          <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
+          <span class="dlg-t" title="Примерная длина реплики">${s.words ? `~${(s.speech_seconds * speechWords(d) / s.words).toFixed(1)} с` : ""}</span>
           ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}
+          <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
           ${voiceHtml(s, i, d)}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
-      ${canVoice() && s.dialogue.length ? `<div class="muted small">🎙 «Записать голос»: на ферме запись становится речью шота, остальные нейросети её не берут. Запись можно прослушать, увидеть её длину, оставить или удалить.</div>` : ""}
-      ${canWrite() ? `<button class="ghost small" data-act="addline">+ реплика</button>` : ""}
-      </fieldset>
+      ${canVoice() && s.dialogue.length ? `<details class="hint"><summary>про «Записать голос»</summary>На ферме запись становится речью шота, остальные нейросети её не берут. Запись можно прослушать, увидеть её длину, оставить или удалить.</details>` : ""}
+      ${canWrite() ? `<button class="ghost add-line" data-act="addline">+ реплика</button>` : ""}
+      </fieldset></section>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-      ${omni && can.gen() ? promptBlock : ""}
+      ${omni && can.gen() ? `<section class="sec sec-prompt"><h4 class="sec-h"><span class="sec-i">✍️</span>Промпт для видео <span class="sec-sum">собирается из полей выше</span></h4>${promptBlock}</section>` : ""}
     </div>
     ${can.gen() ? `<div>
       ${omni ? "" : `<label style="margin-top:0">Референс композиции</label>

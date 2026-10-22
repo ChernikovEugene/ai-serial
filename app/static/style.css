@@ -880,3 +880,34 @@ textarea.need { border-color: var(--warn); }
 .pool-ph figcaption { font-size: 10px; color: var(--muted); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pool-ph.on { opacity: 1; }
 .pool-ph.on img { border-color: var(--accent, #2bb673); }
+
+/* карточка шота: рабочие области (сцена, действие, звук и речь, промпт) */
+.shot-main { min-width: 0; }
+.sec { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px 14px; margin-bottom: 12px; background: color-mix(in srgb, var(--panel2) 45%, transparent); }
+.sec-h { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 14px; font-weight: 700; }
+.sec-i { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; background: var(--panel2); font-size: 13px; }
+.sec-sum { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--muted); }
+.sec > label:first-of-type, .sec > .loc-head { margin-top: 2px; }
+.sec-scene { border-left: 3px solid var(--accent2); }
+.sec-act { border-left: 3px solid var(--orange); }
+.sec-sound { border-left: 3px solid var(--accent); }
+.sec-prompt { border-left: 3px solid var(--ok); }
+.sec-prompt > .row { margin-top: 0 !important; }
+.sound-mode button i { font-style: normal; }
+fieldset.sound-zone { border: 0; padding: 0; margin: 6px 0 0; }
+fieldset.sound-zone legend { display: none; }
+.lines-head { gap: 10px; margin: 10px 0 6px; align-items: baseline; }
+.hint { font-size: 12px; color: var(--muted); }
+.hint summary { cursor: pointer; list-style: none; text-decoration: underline dotted; }
+.hint summary::-webkit-details-marker { display: none; }
+.hint[open] { flex-basis: 100%; }
+.dialogue { display: flex; flex-direction: column; gap: 8px; }
+.dlg-line { grid-template-columns: minmax(110px, 1.2fr) 96px minmax(90px, 1fr) auto 28px; align-items: center; gap: 6px; margin: 0;
+  padding: 8px 10px; border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line)); border-radius: 10px; background: var(--panel); }
+.dlg-line input[data-d="text"] { grid-column: 1 / -1; }
+.dlg-line .dlg-t { font-size: 12px; color: var(--muted); white-space: nowrap; padding: 0 4px; }
+.dlg-line input[data-d="speaker"] { font-weight: 600; }
+.dlg-line select[data-d="voice"] { font-size: 12px; }
+.add-line { width: 100%; margin-top: 8px; border-style: dashed; color: var(--muted); }
+.add-line:hover { color: var(--text); border-color: var(--accent2); }
+@media (max-width: 800px) { .dlg-line { grid-template-columns: 1fr 1fr; } .dlg-line .dlg-t { display: none; } }
