@@ -4,6 +4,7 @@ Where the shot goes is decided by models.route(): `stub` writes the exact reques
 `renderfarm` goes to the studio render farm through app/farm.py (the farm hub fetches the shots itself)."""
 import base64
 import json
+import os
 import mimetypes
 import time
 import urllib.error
@@ -12,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import db, models
 
-API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+API_BASE = os.environ.get("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com/v1beta"
 OUTPUT_DIR = db.MEDIA_DIR / "renders"
 _pool: ThreadPoolExecutor | None = None
 
@@ -50,11 +51,49 @@ def build_request(shot: dict, refs: list[dict], settings: dict, inline_images: b
     return {"instances": [instance], "parameters": params}
 
 
-def _http(method: str, url: str, key: str, body: dict | None = None, raw=False):
+OMNI_MODEL = "gemini-omni-1.1-flash"
+
+
+def omni_request(shot: dict, settings: dict, inline: bool) -> dict:
+    """Gemini Omni напрямую в Google (Interactions API): старт- и финальный кадры (из Nano Banana) и промпт; 720p, 9:16.
+    Длины в запросе нет: она задаётся словами в промпте («5 seconds»), который собирает студия."""
+    fr = shot.get("frames") or {}
+    parts = []
+    for side in ("start", "end"):
+        path = (fr.get(side) or {}).get("path")
+        if inline and not path:
+            raise RuntimeError("Для Gemini Omni нужны готовые стартовый и финальный кадры: сначала сделайте их в блоке «Кадры для Gemini Omni»")
+        if path:
+            mime = mimetypes.guess_type(path)[0] or "image/png"
+            data = base64.b64encode((db.MEDIA_DIR / path).read_bytes()).decode() if inline else f"<base64 {path}>"
+            parts.append({"type": "image", "data": data, "mime_type": mime})
+        else:
+            parts.append({"type": "image", "data": f"<{side}: кадр ещё не готов>", "mime_type": "image/png"})
+    parts.append({"type": "text", "text": "<FIRST_FRAME> <LAST_FRAME> " + shot["prompt"]})
+    ratio = settings.get("aspect_ratio") or "9:16"
+    return {"model": OMNI_MODEL, "input": parts,
+            "response_format": {"type": "video", "aspect_ratio": ratio if ratio in ("9:16", "16:9") else "9:16", "resolution": "720p"},
+            "background": False, "store": False}
+
+
+def _find_video(obj):
+    """Первый кусок ответа Interactions API с видео: {"type": "video", "data" | "uri"}."""
+    if isinstance(obj, dict):
+        if obj.get("type") == "video" and (obj.get("data") or obj.get("uri")):
+            return obj
+        obj = list(obj.values())
+    if isinstance(obj, list):
+        for v in obj:
+            if (f := _find_video(v)):
+                return f
+    return None
+
+
+def _http(method: str, url: str, key: str, body: dict | None = None, raw=False, timeout: int = 180):
     req = urllib.request.Request(url, method=method, headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             data = r.read()
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
@@ -126,6 +165,22 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
             return
 
         key = settings.get("veo_api_key", "").strip()
+        if where == "google" and (shot.get("engine") or models.DEFAULT_ENGINE) == "gemini_omni":
+            if not key:
+                raise RuntimeError("Не указан API-ключ Google (Gemini API) в настройках")
+            try:  # Interactions API отвечает сразу готовым видео: запрос идёт долго (минуты), опроса нет
+                resp = _http("POST", f"{API_BASE}/interactions", key, omni_request(shot, settings, True), timeout=900)
+            except RuntimeError as e:
+                raise RuntimeError(f"Google: {e}") from None
+            if _cancelled(take_id):
+                return
+            vid = _find_video(resp.get("steps", resp))
+            if not vid:
+                raise RuntimeError("Google не вернул видео (возможно, сработал фильтр безопасности): " + json.dumps(resp, ensure_ascii=False)[:500])
+            video = base64.b64decode(vid["data"]) if vid.get("data") else _http("GET", vid["uri"], key, raw=True, timeout=300)
+            (OUTPUT_DIR / f"{base}.mp4").write_bytes(video)
+            _finish(take_id, shot_id, "done", video=f"renders/{base}.mp4", request=req_rel)
+            return
         if not key:
             raise RuntimeError("Не указан API-ключ Veo в настройках")
         model = settings.get("veo_model", "veo-3.1-generate-preview")
@@ -187,6 +242,11 @@ def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
         return {"model": models.spec(engine)["name"], "note": "Заглушка: шот ферме не отправлялся"}
     if engine == "veo" and models.veo_route(settings) == "google":
         return build_request(shot, refs, settings, inline_images=False)
+    if engine == "gemini_omni" and models.omni_route(settings) == "google":
+        try:
+            return {"model": models.spec(engine)["name"], "url": f"{API_BASE}/interactions", "body": omni_request(shot, settings, False)}
+        except RuntimeError as e:
+            return {"model": models.spec(engine)["name"], "error": str(e)}
     try:
         req = models.build(shot, refs, settings, inline=False)
     except RuntimeError as e:

@@ -190,6 +190,11 @@ def veo_route(settings: dict) -> str:
     return "google" if settings.get("veo_route") == "google" else "magnific"
 
 
+def omni_route(settings: dict) -> str:
+    """Gemini Omni в API Magnific не открыт (нет адреса), поэтому по умолчанию видео идёт напрямую в Google (Gemini API)."""
+    return "magnific" if settings.get("omni_route") == "magnific" else "google"
+
+
 def route(engine: str | None, settings: dict) -> str:
     """Куда уйдёт шот: stub (заглушка), magnific, google (Veo через Gemini API) или manual (делается вручную)."""
     if not has_api(engine):
@@ -198,6 +203,8 @@ def route(engine: str | None, settings: dict) -> str:
         return "stub"
     if engine == "renderfarm":
         return "renderfarm"
+    if (engine or DEFAULT_ENGINE) == "gemini_omni":
+        return omni_route(settings)
     return veo_route(settings) if (engine or DEFAULT_ENGINE) == "veo" else "magnific"
 
 

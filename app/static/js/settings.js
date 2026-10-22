@@ -27,18 +27,22 @@ export async function renderSettings() {
         <span class="muted small">дальше по одной серии в день; закреплённые за датой (📌) серии не сдвигаются</span></div>
     </div>
     <div class="card">
-        <h2 style="margin-top:0">Генерация (Magnific API)</h2>
+        <h2 style="margin-top:0">Генерация (Google и Magnific)</h2>
         <p class="muted small">В карточке шота выбираются две нейросети: <b>Gemini Omni 1.1</b> (видео по стартовому и финальному кадрам) и <b>Рендерферма</b>.
-          Кадры для Gemini Omni рисует <b>Nano Banana 2.1</b>. Оба идут через Magnific (бывший Freepik API) по одному ключу: видео всегда 720p, 3 или 5 секунд,
-          кадры 1K, формат 9:16. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
+          Кадры для Gemini Omni рисует <b>Nano Banana 2.1</b> через Magnific (бывший Freepik API), а само видео Gemini Omni идёт напрямую в Google (Gemini API): в API Magnific Omni пока нет. Видео всегда 720p, 3 или 5 секунд, кадры 1K, формат 9:16. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
         <label>Режим</label>
         <select data-k="gen_mode" ${ro}>
           <option value="stub" ${s.gen_mode === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
           <option value="live" ${s.gen_mode === "live" ? "selected" : ""}>Реальная генерация (платно, тратит кредиты)</option></select>
         ${field("magnific_api_key", "API-ключ Magnific (кабинет Magnific → API Keys; хранится только у вас в data/studio.db)", "input", `type="password" placeholder="FPSX…" autocomplete="off"`)}
+        <label>Видео Gemini Omni идёт через</label>
+        <select data-k="omni_route" ${ro}>
+          <option value="google" ${s.omni_route !== "magnific" ? "selected" : ""}>Google напрямую (Gemini API, ключ Google)</option>
+          <option value="magnific" ${s.omni_route === "magnific" ? "selected" : ""}>Magnific (когда там откроют Omni в API)</option></select>
+        ${field("veo_api_key", "API-ключ Google (Gemini API; aistudio.google.com/apikey, нужен платный аккаунт с оплатой за использование)", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
         ${field("public_base_url", "Публичный адрес студии (например, https://pari-altushka.ru), по желанию", "input", `placeholder="пусто: студия на ноутбуке"`)}
         <p class="muted small">Если указан, картинки кадров для Gemini Omni уходят в Magnific защищённой ссылкой на студию, а не файлом внутри запроса.</p>
-        <details style="margin-top:8px"><summary class="muted small">Адреса в API Magnific (менять, только если Magnific их сменил)</summary>
+        <details style="margin-top:8px"><summary class="muted small">Адрес Gemini Omni в Magnific (нужен, только если выбрана доставка через Magnific)</summary>
           ${field("omni_path", "Адрес Gemini Omni 1.1", "input", `placeholder="/v1/ai/video/gemini-omni-1-1"`)}
           <p class="muted small">В открытой документации Magnific пока нет страницы Gemini Omni, поэтому студия использует предполагаемые адреса.
             Если генерация не работает, текст ответа Magnific виден в дубле: пришлите его, и адрес поправим.</p></details>

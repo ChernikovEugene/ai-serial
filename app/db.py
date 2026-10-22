@@ -260,6 +260,7 @@ DEFAULT_SETTINGS = {
     "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
+    "omni_route": "google",          # Gemini Omni: google (Gemini API, ключ Google) или magnific (когда Magnific откроет Omni в API)
     "farmhub_secret": "",            # Рендерферма: секрет, которым Пульт открывает точки /api/farmhub/…; переменная сервера FARMHUB_SECRET главнее
     "veo_model": "veo-3.1-generate-preview",
     "veo_parallel": "2",

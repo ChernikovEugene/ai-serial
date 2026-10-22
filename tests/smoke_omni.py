@@ -52,6 +52,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
         Fake.log.append(("POST", self.path, body, self.headers.get("x-magnific-api-key")))
         if self.path.startswith("/v1/ai/text-to-image/nano-banana-2-1") and Fake.fail_nano:
             return self._send(400, {"message": "Validation error"})
+        if self.path == "/v1beta/interactions":
+            return self._send(200, {"steps": [{"type": "model_output", "content": [{"type": "video", "mime_type": "video/mp4", "data": base64.b64encode(MP4).decode()}]}]})
         if Fake.omni_missing and self.path.startswith("/v1/ai/video/gemini-omni") and self.path != "/v1/ai/video/gemini-omni-1-1-720p":
             return self._send(404, {"message": "Not found"})
         if self.path.startswith("/v1/ai/text-to-image/") or self.path.startswith("/v1/ai/video/"):
@@ -127,7 +129,8 @@ def main():
     global DATA
     data_dir = tempfile.mkdtemp(prefix="studio-omni-")
     DATA = Path(data_dir)
-    env = {**os.environ, "STUDIO_DATA_DIR": data_dir, "MAGNIFIC_API_BASE": f"http://127.0.0.1:{PORT_FAKE}"}
+    env = {**os.environ, "STUDIO_DATA_DIR": data_dir, "MAGNIFIC_API_BASE": f"http://127.0.0.1:{PORT_FAKE}",
+           "GEMINI_API_BASE": f"http://127.0.0.1:{PORT_FAKE}/v1beta"}
     env.pop("STUDIO_LEGACY_ENGINES", None)
     studio = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT_STUDIO)], cwd=ROOT, env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -221,7 +224,7 @@ def run():
     check("removed engines cannot be picked", st == 400, st)
 
     # --- кадры ---
-    admin.call("PUT", "/api/settings", {"gen_mode": "live", "magnific_api_key": "test-key"})
+    admin.call("PUT", "/api/settings", {"gen_mode": "live", "magnific_api_key": "test-key", "omni_route": "magnific", "veo_api_key": "g-key"})
     st, r = admin.call("POST", f"/api/shots/{sid}/frames/start/generate", {})
     check("frame without a prompt is rejected", st == 400, (st, r))
     st, r = admin.call("POST", f"/api/shots/{sid}/generate", {})
@@ -276,6 +279,20 @@ def run():
     ob = omni_posts[0][2] if omni_posts else {}
     check("Gemini Omni request: 720p, 9:16, 3 s, start and end frames", ob.get("resolution") == "720p" and ob.get("aspect_ratio") == "9:16"
           and ob.get("duration") == 3 and ob.get("start_image_url") and ob.get("end_image_url") and "start frame" in ob.get("prompt", ""), {k: str(v)[:60] for k, v in ob.items()})
+    # видео Gemini Omni напрямую в Google (так работает по умолчанию)
+    admin.call("PUT", "/api/settings", {"omni_route": "google"})
+    n_before = len(Fake.log)
+    st, r = admin.call("POST", f"/api/shots/{sid}/generate", {"reason": "google"})
+    take_g = wait_for(lambda: next((t for s in admin.call("GET", f"/api/episodes/{eid}")[1]["shots"] if s["id"] == sid
+                                    for t in s["takes"] if t["id"] != take["id"] and t["status"] in ("done", "error")), None))
+    gp = next((x for x in Fake.log[n_before:] if x[0] == "POST" and x[1] == "/v1beta/interactions"), None)
+    gb = gp[2] if gp else {}
+    kinds = [p.get("type") for p in gb.get("input", [])]
+    check("Google Omni request: two frames and a tagged prompt, 720p 9:16", kinds == ["image", "image", "text"] and gb["input"][2]["text"].startswith("<FIRST_FRAME> <LAST_FRAME>")
+          and gb["response_format"] == {"type": "video", "aspect_ratio": "9:16", "resolution": "720p"} and gb.get("model") == "gemini-omni-1.1-flash", gb and {k: str(v)[:80] for k, v in gb.items()})
+    check("Google Omni: key sent in header, nothing went to Magnific", gp and gp[3] is None and not any(x[1].startswith("/v1/ai/video/gemini") for x in Fake.log[n_before:] if x[0] == "POST"))
+    check("Google Omni take finished with video", bool(take_g) and take_g["status"] == "done" and (DATA / "media" / take_g["video_path"]).is_file(), take_g)
+    admin.call("PUT", "/api/settings", {"omni_route": "magnific"})
     # адрес Omni не угадан с первого раза: студия перебирает известные и запоминает рабочий
     admin.call("PUT", "/api/settings", {"omni_path": ""})
     Fake.omni_missing = True
