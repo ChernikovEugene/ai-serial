@@ -347,6 +347,8 @@ def refresh_shot(s: dict, ctx: Ctx) -> dict:
         prompt, refs, _ = breakdown.build_prompt(s, ctx.v_map, ctx.a_map, ctx.settings)
     if not s.get("prompt_locked"):
         s["prompt"] = prompt
+    else:  # промпт правили руками: длину в нём всё равно держим равной длине клипа
+        s["prompt"] = breakdown.sync_duration(s.get("prompt"), s["duration"])
     return s
 
 
@@ -386,6 +388,8 @@ def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
         fixed = refresh_shot(dict(s), ctx)   # длина и промпт под новую нейросеть (в базу попадут при следующем сохранении шота)
         s["duration"] = fixed["duration"]
         s["prompt"] = fixed["prompt"]
+    if s.get("prompt_locked"):
+        s["prompt"] = breakdown.sync_duration(s.get("prompt"), s["duration"])
     s["frames"] = {side: frames.resolved(s, side, ctx.v_map, ctx.a_map) for side in frames.SIDES}
     s["frames_ready"] = all(f["ready"] for f in s["frames"].values())
     for t in takes:  # шот фермы подготовлен (переведён) и ждёт Пульт; сам текст шота клиенту не нужен

@@ -220,6 +220,11 @@ def run():
     check("duration outside 3/5 rejected", st == 400, st)
     st, r = admin.call("PUT", f"/api/shots/{sid}", {"duration": 3})
     check("duration 3 accepted", st == 200 and r["duration"] == 3, st)
+    st, r = admin.call("PUT", f"/api/shots/{sid}", {"prompt": "My own. Vertical 9:16 video, 6 seconds, one continuous shot. Rest.", "duration": 5})
+    check("manual prompt: seconds follow the clip length (5)", st == 200 and "Vertical 9:16 video, 5 seconds," in r["prompt"] and r["prompt"].startswith("My own."), r.get("prompt"))
+    st, r = admin.call("PUT", f"/api/shots/{sid}", {"duration": 3})
+    check("manual prompt: seconds follow the clip length (3)", st == 200 and "video, 3 seconds," in r["prompt"], r.get("prompt"))
+    admin.call("POST", f"/api/shots/{sid}/rebuild-prompt", {})
     st, _ = admin.call("PUT", f"/api/shots/{sid}", {"engine": "kling"})
     check("removed engines cannot be picked", st == 400, st)
 

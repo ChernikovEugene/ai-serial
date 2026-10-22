@@ -42,6 +42,14 @@ def snap_duration(engine: str | None, duration: int, est: float = 0) -> int:
         return duration
     need = max(duration or 0, est or 0)
     return next((d for d in allowed if d >= need), allowed[-1])
+DURATION_IN_PROMPT_RE = re.compile(r"(Vertical [^,\n]*?video,\s*)\d+(\s*seconds)", re.I)
+
+
+def sync_duration(prompt: str, duration: int) -> str:
+    """Число секунд в промпте («Vertical 9:16 video, 5 seconds») всегда равно длине клипа шота, даже если промпт правили руками."""
+    return DURATION_IN_PROMPT_RE.sub(lambda m: f"{m.group(1)}{int(duration)}{m.group(2)}", prompt or "", count=1)
+
+
 MAX_DIALOGUE_LINES_PER_SHOT = 2
 
 SHOT_MARK_RE = re.compile(

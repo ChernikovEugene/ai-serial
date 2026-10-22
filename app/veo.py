@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from . import db, models
+from . import breakdown, db, models
 
 API_BASE = os.environ.get("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com/v1beta"
 OUTPUT_DIR = db.MEDIA_DIR / "renders"
@@ -69,7 +69,7 @@ def omni_request(shot: dict, settings: dict, inline: bool) -> dict:
             parts.append({"type": "image", "data": data, "mime_type": mime})
         else:
             parts.append({"type": "image", "data": f"<{side}: кадр ещё не готов>", "mime_type": "image/png"})
-    parts.append({"type": "text", "text": "<FIRST_FRAME> <LAST_FRAME> " + shot["prompt"]})
+    parts.append({"type": "text", "text": "<FIRST_FRAME> <LAST_FRAME> " + breakdown.sync_duration(shot["prompt"], shot["duration"])})
     ratio = settings.get("aspect_ratio") or "9:16"
     return {"model": OMNI_MODEL, "input": parts,
             "response_format": {"type": "video", "aspect_ratio": ratio if ratio in ("9:16", "16:9") else "9:16", "resolution": "720p"},
