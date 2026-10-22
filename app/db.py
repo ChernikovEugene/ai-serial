@@ -49,6 +49,7 @@ TABLES = {
         voice TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '',
         images TEXT NOT NULL DEFAULT '[]',
+        image_names TEXT NOT NULL DEFAULT '{}',
         parent_version_id INTEGER,
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
@@ -248,7 +249,7 @@ TABLES = {
         value TEXT NOT NULL""",
 }
 
-JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members", "seen_by", "frame_start", "frame_end"}
+JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members", "seen_by", "frame_start", "frame_end", "image_names"}
 
 DEFAULT_SETTINGS = {
     "veo_provider": "stub",          # устарело: было stub | gemini, теперь gen_mode + veo_route

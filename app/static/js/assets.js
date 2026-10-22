@@ -57,6 +57,7 @@ export async function renderAsset(id) {
         <p class="muted small">Активная версия используется по умолчанию. В конкретной серии можно выбрать другую (вкладка «Сценарий» → «Версии для этой серии»).</p>
         <div class="gallery">${active.images.map((p, i) => `<figure class="ph" data-img="${esc(p)}">
           <a href="${media(p)}" target="_blank"><img src="${media(p)}" draggable="true"></a>${i === 0 ? `<span class="main-ref">главный реф</span>` : ""}
+          ${can.library() || (active.image_names || {})[p] ? `<input class="pname" data-pname value="${esc((active.image_names || {})[p] || "")}" placeholder="название (необязательно)" ${can.library() ? "" : "disabled"}>` : ""}
           <figcaption><button class="ghost small" data-copy title="Скопировать фото, чтобы вставить в видеогенератор (Ctrl+V)">Копировать</button>
             <a class="btn ghost small" href="${media(p)}" download="${esc(a.tag + (i ? "_" + (i + 1) : "") + ((p.match(/\.\w+$/) || [".png"])[0]))}" title="Скачать файл с именем по метке">Скачать</a>
             ${can.library() && i > 0 ? `<button class="ghost small" data-main title="Сделать главным референсом (уходит в видеогенератор первым)">★</button>` : ""}
@@ -92,6 +93,11 @@ export async function renderAsset(id) {
     await api(`/api/assets/${id}/versions/${active.id}/images`, { method: "PUT", json: { images } });
     renderAsset(id);
   };
+  $$("[data-pname]").forEach((inp) => (inp.onchange = async () => {
+    await api(`/api/assets/${id}/versions/${active.id}/image-names`, { method: "PUT", json: { names: { [inp.closest("[data-img]").dataset.img]: inp.value } } });
+    toast("Сохранено");
+    renderAsset(id);
+  }));
   $$("[data-main]").forEach((b) => (b.onclick = () => {
     const p = b.closest("[data-img]").dataset.img;
     setImages([p, ...active.images.filter((x) => x !== p)]).then(() => toast("Главный референс изменён"));
@@ -155,7 +161,7 @@ function statesHtml(a, v) {
   const states = v.states || [];
   return `<h3 style="margin:16px 0 4px">Состояния версии «${esc(v.label)}»</h3>
     <p class="muted small" style="margin:0 0 6px">Состояние — в каком виде ${a.kind === "location" ? "локация" : "персонаж"} бывает в сценарии: ${a.kind === "location" ? "«днём», «ночью», «после ремонта»" : "«проснулась», «плачет», «в халате»"}.
-      Если состояний нет, у версии одно состояние: фото выше. Если есть, при подготовке кадров для Gemini Omni можно выбрать нужное.</p>
+      Фото выше — общий пул версии: в состояние можно взять любые из него или загрузить свои. Если состояний нет, у версии одно состояние: все фото. Если есть, при подготовке кадров для Gemini Omni можно выбрать нужное.</p>
     <div class="states" id="states">${states.map((st) => `<div class="state-card" data-state="${st.id}">
       <div class="row"><input data-sname value="${esc(st.name)}" ${lib ? "" : "disabled"} style="max-width:260px" title="Название состояния">
         <span class="muted small">картинок: ${st.images.length}</span><div class="spacer"></div>
@@ -164,6 +170,9 @@ function statesHtml(a, v) {
         <a href="${media(i.path)}" target="_blank"><img src="${media(i.path)}"></a>
         <input data-iname value="${esc(i.name)}" placeholder="название" ${lib ? "" : "disabled"} title="Название картинки">
         ${lib ? `<button class="ghost small rm" data-irm title="Убрать картинку">✕</button>` : ""}</figure>`).join("") || `<span class="muted small">Нет картинок</span>`}</div>
+      ${lib && v.images.length ? `<div class="muted small" style="margin-top:8px">Общие фото версии: нажмите на фото, чтобы добавить его в состояние или убрать</div>
+        <div class="pool-pick">${v.images.map((p) => `<figure class="pool-ph ${st.images.some((i) => i.path === p) ? "on" : ""}" data-pool="${esc(p)}" title="${esc((v.image_names || {})[p] || "")}">
+          <img src="${media(p)}"><figcaption>${esc((v.image_names || {})[p] || "")}</figcaption></figure>`).join("")}</div>` : ""}
       ${lib ? `<div class="dropzone small-drop" data-sdrop style="margin-top:8px"></div>` : ""}</div>`).join("") || `<div class="muted small">Состояний пока нет.</div>`}</div>
     ${lib ? `<div class="state-card" style="margin-top:10px" id="state-new">
       <b class="small">Новое состояние</b>
@@ -186,6 +195,14 @@ function bindStates(a, v, refresh) {
     const st = stateOf(b);
     if (!confirm(`Удалить состояние «${st.name}» и его картинки (${st.images.length})?`)) return;
     await api(`${base}/${st.id}`, { method: "DELETE" });
+    refresh();
+  }));
+  $$("[data-pool]").forEach((f) => (f.onclick = async () => {
+    const st = stateOf(f);
+    const path = f.dataset.pool;
+    const has = st.images.some((i) => i.path === path);
+    const images = has ? st.images.filter((i) => i.path !== path) : [...st.images, { path, name: (v.image_names || {})[path] || "" }];
+    await api(`${base}/${st.id}`, { method: "PUT", json: { images } });
     refresh();
   }));
   $$("[data-iname]").forEach((inp) => (inp.onchange = async () => {

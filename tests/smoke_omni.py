@@ -188,6 +188,15 @@ def run():
     check("new image paths are not accepted through rename", st == 400, st)
     st, a = admin.call("POST", f"/api/assets/{maria['id']}/versions/{vid}/states/{sid_state}/images", form={"images": ("c.png", PNG)})
     check("image added to state", st == 200 and len(a["versions"][0]["states"][0]["images"]) == 2, a)
+    pool = a["versions"][0]["images"]
+    if pool:
+        st, a2 = admin.call("PUT", f"/api/assets/{maria['id']}/versions/{vid}/image-names", {"names": {pool[0]: "анфас"}})
+        check("pool photo gets a short name", st == 200 and a2["versions"][0]["image_names"].get(pool[0]) == "анфас", a2)
+        cur = a2["versions"][0]["states"][0]["images"]
+        st, a2 = admin.call("PUT", f"/api/assets/{maria['id']}/versions/{vid}/states/{sid_state}", {"images": cur + [{"path": pool[0], "name": "анфас"}]})
+        check("pool photo can be put into a state", st == 200 and any(i["path"] == pool[0] for i in a2["versions"][0]["states"][0]["images"]), a2)
+        st, a2 = admin.call("PUT", f"/api/assets/{maria['id']}/versions/{vid}/states/{sid_state}", {"images": cur})
+        check("pool photo removed from state stays in pool", st == 200 and (DATA / "media" / pool[0]).exists() and pool[0] in a2["versions"][0]["images"], a2)
     st, _ = ed.call("POST", f"/api/assets/{maria['id']}/versions/{vid}/states", form={"name": "x"})
     check("editor cannot add states", st == 403, st)
 

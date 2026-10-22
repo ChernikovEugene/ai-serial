@@ -698,9 +698,38 @@ def set_version_images(asset_id: int, version_id: int, body: ImagesIn):
     _, v = load_version(asset_id, version_id)
     if not set(body.images) <= set(v["images"]):
         raise HTTPException(400, "Можно только переставить или убрать фото этой версии")
+    keep = list(dict.fromkeys(body.images))
+    gone = set(v["images"]) - set(keep)
     with db.connect() as c:
-        c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(list(dict.fromkeys(body.images))), version_id))
+        c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(keep), version_id))
+        if gone:  # убранное из общих фото уходит и из состояний
+            for st in v["states"]:
+                left = [i for i in st["images"] if i["path"] not in gone]
+                if len(left) != len(st["images"]):
+                    c.execute("UPDATE version_states SET images=? WHERE id=?", (db.dumps(left), st["id"]))
     refresh_all_prompts()
+    return get_asset(asset_id)
+
+
+class NamesIn(BaseModel):
+    names: dict[str, str]
+
+
+@app.put("/api/assets/{asset_id}/versions/{version_id}/image-names", dependencies=[Depends(auth.need("library"))])
+def set_image_names(asset_id: int, version_id: int, body: NamesIn):
+    """Короткие названия общих фото версии (необязательные): {путь: название}. Пустое название стирает имя."""
+    _, v = load_version(asset_id, version_id)
+    names = dict(v.get("image_names") or {})
+    for path, n in body.names.items():
+        if path not in v["images"]:
+            raise HTTPException(400, "Название можно дать только фото этой версии")
+        n = n.strip()[:120]
+        if n:
+            names[path] = n
+        else:
+            names.pop(path, None)
+    with db.connect() as c:
+        c.execute("UPDATE asset_versions SET image_names=? WHERE id=?", (db.dumps(names), version_id))
     return get_asset(asset_id)
 
 
@@ -782,8 +811,8 @@ def update_state(asset_id: int, version_id: int, state_id: int, p: StateIn):
     if p.images is not None:
         have = {i["path"]: i for i in st["images"]}
         new = norm_state_images(p.images)
-        if not {i["path"] for i in new} <= set(have):
-            raise HTTPException(400, "Можно только переставить, переименовать или убрать картинки этого состояния")
+        if not {i["path"] for i in new} <= set(have) | set(v["images"]):  # свои картинки состояния или общие фото версии
+            raise HTTPException(400, "В состояние можно добавить только общие фото версии; убрать, переименовать или переставить — свои картинки")
         images = list({i["path"]: i for i in new}.values())
         removed = [x for x in have if x not in {i["path"] for i in images}]
     with db.connect() as c:

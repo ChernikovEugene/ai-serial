@@ -37,7 +37,7 @@ function groups(s) {
 /** Состояния версии как варианты выбора: «Основное» (фото самой версии) и добавленные состояния. */
 function stateOptions(v) {
   const opts = [];
-  if (v.images?.length) opts.push({ id: "", name: "Основное", images: v.images.map((p) => ({ path: p, name: "" })) });
+  if (v.images?.length) opts.push({ id: "", name: "Основное", images: v.images.map((p) => ({ path: p, name: (v.image_names || {})[p] || "" })) });
   (v.states || []).forEach((st) => opts.push({ id: String(st.id), name: st.name, images: st.images }));
   return opts;
 }

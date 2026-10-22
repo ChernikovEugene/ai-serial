@@ -880,3 +880,11 @@ textarea.need { border-color: var(--warn); }
 .credits .cbar span { display: block; height: 100%; background: var(--ok); }
 .credits.low .cbar span { background: var(--warn); }
 @media (max-width: 800px) { .credits { display: none; } }
+
+.gallery figure.ph .pname { width: 100%; font-size: 11px; padding: 3px 5px; }
+.pool-pick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.pool-ph { margin: 0; width: 64px; cursor: pointer; opacity: .55; }
+.pool-ph img { width: 64px; height: 84px; object-fit: cover; border-radius: 6px; border: 2px solid var(--line); display: block; }
+.pool-ph figcaption { font-size: 10px; color: var(--muted); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pool-ph.on { opacity: 1; }
+.pool-ph.on img { border-color: var(--accent, #2bb673); }
