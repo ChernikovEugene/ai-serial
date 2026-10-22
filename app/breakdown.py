@@ -183,7 +183,7 @@ def estimate(action: str, dialogue: list[dict], wps: float) -> tuple[float, floa
     """(estimated shot seconds, speech seconds)."""
     speech = sum(speech_seconds(d["text"], wps) for d in dialogue)
     act = _action_seconds(action) if action.strip() else 0.0
-    est = max(act, speech + 0.6) if speech else act
+    est = speech + 0.6 if speech else act  # с репликой длину задаёт только речь (блок «Речь»), не описание действия
     return round(est, 1), round(speech, 1)
 
 
