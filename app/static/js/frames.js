@@ -93,7 +93,7 @@ function frameHtml(s, side, title) {
     <div class="frame-main">
       <div class="frame-img">${img}</div>
       <div class="frame-form">
-        <label>Промпт для Nano Banana 2.1 <span class="muted small">— пишется руками; на картинки можно ссылаться: Image 1, Image 2…</span></label>
+        <label>Промпт для Nano Banana 2.1 <span class="muted small">— пишется руками; «@» открывает список референсов (Image 1, Image 2…)</span></label>
         <textarea data-fprompt rows="5" placeholder="${side === "start" ? "Image 1 в халате стоит у окна кухни Image 2, утро, мягкий свет, смотрит в камеру" : "Тот же кадр, но Image 1 улыбается и держит в руках телефон"}">${esc(f.prompt)}</textarea>
         <div class="row" style="margin-top:6px"><button class="primary" data-fgen ${busy ? "disabled" : ""}>${f.path ? "↻ Сделать заново" : "Сделать кадр"}</button>
           <span class="muted small">1K · 9:16 · Nano Banana 2.1</span></div>
@@ -130,6 +130,58 @@ export function framesHtml(s) {
 // ---------- действия ----------
 
 /** hooks.update(shot) вносит ответ сервера в страницу и возвращает шот; hooks.full(shot) перерисовывает всю карточку. */
+/** Подсказка по «@» в промпте: выпадающий список приложенных референсов, выбранный превращается в «Image N». */
+function attachMentions(ta, getRefs) {
+  const host = ta.parentElement;
+  host.style.position = "relative";
+  const pop = document.createElement("div");
+  pop.className = "mention-pop";
+  pop.hidden = true;
+  host.appendChild(pop);
+  let items = [], at = -1, sel = 0;
+  const close = () => { pop.hidden = true; at = -1; };
+  const pick = (i) => {
+    const it = items[i];
+    if (!it) return;
+    const end = ta.selectionStart;
+    ta.value = ta.value.slice(0, at) + it.token + " " + ta.value.slice(end);
+    ta.selectionStart = ta.selectionEnd = at + it.token.length + 1;
+    close();
+    ta.focus();
+  };
+  const draw = () => {
+    pop.innerHTML = items.length
+      ? items.map((it, i) => `<div class="mention-item ${i === sel ? "on" : ""}" data-mi="${i}"><img src="${media(it.path)}"><b>${it.token}</b><span>${esc(it.name || "своя картинка")}</span></div>`).join("")
+      : `<div class="mention-empty">Референсов нет: выберите их из библиотеки или добавьте свои ниже</div>`;
+    pop.style.top = `${ta.offsetTop + ta.offsetHeight + 4}px`;
+    pop.hidden = false;
+    $$("[data-mi]", pop).forEach((el) => {
+      el.onmousedown = (e) => { e.preventDefault(); pick(+el.dataset.mi); };
+      el.onmouseenter = () => { sel = +el.dataset.mi; $$(".mention-item", pop).forEach((x, j) => x.classList.toggle("on", j === sel)); };
+    });
+  };
+  ta.addEventListener("input", () => {
+    const m = /@([^\s@]*)$/.exec(ta.value.slice(0, ta.selectionStart));
+    if (!m) return close();
+    at = ta.selectionStart - m[0].length;
+    const q = m[1].toLowerCase();
+    items = getRefs().map((r, i) => ({ ...r, token: `Image ${i + 1}` }))
+      .filter((r) => !q || (r.name || "").toLowerCase().includes(q) || r.token.toLowerCase().replace(" ", "").startsWith(q.replace(" ", "")));
+    sel = 0;
+    draw();
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (pop.hidden || !items.length) return e.key === "Escape" && close();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      sel = (sel + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+      draw();
+    } else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(sel); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  });
+  ta.addEventListener("blur", () => setTimeout(close, 120));
+}
+
 export function bindFrames(s, hooks) {
   const box = $(`#frames-${s.id}`);
   if (!box) return;
@@ -148,6 +200,7 @@ export function bindFrames(s, hooks) {
     const f = () => cur().frames[side];
     const setRefs = (refs) => call(side, { method: "PUT", json: { refs } });
     const ta = $("[data-fprompt]", fr);
+    attachMentions(ta, () => f().refs);
     // текст промпта сохраняем тихо, без перерисовки: иначе клик по соседней кнопке пропадает
     ta.onchange = async () => {
       const shot = await api(`/api/shots/${s.id}/frames/${side}`, { method: "PUT", json: { prompt: ta.value } });

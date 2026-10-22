@@ -911,3 +911,10 @@ fieldset.sound-zone legend { display: none; }
 .add-line { width: 100%; margin-top: 8px; border-style: dashed; color: var(--muted); }
 .add-line:hover { color: var(--text); border-color: var(--accent2); }
 @media (max-width: 800px) { .dlg-line { grid-template-columns: 1fr 1fr; } .dlg-line .dlg-t { display: none; } }
+
+.mention-pop { position: absolute; left: 0; right: 0; z-index: 30; max-height: 240px; overflow: auto; background: var(--panel); border: 1px solid var(--accent2); border-radius: 10px; box-shadow: 0 8px 24px #0006; padding: 4px; }
+.mention-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 7px; cursor: pointer; }
+.mention-item.on { background: var(--panel2); }
+.mention-item img { width: 28px; height: 36px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
+.mention-item span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-empty { padding: 8px; font-size: 12px; color: var(--muted); }
