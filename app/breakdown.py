@@ -166,7 +166,10 @@ def speech_seconds(text: str, wps: float) -> float:
 
 
 def _action_seconds(text: str) -> float:
-    return min(8.0, max(2.5, words(text) * 0.3))
+    """Грубая оценка по описанию действия. Реплики в кавычках не считаем: их время уже в речи, а в действии
+    они часто повторены (вставленный целиком промпт)."""
+    text = re.sub(r"«[^»]*»|\"[^\"]*\"", " ", text)
+    return min(4.5, max(2.5, words(text) * 0.15))
 
 
 def fit_duration(seconds: float, max_s: int) -> int:
