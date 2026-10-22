@@ -423,11 +423,17 @@ def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=
         headers["x-magnific-api-key"] = key
     req = urllib.request.Request(url, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            data = r.read()
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Magnific: HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
+    for attempt in range(3):  # обрыв связи («Connection reset by peer») бывает случайным: повторяем, прежде чем сдаться
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = r.read()
+            break
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Magnific: HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
+            if attempt == 2:
+                raise RuntimeError(f"Magnific: нет связи ({str(e).strip('<>')}). Попробуйте ещё раз через минуту") from None
+            time.sleep(2 + attempt * 3)
     return data if raw else json.loads(data)
 
 
