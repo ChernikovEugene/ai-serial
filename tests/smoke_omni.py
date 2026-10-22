@@ -33,6 +33,7 @@ DATA = Path(tempfile.gettempdir())   # папка данных проверяе�
 class Fake(http.server.BaseHTTPRequestHandler):
     log: list = []          # (метод, путь, тело)
     fail_nano = False
+    omni_missing = False    # адрес по умолчанию для Omni отвечает 404, живёт только «-720p»
 
     def log_message(self, *a):
         pass
@@ -51,6 +52,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
         Fake.log.append(("POST", self.path, body, self.headers.get("x-magnific-api-key")))
         if self.path.startswith("/v1/ai/text-to-image/nano-banana-2-1") and Fake.fail_nano:
             return self._send(400, {"message": "Validation error"})
+        if Fake.omni_missing and self.path.startswith("/v1/ai/video/gemini-omni") and self.path != "/v1/ai/video/gemini-omni-1-1-720p":
+            return self._send(404, {"message": "Not found"})
         if self.path.startswith("/v1/ai/text-to-image/") or self.path.startswith("/v1/ai/video/"):
             return self._send(200, {"data": {"task_id": str(uuid.uuid4()), "status": "IN_PROGRESS", "generated": []}})
         self._send(404, {"message": "nope"})
@@ -59,7 +62,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
         Fake.log.append(("GET", self.path, None, self.headers.get("x-magnific-api-key")))
         if self.path.startswith("/v1/ai/text-to-image/nano-banana-2-1/"):
             return self._send(200, {"data": {"task_id": "x", "status": "COMPLETED", "generated": [f"http://127.0.0.1:{PORT_FAKE}/files/pic.png"]}})
-        if self.path.startswith("/v1/ai/video/gemini-omni-1-1/"):
+        if self.path.startswith("/v1/ai/video/gemini-omni-1-1/") or self.path.startswith("/v1/ai/video/gemini-omni-1-1-720p/"):
             return self._send(200, {"data": {"task_id": "x", "status": "COMPLETED", "generated": [f"http://127.0.0.1:{PORT_FAKE}/files/clip.mp4"]}})
         if self.path == "/files/pic.png":
             return self._send(200, PNG, "image/png")
@@ -273,6 +276,16 @@ def run():
     ob = omni_posts[0][2] if omni_posts else {}
     check("Gemini Omni request: 720p, 9:16, 3 s, start and end frames", ob.get("resolution") == "720p" and ob.get("aspect_ratio") == "9:16"
           and ob.get("duration") == 3 and ob.get("start_image_url") and ob.get("end_image_url") and "start frame" in ob.get("prompt", ""), {k: str(v)[:60] for k, v in ob.items()})
+    # адрес Omni не угадан с первого раза: студия перебирает известные и запоминает рабочий
+    admin.call("PUT", "/api/settings", {"omni_path": ""})
+    Fake.omni_missing = True
+    st, r = admin.call("POST", f"/api/shots/{sid}/generate", {"reason": "перебор адреса"})
+    take2 = wait_for(lambda: next((t for s in admin.call("GET", f"/api/episodes/{eid}")[1]["shots"] if s["id"] == sid
+                                   for t in s["takes"] if t["id"] != take["id"] and t["status"] in ("done", "error")), None))
+    st, cfg = admin.call("GET", "/api/settings")
+    Fake.omni_missing = False
+    check("Omni address is found among candidates and remembered", bool(take2) and take2["status"] == "done" and cfg.get("omni_path") == "/v1/ai/video/gemini-omni-1-1-720p", (take2, cfg.get("omni_path")))
+    admin.call("PUT", "/api/settings", {"omni_path": ""})
     check("video file saved", take and (DATA / "media" / take["video_path"]).is_file(), take)
 
     # --- пропуск без кадров в «сгенерировать серию» ---

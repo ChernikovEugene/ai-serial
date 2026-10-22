@@ -431,9 +431,43 @@ def _key(settings: dict) -> str:
     return key
 
 
+# Адреса Gemini Omni в открытой документации Magnific не описаны. Если свой адрес не задан в настройках и стандартный даёт 404,
+# студия перебирает вероятные (по образцу других видеомоделей Magnific) и запоминает тот, что отозвался не 404.
+OMNI_CANDIDATES = [
+    "/v1/ai/video/gemini-omni-1-1", "/v1/ai/video/gemini-omni-1-1-720p", "/v1/ai/image-to-video/gemini-omni-1-1",
+    "/v1/ai/image-to-video/gemini-omni-1-1-720p", "/v1/ai/reference-to-video/gemini-omni-1-1", "/v1/ai/video/gemini-omni-1_1",
+    "/v1/ai/video/gemini-omni-1.1", "/v1/ai/video/gemini-omni", "/v1/ai/image-to-video/gemini-omni",
+    "/v1/ai/video/gemini-omni-flash-1-1", "/v1/ai/image-to-video/gemini-omni-flash-1-1", "/v1/ai/video/google-gemini-omni-1-1",
+    "/v1/ai/video/gemini-omni-1-1-flash", "/v1/ai/image-to-video/gemini-omni-1-1-flash",
+]
+
+
+def _create_omni(shot: dict, refs: list[dict], settings: dict) -> tuple[str, str]:
+    custom = (settings.get("omni_path") or "").strip()
+    paths = [omni_path(settings)] if custom else OMNI_CANDIDATES
+    tried = []
+    for p in paths:
+        req = build(shot, refs, {**settings, "omni_path": p}, inline=True)
+        try:
+            task = _http("POST", API_BASE + req["path"], _key(settings), req["body"])["data"]
+        except RuntimeError as e:
+            if "HTTP 404" in str(e) and len(paths) > 1:
+                tried.append(p)
+                continue
+            raise RuntimeError(f"{e} (адрес {p})") from None
+        if not custom:
+            with db.connect() as c:  # нашли рабочий адрес: дальше шоты идут сразу на него
+                c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('omni_path', ?)", (p,))
+        return task["task_id"], req["status_path"]
+    raise RuntimeError("Magnific не нашёл адрес Gemini Omni ни по одному из известных вариантов (везде 404): " + ", ".join(tried)
+                       + ". Узнайте адрес в документации Magnific и впишите в «Настройки» → «Адрес Gemini Omni 1.1»")
+
+
 def create(shot: dict, refs: list[dict], settings: dict) -> tuple[str, str]:
     """Создаёт задачу в Magnific и возвращает (task_id, адрес опроса): их хранит дубль, чтобы после перезапуска
     студии продолжить ждать ту же задачу, а не терять уже оплаченный ролик."""
+    if (shot.get("engine") or DEFAULT_ENGINE) == "gemini_omni":
+        return _create_omni(shot, refs, settings)
     req = build(shot, refs, settings, inline=True)
     task = _http("POST", API_BASE + req["path"], _key(settings), req["body"])["data"]
     return task["task_id"], req["status_path"]
