@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, breakdown, db, exporter, farm, feedback, models, schedule, veo
+from . import auth, breakdown, credits, db, exporter, farm, feedback, frames, models, schedule, veo
 from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -40,7 +40,8 @@ AUDIO_EXT = {".wav", ".webm", ".ogg", ".m4a", ".mp3"}  # запись голос
 # Лимиты загрузки: один ролик шота — до VIDEO_MAX_MB, картинка — до IMAGE_MAX_MB. И не загружаем, если на диске
 # с данными (на сервере — 10 ГБ) остаётся меньше DISK_RESERVE_MB: иначе студия перестанет сохранять базу.
 VIDEO_MAX_MB, IMAGE_MAX_MB, DISK_RESERVE_MB = 300, 20, 1024
-# В какой нейросети делается шот: выбирает монтажёр. Все, кроме «Другой», уходят через Magnific API (app/models.py).
+# В какой нейросети делается шот: выбирает монтажёр. Выбираются «Gemini Omni 1.1» (через Magnific API) и «Рендерферма»; остальные
+# описания в app/models.py (legacy) нужны только для названий в старых шотах и дублях.
 ENGINES = models.ENGINES
 ENGINE_NAMES = dict(ENGINES)
 
@@ -54,6 +55,7 @@ HOLIDAYS = {
 
 db.init()
 veo.recover()
+frames.recover()
 exporter.recover()
 app = FastAPI(title="Студия сериала")
 
@@ -247,9 +249,11 @@ def meta(request: Request):
         "engines": [{"key": k, "name": m["name"], "durations": list(m["durations"]), "duration_note": m["duration_note"],
                      "refs_note": m["refs_note"], "tips": m["tips"], "audio": m["audio"], "api": models.has_api(k),
                      "max_refs": m["max_refs"], "first_frame": m["first_frame"], "prompt_max": m["prompt_max"],
+                     "legacy": m["legacy"], "frames": bool(m.get("frames")),
                      "ref_example": models.token(k, 1) if m["ref_token"] else ""}
                     for k, m in models.MODELS.items()],
         "series_title": s.get("series_title") or "Сериал",
+        "default_engine": models.DEFAULT_ENGINE,
         "version": SITE_VERSION,
         "sound_modes": SOUND_MODES,
         "upload_limits": {"video_mb": VIDEO_MAX_MB, "image_mb": IMAGE_MAX_MB},
@@ -258,13 +262,30 @@ def meta(request: Request):
 
 # ---------- helpers ----------
 
+def norm_state_images(images) -> list[dict]:
+    """Картинки состояния: [{"path", "name"}]; строки (на всякий случай) превращаются в такие же объекты."""
+    out = []
+    for i in images or []:
+        if isinstance(i, str):
+            i = {"path": i, "name": ""}
+        if isinstance(i, dict) and i.get("path"):
+            out.append({"path": str(i["path"]), "name": str(i.get("name") or "")[:120]})
+    return out
+
+
 def load_assets(kind: str | None = None) -> list[dict]:
     with db.connect() as c:
         q = "SELECT * FROM assets" + (" WHERE kind=?" if kind else "") + " ORDER BY name"
         assets = db.rows(c.execute(q, (kind,) if kind else ()))
         versions = db.rows(c.execute("SELECT * FROM asset_versions ORDER BY version_no"))
+        states = db.rows(c.execute("SELECT * FROM version_states ORDER BY position, id"))
+    by_version: dict[int, list] = {}
+    for st in states:
+        st["images"] = norm_state_images(st["images"])
+        by_version.setdefault(st["version_id"], []).append(st)
     by_asset: dict[int, list] = {}
     for v in versions:
+        v["states"] = by_version.get(v["id"], [])
         by_asset.setdefault(v["asset_id"], []).append(v)
     for a in assets:
         a["versions"] = by_asset.get(a["id"], [])
@@ -359,6 +380,13 @@ def unready_items(s: dict) -> list[str]:
 
 
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
+    if models.norm_engine(s.get("engine")) != s.get("engine"):  # шот со старой нейросетью открывается как «Gemini Omni 1.1»
+        s["engine"] = models.norm_engine(s.get("engine"))
+        fixed = refresh_shot(dict(s), ctx)   # длина и промпт под новую нейросеть (в базу попадут при следующем сохранении шота)
+        s["duration"] = fixed["duration"]
+        s["prompt"] = fixed["prompt"]
+    s["frames"] = {side: frames.resolved(s, side, ctx.v_map, ctx.a_map) for side in frames.SIDES}
+    s["frames_ready"] = all(f["ready"] for f in s["frames"].values())
     for t in takes:  # шот фермы подготовлен (переведён) и ждёт Пульт; сам текст шота клиенту не нужен
         if "farm_payload" in t:
             t["farm_ready"] = bool(t.pop("farm_payload"))
@@ -548,7 +576,7 @@ def delete_asset(asset_id: int):
 @app.post("/api/assets/{asset_id}/versions", dependencies=[Depends(auth.need("library"))])
 def create_version(request: Request, asset_id: int, label: str = Form(""), description: str = Form(""),
                    voice: str = Form(""), notes: str = Form(""), keep_images: str = Form("[]"),
-                   base_version_id: int | None = Form(None), activate: bool = Form(True),
+                   base_version_id: int | None = Form(None), activate: str = Form("1"),
                    images: list[UploadFile] = File(default=[])):
     """A new version is an edited copy; old versions never change, so any of them can be used again."""
     a = get_asset(asset_id)
@@ -561,7 +589,7 @@ def create_version(request: Request, asset_id: int, label: str = Form(""), descr
             " parent_version_id, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (asset_id, next_no, label.strip() or f"Версия {next_no}", description, voice, notes, db.dumps(paths),
              base_version_id, uid(request), db.now())).lastrowid
-        if activate:
+        if activate.strip().lower() not in ("0", "false", "off", "no"):  # по умолчанию новая версия становится активной
             c.execute("UPDATE assets SET active_version_id=? WHERE id=?", (vid, asset_id))
     return get_asset(asset_id)
 
@@ -626,9 +654,10 @@ def delete_version(asset_id: int, version_id: int):
                 c.execute("UPDATE arcs SET members=? WHERE id=?", (db.dumps(members), arc["id"]))
         c.execute("UPDATE asset_versions SET parent_version_id=NULL WHERE parent_version_id=?", (version_id,))
         images = json.loads(v["images"] or "[]")
+        for r in c.execute("SELECT images FROM version_states WHERE version_id=?", (version_id,)):  # картинки состояний уходят вместе с версией
+            images += [i["path"] for i in norm_state_images(json.loads(r[0] or "[]"))]
         c.execute("DELETE FROM asset_versions WHERE id=?", (version_id,))
         db.renumber_versions(c, asset_id)
-        still = {p for r in c.execute("SELECT images FROM asset_versions") for p in json.loads(r[0] or "[]")}
     # пересобрать промпты затронутых шотов (кроме закреплённых вручную и выложенных серий)
     ctx = Ctx()
     with db.connect() as c:
@@ -636,11 +665,7 @@ def delete_version(asset_id: int, version_id: int):
                                     f"({','.join('?' * len(u['shots'])) or 'NULL'}) AND e.status<>'posted'", u["shots"])):
             refresh_shot(sh, ctx)
             save_shot(c, sh)
-    root = db.MEDIA_DIR.resolve()
-    for rel in images:
-        f = (db.MEDIA_DIR / rel).resolve()
-        if rel not in still and root in f.parents:
-            f.unlink(missing_ok=True)
+    drop_files(images)
     return get_asset(asset_id)
 
 
@@ -676,6 +701,115 @@ def set_version_images(asset_id: int, version_id: int, body: ImagesIn):
     with db.connect() as c:
         c.execute("UPDATE asset_versions SET images=? WHERE id=?", (db.dumps(list(dict.fromkeys(body.images))), version_id))
     refresh_all_prompts()
+    return get_asset(asset_id)
+
+
+# ---------- состояния версии: у версии персонажа или локации несколько «состояний» с картинками ----------
+# Версия = образ («Пижама», «Зима»). Состояние = то, в чём этот образ бывает по сценарию («проснулась», «плачет», «ночью»).
+# Если состояний нет, считается, что оно одно: картинки самой версии. Выбирают состояние в блоке «Кадры для Gemini Omni».
+
+def load_state(asset_id: int, version_id: int, state_id: int) -> tuple[dict, dict, dict]:
+    a, v = load_version(asset_id, version_id)
+    st = next((x for x in v["states"] if x["id"] == state_id), None)
+    if not st:
+        raise HTTPException(404, "Состояние не найдено")
+    return a, v, st
+
+
+def state_names(names: str, count: int) -> list[str]:
+    try:
+        lst = json.loads(names or "[]")
+    except ValueError:
+        lst = []
+    lst = [str(n or "").strip()[:120] for n in lst] if isinstance(lst, list) else []
+    return (lst + [""] * count)[:count]
+
+
+def used_paths() -> set[str]:
+    """Все картинки библиотеки, которые ещё нужны: фото версий и картинки их состояний."""
+    with db.connect() as c:
+        used = {p for r in c.execute("SELECT images FROM asset_versions") for p in json.loads(r[0] or "[]")}
+        for r in c.execute("SELECT images FROM version_states"):
+            used |= {i["path"] for i in norm_state_images(json.loads(r[0] or "[]"))}
+    return used
+
+
+def drop_files(paths) -> None:
+    """Стереть файлы картинок библиотеки, которые больше никто не использует."""
+    still, root = used_paths(), db.MEDIA_DIR.resolve()
+    for rel in paths:
+        f = (db.MEDIA_DIR / rel).resolve()
+        if rel not in still and root in f.parents:
+            f.unlink(missing_ok=True)
+
+
+@app.post("/api/assets/{asset_id}/versions/{version_id}/states", dependencies=[Depends(auth.need("library"))])
+def create_state(request: Request, asset_id: int, version_id: int, name: str = Form(...), names: str = Form("[]"),
+                 images: list[UploadFile] = File(default=[])):
+    a, v = load_version(asset_id, version_id)
+    name = name.strip()[:80]
+    if not name:
+        raise HTTPException(400, "Назовите состояние: например, «плачет» или «ночью»")
+    if any(x["name"].strip().lower() == name.lower() for x in v["states"]):
+        raise HTTPException(400, f"Состояние «{name}» у этой версии уже есть")
+    files = [f for f in images if f.filename]
+    paths = [save_upload(f, f"{a['kind']}s/{asset_id}") for f in files]
+    labels = state_names(names, len(paths))
+    imgs = [{"path": p, "name": labels[i] or Path(files[i].filename).stem[:120]} for i, p in enumerate(paths)]
+    with db.connect() as c:
+        pos = c.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM version_states WHERE version_id=?", (version_id,)).fetchone()[0]
+        c.execute("INSERT INTO version_states(version_id, name, position, images, created_by, created_at) VALUES (?,?,?,?,?,?)",
+                  (version_id, name, pos, db.dumps(imgs), uid(request), db.now()))
+    return get_asset(asset_id)
+
+
+class StateIn(BaseModel):
+    name: str | None = None
+    images: list[dict] | None = None   # порядок, названия и удаление картинок: [{path, name}]; новые пути сюда не принимаются
+
+
+@app.put("/api/assets/{asset_id}/versions/{version_id}/states/{state_id}", dependencies=[Depends(auth.need("library"))])
+def update_state(asset_id: int, version_id: int, state_id: int, p: StateIn):
+    _, v, st = load_state(asset_id, version_id, state_id)
+    name, images = st["name"], st["images"]
+    if p.name is not None:
+        name = p.name.strip()[:80]
+        if not name:
+            raise HTTPException(400, "Назовите состояние")
+        if any(x["id"] != state_id and x["name"].strip().lower() == name.lower() for x in v["states"]):
+            raise HTTPException(400, f"Состояние «{name}» у этой версии уже есть")
+    removed = []
+    if p.images is not None:
+        have = {i["path"]: i for i in st["images"]}
+        new = norm_state_images(p.images)
+        if not {i["path"] for i in new} <= set(have):
+            raise HTTPException(400, "Можно только переставить, переименовать или убрать картинки этого состояния")
+        images = list({i["path"]: i for i in new}.values())
+        removed = [x for x in have if x not in {i["path"] for i in images}]
+    with db.connect() as c:
+        c.execute("UPDATE version_states SET name=?, images=? WHERE id=?", (name, db.dumps(images), state_id))
+    drop_files(removed)
+    return get_asset(asset_id)
+
+
+@app.post("/api/assets/{asset_id}/versions/{version_id}/states/{state_id}/images", dependencies=[Depends(auth.need("library"))])
+def add_state_images(asset_id: int, version_id: int, state_id: int, names: str = Form("[]"), images: list[UploadFile] = File(default=[])):
+    a, _, st = load_state(asset_id, version_id, state_id)
+    files = [f for f in images if f.filename]
+    paths = [save_upload(f, f"{a['kind']}s/{asset_id}") for f in files]
+    labels = state_names(names, len(paths))
+    new = [{"path": p, "name": labels[i] or Path(files[i].filename).stem[:120]} for i, p in enumerate(paths)]
+    with db.connect() as c:
+        c.execute("UPDATE version_states SET images=? WHERE id=?", (db.dumps(st["images"] + new), state_id))
+    return get_asset(asset_id)
+
+
+@app.delete("/api/assets/{asset_id}/versions/{version_id}/states/{state_id}", dependencies=[Depends(auth.need("library"))])
+def delete_state(asset_id: int, version_id: int, state_id: int):
+    _, _, st = load_state(asset_id, version_id, state_id)
+    with db.connect() as c:
+        c.execute("DELETE FROM version_states WHERE id=?", (state_id,))
+    drop_files([i["path"] for i in st["images"]])
     return get_asset(asset_id)
 
 
@@ -1637,6 +1771,8 @@ def _purge(c, eids: list[int]) -> None:
         files = [r[0] for r in c.execute("SELECT t.video_path FROM takes t JOIN shots s ON s.id=t.shot_id "
                                          "WHERE s.episode_id=? AND t.video_path<>''", (eid,))]
         files += [r[0] for r in c.execute("SELECT composition_image FROM shots WHERE episode_id=? AND composition_image<>''", (eid,))]
+        for r in c.execute("SELECT id FROM shots WHERE episode_id=?", (eid,)).fetchall():
+            frames.remove_files(r[0])
         c.execute("DELETE FROM episodes WHERE id=?", (eid,))
         root = db.MEDIA_DIR.resolve()
         for rel in files:
@@ -1778,7 +1914,7 @@ def apply_breakdown(eid: int, only_new: bool = False):
             s = dict(match) if match else {"episode_id": eid, "composition_image": "", "composition_mode": "reference",
                                            "composition_note": "", "prompt": "", "prompt_locked": 0,
                                            "negative_prompt": ctx.settings.get("negative_prompt", ""),
-                                           "selected_take_id": None, "needs_redo": 0, "engine": "veo",
+                                           "selected_take_id": None, "needs_redo": 0, "engine": models.DEFAULT_ENGINE,
                                            "sound_off": 0, "sound_mode": "full", "no_characters": 0, "voiceover": 0,
                                            "location_mode": "library", "location_text": ""}
             s.update({k: n[k] for k in ("idx", "label", "scene", "duration", "camera", "action", "dialogue",
@@ -1791,6 +1927,7 @@ def apply_breakdown(eid: int, only_new: bool = False):
         for o in old:
             if o["id"] not in keep_ids:
                 c.execute("DELETE FROM shots WHERE id=?", (o["id"],))
+                frames.remove_files(o["id"])
         c.execute("UPDATE episodes SET parse_notes=?, updated_at=? WHERE id=?", (db.dumps(notes), db.now(), eid))
 
 
@@ -1904,6 +2041,9 @@ def generate_episode(eid: int, g: GenerateIn, request: Request):
             continue
         if g.mode == "redo" and not (s["needs_redo"] or s["open_fixes"]):
             continue
+        if models.spec(s["engine"]).get("frames") and not s["frames_ready"]:  # без кадров Gemini Omni не работает, даже у продюсера
+            unready.append({"id": s["id"], "label": s["label"], "items": ["Кадры: стартовый и финальный (блок «Кадры для Gemini Omni»)"]})
+            continue
         if not s["ready"] and not force:  # защита от пустых шотов: незаполненное в нейросеть не уходит
             unready.append({"id": s["id"], "label": s["label"], "items": unready_items(s)})
             continue
@@ -1968,6 +2108,7 @@ def load_shot(sid: int) -> dict:
         s = db.row(c.execute("SELECT * FROM shots WHERE id=?", (sid,)).fetchone())
     if not s:
         raise HTTPException(404, "Шот не найден")
+    s["engine"] = models.norm_engine(s.get("engine"))
     return s
 
 
@@ -2002,7 +2143,7 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
             writer_may_edit(request, load_episode_row(s["episode_id"])["status"])
     if data.pop("clear_location", False):
         s["location_version_id"] = None
-    if data.get("engine") not in (None, *ENGINE_NAMES):
+    if data.get("engine") not in (None, *models.ACTIVE_ENGINES):
         raise HTTPException(400, "Неизвестная нейросеть")
     engine = data.get("engine") or s.get("engine")
     if "duration" in data and data["duration"] not in breakdown.engine_durations(engine):
@@ -2213,6 +2354,99 @@ def shot_request(sid: int):
     return veo.preview(s, s["references"], db.get_settings())
 
 
+# ---------- кадры для Gemini Omni: старт и финал рисует Nano Banana 2.1 (API Magnific) ----------
+
+def frame_side(side: str) -> str:
+    if side not in frames.SIDES:
+        raise HTTPException(404, "Кадр не найден")
+    return side
+
+
+def omni_shot(sid: int) -> dict:
+    s = load_shot(sid)
+    if models.spec(s["engine"]).get("frames") is not True:
+        raise HTTPException(400, "Кадры нужны только для Gemini Omni: выберите эту нейросеть в карточке шота")
+    return s
+
+
+class FrameIn(BaseModel):
+    prompt: str | None = None   # промпт для Nano Banana 2.1, пишет человек
+    refs: list[dict] | None = None   # [{path, name, kind}]: картинки-референсы (из библиотеки, свои, готовые кадры)
+
+
+def save_frame_fields(s: dict, side: str, p: FrameIn | None) -> None:
+    if not p:
+        return
+    kw = {}
+    if p.prompt is not None:
+        kw["prompt"] = p.prompt.strip()[:12000]
+    if p.refs is not None:
+        ctx = Ctx()
+        before = frames.resolved(s, side, ctx.v_map, ctx.a_map)["refs"]
+        kw["refs"] = frames.clean_refs(p.refs)
+        other = frames.resolved(s, "end" if side == "start" else "start", ctx.v_map, ctx.a_map)["refs"]
+        keep = {r["path"] for r in kw["refs"]} | {r["path"] for r in other}
+        for r in before:  # убранную свою загрузку стираем, чтобы не копились файлы
+            if r["kind"] == "upload" and r["path"] not in keep:
+                frames._drop_file(r["path"], s["id"])
+    if kw:
+        frames.update(s["id"], side, **kw)
+
+
+@app.put("/api/shots/{sid}/frames/{side}", dependencies=[Depends(auth.need("generation"))])
+def save_frame(sid: int, side: str, p: FrameIn):
+    s = omni_shot(sid)
+    save_frame_fields(s, frame_side(side), p)
+    return shot_response(sid)
+
+
+@app.post("/api/shots/{sid}/frames/{side}/upload", dependencies=[Depends(auth.need("generation"))])
+def upload_frame_refs(sid: int, side: str, images: list[UploadFile] = File(...)):
+    """Свои картинки-референсы для кадра (перетащили или выбрали в проводнике)."""
+    s = omni_shot(sid)
+    frame_side(side)
+    ctx = Ctx()
+    cur = frames.resolved(s, side, ctx.v_map, ctx.a_map)["refs"]
+    files = [f for f in images if f.filename]
+    if len(cur) + len(files) > frames.MAX_REFS:
+        raise HTTPException(400, f"Nano Banana 2.1 принимает до {frames.MAX_REFS} картинок-референсов")
+    new = [{"path": save_upload(f, f"frames/{sid}"), "name": Path(f.filename).stem[:120], "kind": "upload"} for f in files]
+    frames.update(sid, side, refs=cur + new)
+    return shot_response(sid)
+
+
+@app.post("/api/shots/{sid}/frames/{side}/generate", dependencies=[Depends(auth.need("generation"))])
+def generate_frame(sid: int, side: str, request: Request, p: FrameIn | None = None):
+    s = omni_shot(sid)
+    frame_side(side)
+    if frames.load(sid, side).get("status") in ("queued", "running"):
+        raise HTTPException(400, "Этот кадр уже рисуется")
+    save_frame_fields(s, side, p)
+    s = load_shot(sid)
+    ctx = Ctx()
+    try:
+        frames.start(s, side, ctx.settings, ctx.v_map, ctx.a_map)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    db.log(s["episode_id"], uid(request), f"Шот {s['label']}: {frames.SIDE_NAMES[side]} кадр отправлен в Nano Banana 2.1")
+    return shot_response(sid)
+
+
+@app.delete("/api/shots/{sid}/frames/{side}", dependencies=[Depends(auth.need("generation"))])
+def reset_frame(sid: int, side: str):
+    """Убрать готовый кадр или сбросить зависший: промпт и референсы остаются."""
+    omni_shot(sid)
+    frames.reset(sid, frame_side(side))
+    return shot_response(sid)
+
+
+@app.get("/api/shots/{sid}/frames/{side}/request")
+def frame_request(sid: int, side: str):
+    s = omni_shot(sid)
+    ctx = Ctx()
+    return frames.preview(s, frame_side(side), ctx.settings, ctx.v_map, ctx.a_map)
+
+
 class RegenerateIn(BaseModel):
     prompt: str | None = None   # improved prompt for this attempt; saved to the shot
     reason: str = ""            # what was wrong with the previous take
@@ -2248,6 +2482,9 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
         with db.connect() as c:
             save_shot(c, raw)
         s = shot_response(sid)
+    if models.spec(s["engine"]).get("frames") and not s["frames_ready"]:
+        raise HTTPException(400, f"Шот {s['label']}: сначала сделайте стартовый и финальный кадры (блок «Кадры для Gemini Omni»). "
+                                 "Когда оба станут зелёными, шот можно отправлять.")
     if not s["ready"] and not (g.force and request.state.user["role"] == "admin"):
         raise HTTPException(400, f"Шот {s['label']} не заполнен: " + "; ".join(unready_items(s))
                                  + ". Если пункт не нужен, закройте его явно («-», «без персонажей»).")
@@ -2685,6 +2922,12 @@ SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_s
 PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
+@app.get("/api/magnific/credits", dependencies=[Depends(auth.need("generation"))])
+def magnific_credits(refresh: bool = False):
+    """Остаток кредитов на аккаунте Magnific, по ключу которого работает студия (см. app/credits.py)."""
+    return credits.get(db.get_settings(), force=refresh)
+
+
 @app.get("/api/settings")
 def read_settings():
     s = db.get_settings()
@@ -2707,6 +2950,8 @@ def write_settings(values: dict):
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)", (k, str(v)))
     if PROMPT_SETTINGS & values.keys():
         refresh_all_prompts()
+    if {"magnific_api_key", "magnific_credits_path"} & values.keys():
+        credits._cache["value"] = None  # остаток кредитов перечитается с новым ключом или адресом
     return read_settings()
 
 

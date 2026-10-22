@@ -11,6 +11,7 @@ import { renderStatus, stopStatusPolling } from "./status.js";
 import { renderTeam } from "./team.js";
 import { openReport, renderReports } from "./report.js";
 import { drawBadges, startBadges, stopBadges } from "./notify.js";
+import { startCredits, stopCredits } from "./credits.js";
 import { renderTrash } from "./trash.js";
 
 let lastHash = location.hash;
@@ -105,6 +106,7 @@ function drawNav(section) {
     <button class="ghost report-btn mob" data-report>${FLAG}Сообщить о проблеме</button>
     <div class="theme-switch mob">${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
     <div class="nav-foot">
+      ${can.gen() ? `<button class="credits off" id="credits" type="button">Кредиты Magnific…</button>` : ""}
       <button class="ghost small report-btn" data-report>${FLAG}Сообщить о проблеме</button>
       <div class="theme-switch" title="Оформление студии (запоминается в этом браузере)">
         ${THEMES.map(([k, n]) => `<button data-theme-set="${k}">${n}</button>`).join("")}</div>
@@ -119,11 +121,13 @@ function drawNav(section) {
     await api("/api/auth/logout", { json: {} });
     state.meta = null;
     stopBadges();
+    stopCredits();
     location.hash = "#/login";
   };
   $$("[data-report]").forEach((b) => (b.onclick = openReport));
   drawBadges();
   startBadges();
+  startCredits();
 }
 
 async function renderLogin() {

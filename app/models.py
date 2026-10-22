@@ -6,6 +6,9 @@
   * «reference image 1» обычными словами: Veo 3.1 (специального синтаксиса нет);
   * без референсов (только первый кадр): Runway Gen-4.5.
 Отдельно от Magnific — «Рендерферма» (`renderfarm`): шоты уходят в Пульт студийной рендер-фермы (MiniMax H3), см. app/farm.py.
+С октября 2026 в студии выбираются только две нейросети: «Gemini Omni 1.1» (`gemini_omni`, через ключ Magnific; на вход старт- и
+финальный кадр, их делает Nano Banana 2.1, см. app/frames.py) и «Рендерферма». Остальные описания (`legacy`) оставлены только
+для старых шотов и дублей: в списке выбора их нет, а шот со старой нейросетью открывается как «Gemini Omni 1.1».
 Данные сверены с docs.magnific.com в октябре 2026. Если модель обновится, поправьте её описание здесь.
 
 Как картинки уходят в Magnific: где API принимает base64, картинка вкладывается прямо в запрос (работает и с ноутбука).
@@ -16,6 +19,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 import urllib.error
@@ -23,7 +27,8 @@ import urllib.request
 
 from . import db
 
-API_BASE = "https://api.magnific.com"
+API_BASE = os.environ.get("MAGNIFIC_API_BASE") or "https://api.magnific.com"  # переменная нужна только для автотестов
+OMNI_PATH = "/v1/ai/video/gemini-omni-1-1"  # адрес Gemini Omni 1.1 в API Magnific; его можно поменять в «Настройки» (omni_path)
 
 # key: ключ в базе (shots.engine). Старые ключи veo / kling / seedance / runway / other сохранены, чтобы шоты не потерялись.
 #   ref_token: как ссылаться на картинку в промпте (at | label | natural | None)
@@ -31,6 +36,17 @@ API_BASE = "https://api.magnific.com"
 #   first_frame: умеет ли начинать видео с картинки; audio: делает ли звук сам
 #   url_only: картинки принимаются только ссылкой (иначе можно base64)
 MODELS = {
+    "gemini_omni": {
+        "name": "Gemini Omni 1.1", "durations": (3, 5), "ref_token": None, "max_refs": 0,
+        "ref_kinds": (), "first_frame": False, "audio": True, "frames": True,
+        "url_only": False, "prompt_max": 10000,
+        "duration_note": "Gemini Omni 1.1: 3 или 5 с, всегда 720p.",
+        "refs_note": "Героев и локацию эта нейросеть берёт из стартового и финального кадров: их рисует Nano Banana 2.1 по картинкам "
+                     "из библиотеки. Отдельных референсов к видео не нужно.",
+        "tips": ["Сначала сделайте стартовый и финальный кадры (блок «Кадры для Gemini Omni»), когда оба станут зелёными, шот можно отправлять.",
+                 "Промпт собирается из карточки шота: действие, камера, реплики. Пишите, что происходит между первым и последним кадром.",
+                 "Звук и речь по репликам модель делает сама. Длина клипа: 3 или 5 секунд, разрешение 720p."],
+    },
     "veo": {
         "name": "Veo 3.1", "durations": (4, 6, 8), "ref_token": "natural", "max_refs": 3,
         "ref_kinds": ("composition", "character", "location"), "first_frame": True, "audio": True,
@@ -142,11 +158,23 @@ MODELS = {
         "tips": [],
     },
 }
+# STUDIO_LEGACY_ENGINES=1 возвращает старые нейросети в выбор и делает Veo нейросетью по умолчанию: нужно только для
+# tests/smoke_roles.py, который проверяет код старых моделей. На сайте переменная не задаётся.
+LEGACY_MODE = os.environ.get("STUDIO_LEGACY_ENGINES") == "1"
+for _k, _m in MODELS.items():
+    _m.setdefault("legacy", False if LEGACY_MODE else _k not in ("gemini_omni", "renderfarm"))  # legacy: убрана из выбора, описание нужно старым шотам
 ENGINES = [(k, m["name"]) for k, m in MODELS.items()]
+ACTIVE_ENGINES = [k for k, m in MODELS.items() if not m["legacy"]]
+DEFAULT_ENGINE = "veo" if LEGACY_MODE else "gemini_omni"
+
+
+def norm_engine(engine: str | None) -> str:
+    """Нейросеть шота для работы: из выбираемых; старые (Veo, Kling…) и пустая открываются как «Gemini Omni 1.1»."""
+    return engine if engine in ACTIVE_ENGINES else DEFAULT_ENGINE
 
 
 def spec(engine: str | None) -> dict:
-    return MODELS.get(engine or "veo", MODELS["other"])
+    return MODELS.get(engine or DEFAULT_ENGINE, MODELS["other"])
 
 
 def has_api(engine: str | None) -> bool:
@@ -170,12 +198,12 @@ def route(engine: str | None, settings: dict) -> str:
         return "stub"
     if engine == "renderfarm":
         return "renderfarm"
-    return veo_route(settings) if (engine or "veo") == "veo" else "magnific"
+    return veo_route(settings) if (engine or DEFAULT_ENGINE) == "veo" else "magnific"
 
 
 def accepts_refs(engine: str | None, settings: dict) -> bool:
     """Veo через Google принимает референсы только в модели 3.1; в Magnific Veo всегда 3.1."""
-    if (engine or "veo") == "veo" and veo_route(settings) == "google":
+    if (engine or DEFAULT_ENGINE) == "veo" and veo_route(settings) == "google":
         return "3.1" in settings.get("veo_model", "")
     return spec(engine)["max_refs"] > 0
 
@@ -221,7 +249,7 @@ def image_value(rel: str, settings: dict, engine: str, inline: bool, url_only: b
 
 def link_warning(shot: dict, refs: list[dict], settings: dict) -> str:
     """Предупреждение, если картинки нужно отдать ссылкой, а публичного адреса студии нет."""
-    engine = shot.get("engine") or "veo"
+    engine = shot.get("engine") or DEFAULT_ENGINE
     m = spec(engine)
     first = bool(shot.get("composition_image")) and shot.get("composition_mode") == "first_frame"
     if not refs or not m["url_only"] or m.get("manual") or (settings.get("public_base_url") or "").strip():
@@ -256,9 +284,38 @@ SOCIAL = {"9:16": "social_story_9_16", "16:9": "widescreen_16_9", "1:1": "square
 RUNWAY_RATIO = {"9:16": "720:1280", "16:9": "1280:720", "1:1": "960:960", "3:4": "832:1104", "4:3": "1104:832"}
 
 
+# Названия полей запроса Gemini Omni 1.1 в API Magnific. В открытой документации этой модели ещё нет (по каталогу Magnific:
+# ключевые кадры start/end, 3–10 с, 720p, 9:16), поэтому поля подобраны по другим видеомоделям Magnific и не проверены на живом ключе.
+# Если Magnific ответит ошибкой в поле, текст ошибки виден в дубле; править нужно только эти имена и OMNI_PATH.
+OMNI_FIELDS = {"start": "start_image_url", "end": "end_image_url"}
+
+
+def omni_path(settings: dict) -> str:
+    p = (settings.get("omni_path") or "").strip() or OMNI_PATH
+    return p if p.startswith("/") else "/" + p
+
+
+def _build_omni(shot: dict, settings: dict, inline: bool) -> dict:
+    """Gemini Omni 1.1: старт-кадр, финальный кадр (оба из Nano Banana 2.1) и промпт; только 720p, 3 или 5 с."""
+    fr = shot.get("frames") or {}
+    start, end = fr.get("start") or {}, fr.get("end") or {}
+    if inline and not (start.get("path") and end.get("path")):
+        raise RuntimeError("Для Gemini Omni нужны готовые стартовый и финальный кадры: сначала сделайте их в блоке «Кадры для Gemini Omni»")
+    path = omni_path(settings)
+    body: dict = {"prompt": shot["prompt"], "duration": int(shot["duration"]), "resolution": "720p", "aspect_ratio": _ratio(settings)}
+    for side, f in (("start", start), ("end", end)):
+        body[OMNI_FIELDS[side]] = image_value(f["path"], settings, "gemini_omni", inline, False) if f.get("path") else f"<{side}: кадр ещё не готов>"
+    m = spec("gemini_omni")
+    if m["prompt_max"] and len(shot["prompt"]) > m["prompt_max"]:
+        raise RuntimeError(f"Промпт длиннее {m['prompt_max']} знаков, {m['name']} его не примет: сократите стиль или правила")
+    return {"path": path, "status_path": path, "body": body}
+
+
 def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
     """Запрос в Magnific: {"path", "status_path", "body"}. inline=False даёт читаемый вариант для просмотра (без base64)."""
-    engine = shot.get("engine") or "veo"
+    engine = shot.get("engine") or DEFAULT_ENGINE
+    if engine == "gemini_omni":
+        return _build_omni(shot, settings, inline)
     m = spec(engine)
     first = bool(shot.get("composition_image")) and shot.get("composition_mode") == "first_frame" and m["first_frame"]
     img = lambda rel, url_only=m["url_only"]: image_value(rel, settings, engine, inline, url_only)  # noqa: E731
@@ -353,6 +410,16 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
 
 # ---------- отправка ----------
 
+CREDIT_HEADERS: dict = {}  # заголовки ответов Magnific про кредиты (если они там есть): {"имя": значение, "_at": время}
+
+
+def _note_headers(headers) -> None:
+    found = {k.lower(): v for k, v in headers.items() if any(w in k.lower() for w in ("credit", "balance", "remaining"))}
+    if found:
+        CREDIT_HEADERS.clear()
+        CREDIT_HEADERS.update(found, _at=time.time())
+
+
 def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=False):
     headers = {"Content-Type": "application/json"}
     if key:
@@ -362,6 +429,8 @@ def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=
     try:
         with urllib.request.urlopen(req, timeout=180) as r:
             data = r.read()
+            if key:
+                _note_headers(r.headers)
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Magnific: HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
     return data if raw else json.loads(data)

@@ -1,5 +1,5 @@
 // Settings (video generation via Magnific, breakdown, GitHub) and the publish stub. The team lives in team.js.
-import { $, $$, api, can, esc, state, toast, view } from "./core.js";
+import { $, $$, api, can, engineName, esc, state, toast, view } from "./core.js";
 
 /** День выхода серии № 1 по точке отсчёта (anchor_number выходит anchor_date). */
 function firstDay(m) {
@@ -27,32 +27,26 @@ export async function renderSettings() {
         <span class="muted small">дальше по одной серии в день; закреплённые за датой (📌) серии не сдвигаются</span></div>
     </div>
     <div class="card">
-        <h2 style="margin-top:0">Генерация видео (Magnific API)</h2>
-        <p class="muted small">Все нейросети, кроме «Рендерфермы» и «Другой», уходят через Magnific (бывший Freepik API): Veo 3.1, Kling 3 Omni, Seedance 2.5,
-          Seedance 2.0 и 2.0 Fast, Hailuo 3 и 3 Max, WAN 2.7, Runway Gen-4.5. Нейросеть выбирается в карточке шота. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
+        <h2 style="margin-top:0">Генерация (Magnific API)</h2>
+        <p class="muted small">В карточке шота выбираются две нейросети: <b>Gemini Omni 1.1</b> (видео по стартовому и финальному кадрам) и <b>Рендерферма</b>.
+          Кадры для Gemini Omni рисует <b>Nano Banana 2.1</b>. Оба идут через Magnific (бывший Freepik API) по одному ключу: видео всегда 720p, 3 или 5 секунд,
+          кадры 1K, формат 9:16. Формат, стиль и шаблоны промптов — во вкладке «Тех. требования».</p>
         <label>Режим</label>
         <select data-k="gen_mode" ${ro}>
           <option value="stub" ${s.gen_mode === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
           <option value="live" ${s.gen_mode === "live" ? "selected" : ""}>Реальная генерация (платно, тратит кредиты)</option></select>
         ${field("magnific_api_key", "API-ключ Magnific (кабинет Magnific → API Keys; хранится только у вас в data/studio.db)", "input", `type="password" placeholder="FPSX…" autocomplete="off"`)}
-        <label>Разрешение</label>
-        <select data-k="magnific_resolution" ${ro} style="max-width:260px">
-          <option value="480p" ${s.magnific_resolution === "480p" ? "selected" : ""}>480p</option>
-          <option value="720p" ${s.magnific_resolution === "720p" ? "selected" : ""}>720p</option>
-          <option value="1080p" ${s.magnific_resolution === "1080p" ? "selected" : ""}>1080p</option>
-          <option value="4k" ${s.magnific_resolution === "4k" ? "selected" : ""}>4k</option></select>
-        <p class="muted small">720p дешевле и подходит для черновиков. Если модель не умеет выбранное, берётся ближайшее (Hailuo 3 всегда 768p, Hailuo 3 Max до 768p, Seedance 2.0 Fast до 720p, Seedance 2.5 до 1080p).</p>
-        ${field("public_base_url", "Публичный адрес студии (например, https://studio.onrender.com)", "input", `placeholder="пусто: студия на ноутбуке"`)}
-        <p class="muted small">Kling 3 Omni, WAN 2.7 и Veo 3.1 с референсами принимают картинки только ссылкой. Когда студия доступна из интернета,
-          укажите её адрес: картинки уйдут по защищённой ссылке. Без адреса с ноутбука работают все Seedance и Hailuo, Runway и Veo без референсов.</p>
-        <label>Veo 3.1 отправлять</label>
-        <select data-k="veo_route" ${ro}>
-          <option value="magnific" ${s.veo_route === "magnific" ? "selected" : ""}>через Magnific (ключ выше)</option>
-          <option value="google" ${s.veo_route === "google" ? "selected" : ""}>напрямую через Google (Gemini API, свой ключ)</option></select>
-        ${field("veo_api_key", "API-ключ Google AI Studio (только для Veo напрямую через Google)", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
+        <div class="row" style="margin-top:8px"><span id="cr-line" class="muted small">Кредиты Magnific: …</span><button class="ghost small" id="cr-check" type="button">Проверить остаток</button></div>
+        ${field("public_base_url", "Публичный адрес студии (например, https://pari-altushka.ru), по желанию", "input", `placeholder="пусто: студия на ноутбуке"`)}
+        <p class="muted small">Если указан, картинки кадров для Gemini Omni уходят в Magnific защищённой ссылкой на студию, а не файлом внутри запроса.</p>
+        <details style="margin-top:8px"><summary class="muted small">Адреса в API Magnific (менять, только если Magnific их сменил)</summary>
+          ${field("omni_path", "Адрес Gemini Omni 1.1", "input", `placeholder="/v1/ai/video/gemini-omni-1-1"`)}
+          ${field("magnific_credits_path", "Адрес остатка кредитов", "input", `placeholder="пусто: студия пробует известные адреса"`)}
+          <p class="muted small">В открытой документации Magnific пока нет страниц Gemini Omni и остатка кредитов, поэтому студия использует предполагаемые адреса.
+            Если генерация или остаток не работают, текст ответа Magnific виден в дубле или во всплывающей подсказке плашки кредитов: пришлите его, и адрес поправим.</p></details>
         <div style="max-width:260px">${field("veo_parallel", "Одновременных генераций")}</div>
-        <p class="muted small">Число одновременных генераций применяется после перезапуска приложения. Готовое видео скачивается в студию сразу:
-          ссылка Magnific на ролик живёт 30 минут.</p>
+        <p class="muted small">Число одновременных генераций применяется после перезапуска приложения. Готовое видео и кадры скачиваются в студию сразу:
+          ссылка Magnific на результат живёт недолго.</p>
     </div>
     <div class="card" style="margin-top:14px">
       <h2 style="margin-top:0">Рендерферма (Пульт, MiniMax H3)</h2>
@@ -76,6 +70,15 @@ export async function renderSettings() {
     ${admin ? `<div class="row" style="margin-top:14px"><div class="spacer"></div><button class="primary" id="save">Сохранить настройки</button></div>` : ""}`;
 
   if (admin) drawIntegrations();
+  const crLine = $("#cr-line");
+  const showCredits = async (refresh) => {
+    crLine.textContent = "Кредиты Magnific: проверяю…";
+    const c = await api(`/api/magnific/credits${refresh ? "?refresh=true" : ""}`, { quiet: true }).catch(() => null);
+    crLine.textContent = !c ? "Кредиты Magnific: не удалось проверить"
+      : c.ok ? `Кредиты Magnific: осталось ${Math.round(c.available).toLocaleString("ru-RU")}${c.total ? ` из ${Math.round(c.total).toLocaleString("ru-RU")}` : ""}`
+        : `Кредиты Magnific: ${c.message}`;
+  };
+  if (crLine) { showCredits(false); $("#cr-check").onclick = () => showCredits(true); }
   if (admin) {
     $("#save").onclick = async () => {
       const values = Object.fromEntries($$("[data-k]").map((i) => [i.dataset.k, i.value]));
@@ -103,16 +106,16 @@ const farmSeen = (s) => s.farmhub_seen == null ? `<b>Пульт ещё не об
   : `<b>Пульт молчит ${Math.round(s.farmhub_seen / 60)} мин:</b> ферма выключена или нет связи, шоты подождут.`;
 const envMark = (s, k) => (s.farmhub_env?.[k] ? `<span class="badge ok">задано на сервере</span>` : "");
 
-const KINDS = [["magnific", "Magnific"], ["veo", "Veo 3.1"], ["kling", "Kling 3 Omni"], ["seedance25", "Seedance 2.5"], ["seedance", "Seedance 2.0"],
-  ["seedance_fast", "Seedance 2.0 Fast"], ["hailuo", "Hailuo 3"], ["hailuo_max", "Hailuo 3 Max"], ["renderfarm", "Рендерферма (H3)"],
-  ["wan", "WAN 2.7"], ["runway", "Runway Gen-4.5"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
+const KINDS = [["magnific", "Magnific"], ["gemini_omni", "Gemini Omni 1.1"], ["renderfarm", "Рендерферма (H3)"], ["elevenlabs", "ElevenLabs (озвучка)"], ["other", "Другая"]];
 
 async function drawIntegrations() {
   const box = $("#integrations");
   const list = await api("/api/integrations");
-  const opts = (sel) => KINDS.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${n}</option>`).join("");
+  // старые нейросети (Veo, Kling…) из выбора убраны, но уже сохранённые ключи не теряем
+  const opts = (sel) => (KINDS.some(([k]) => k === sel) ? KINDS : [...KINDS, [sel, engineName(sel)]])
+    .map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
   box.innerHTML = `<h2 style="margin-top:0">Нейросети и API-ключи</h2>
-    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео генерируется через Magnific (ключ выше) или на рендер-ферме (её секрет вписан в карточке «Рендерферма» выше); здесь же ключи других сервисов, например ElevenLabs.</p>
+    <p class="muted small">Добавьте нейросеть: дайте ей имя и приложите API-ключ. Ключи хранятся только у вас в data/studio.db. Видео и кадры генерируются через Magnific (ключ выше) или на рендер-ферме (её секрет вписан в карточке «Рендерферма» выше); здесь же ключи других сервисов, например ElevenLabs.</p>
     ${list.map((i) => `<div class="int-row" data-id="${i.id}">
       <input data-i="name" value="${esc(i.name)}" style="width:200px" placeholder="Имя">
       <select data-i="kind" style="width:auto">${opts(i.kind)}</select>

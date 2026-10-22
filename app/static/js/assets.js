@@ -64,6 +64,7 @@ export async function renderAsset(id) {
           || `<span class="muted">Нет фото — нейросеть нарисует по описанию.</span>`}</div>
         ${can.library() ? `<div class="dropzone" id="add-photos" style="margin-top:10px"></div>
           <div class="muted small" style="margin-top:4px">Добавляйте сколько угодно фото: ракурсы со всех сторон, крупно лицо, в полный рост${a.kind === "location" ? ", разные углы помещения" : ""}. Первое фото — главный референс для видеогенератора, звёздочка ★ делает главным другое.</div>` : ""}
+        ${statesHtml(a, active)}
         <label>Описание для промпта</label><div class="pre">${esc(active.description) || `<span class="muted">—</span>`}</div>
         ${a.kind === "character" ? `<label>Голос</label><div>${esc(active.voice) || `<span class="muted">—</span>`}</div>` : ""}
         ${active.notes ? `<label>Заметки</label><div class="pre">${esc(active.notes)}</div>` : ""}
@@ -75,7 +76,7 @@ export async function renderAsset(id) {
           <div class="card version ${v.id === a.active_version_id ? "active" : ""}">
             <div class="vthumb" style="${v.images[0] ? `background-image:url('${media(v.images[0])}')` : ""}"></div>
             <div><b>v${v.version_no} · ${esc(v.label)}</b> <code class="small">${esc(handle(a.name))}:${esc((v.label || "v" + v.version_no).replace(/\s+/g, "_"))}</code>
-              <div class="muted small">${fmtDateTime(v.created_at)} · фото: ${v.images.length}${v.parent_version_id ? ` · на основе v${(a.versions.find((x) => x.id === v.parent_version_id) || {}).version_no ?? "?"}` : ""}</div>
+              <div class="muted small">${fmtDateTime(v.created_at)} · фото: ${v.images.length}${v.states?.length ? ` · состояний: ${v.states.length}` : ""}${v.parent_version_id ? ` · на основе v${(a.versions.find((x) => x.id === v.parent_version_id) || {}).version_no ?? "?"}` : ""}</div>
               <div class="small">${esc(v.description.slice(0, 160))}${v.description.length > 160 ? "…" : ""}</div></div>
             <div class="col">
               ${v.id === a.active_version_id ? `<span class="badge ok">активная</span>` : can.library() ? `<button data-activate="${v.id}">Сделать активной</button>` : ""}
@@ -109,6 +110,7 @@ export async function renderAsset(id) {
     toast(`Добавлено фото: ${files.length}`);
     renderAsset(id);
   });
+  bindStates(a, active, () => renderAsset(id));
   $("#save-meta").onclick = async () => {
     const tag = $("#a-tag").value.trim().replace(/^@/, "").toLowerCase();
     if (!/^[a-z0-9_]{1,40}$/.test(tag)) return toast("Метка — только латиница, цифры и «_», без пробелов: например, altushka", true);
@@ -141,6 +143,92 @@ export async function renderAsset(id) {
     await api(`/api/assets/${id}/versions/${b.dataset.activate}/activate`, { json: {} });
     toast("Версия активирована. Она применится к сериям при следующем сохранении сценария."); renderAsset(id);
   }));
+}
+
+// ---------- состояния версии ----------
+// Версия = образ («Пижама», «Зима»). Состояние = в каком виде этот образ бывает по сценарию («проснулась», «плачет», «ночью»).
+// У каждого состояния свои картинки с названиями. Нет состояний — у версии одно состояние: её фото. Когда готовятся кадры
+// для Gemini Omni, в карточке шота выбирают версию героя, а в блоке кадров — состояние.
+
+function statesHtml(a, v) {
+  const lib = can.library();
+  const states = v.states || [];
+  return `<h3 style="margin:16px 0 4px">Состояния версии «${esc(v.label)}»</h3>
+    <p class="muted small" style="margin:0 0 6px">Состояние — в каком виде ${a.kind === "location" ? "локация" : "персонаж"} бывает в сценарии: ${a.kind === "location" ? "«днём», «ночью», «после ремонта»" : "«проснулась», «плачет», «в халате»"}.
+      Если состояний нет, у версии одно состояние: фото выше. Если есть, при подготовке кадров для Gemini Omni можно выбрать нужное.</p>
+    <div class="states" id="states">${states.map((st) => `<div class="state-card" data-state="${st.id}">
+      <div class="row"><input data-sname value="${esc(st.name)}" ${lib ? "" : "disabled"} style="max-width:260px" title="Название состояния">
+        <span class="muted small">картинок: ${st.images.length}</span><div class="spacer"></div>
+        ${lib ? `<button class="ghost small danger" data-sdel>Удалить состояние</button>` : ""}</div>
+      <div class="state-imgs">${st.images.map((i) => `<figure class="state-img" data-path="${esc(i.path)}">
+        <a href="${media(i.path)}" target="_blank"><img src="${media(i.path)}"></a>
+        <input data-iname value="${esc(i.name)}" placeholder="название" ${lib ? "" : "disabled"} title="Название картинки">
+        ${lib ? `<button class="ghost small rm" data-irm title="Убрать картинку">✕</button>` : ""}</figure>`).join("") || `<span class="muted small">Нет картинок</span>`}</div>
+      ${lib ? `<div class="dropzone small-drop" data-sdrop style="margin-top:8px"></div>` : ""}</div>`).join("") || `<div class="muted small">Состояний пока нет.</div>`}</div>
+    ${lib ? `<div class="state-card" style="margin-top:10px" id="state-new">
+      <b class="small">Новое состояние</b>
+      <div class="row" style="margin-top:6px"><input id="sn-name" placeholder="${a.kind === "location" ? "Ночью" : "Плачет"}" style="max-width:260px">
+        <button class="primary small" id="sn-add">Добавить состояние</button></div>
+      <div class="dropzone small-drop" id="sn-drop" style="margin-top:8px"></div><div class="img-new" id="sn-picked"></div></div>` : ""}`;
+}
+
+function bindStates(a, v, refresh) {
+  if (!can.library()) return;
+  const base = `/api/assets/${a.id}/versions/${v.id}/states`;
+  const stateOf = (el) => v.states.find((s) => s.id === +el.closest("[data-state]").dataset.state);
+  $$("[data-sname]").forEach((inp) => (inp.onchange = async () => {
+    const st = stateOf(inp);
+    if (!inp.value.trim()) { inp.value = st.name; return toast("Назовите состояние", true); }
+    await api(`${base}/${st.id}`, { method: "PUT", json: { name: inp.value } }).then(() => toast("Сохранено"), () => (inp.value = st.name));
+    refresh();
+  }));
+  $$("[data-sdel]").forEach((b) => (b.onclick = async () => {
+    const st = stateOf(b);
+    if (!confirm(`Удалить состояние «${st.name}» и его картинки (${st.images.length})?`)) return;
+    await api(`${base}/${st.id}`, { method: "DELETE" });
+    refresh();
+  }));
+  $$("[data-iname]").forEach((inp) => (inp.onchange = async () => {
+    const st = stateOf(inp);
+    const path = inp.closest("[data-path]").dataset.path;
+    await api(`${base}/${st.id}`, { method: "PUT", json: { images: st.images.map((i) => (i.path === path ? { ...i, name: inp.value } : i)) } });
+    toast("Сохранено");
+    refresh();
+  }));
+  $$("[data-irm]").forEach((b) => (b.onclick = async () => {
+    const st = stateOf(b);
+    const path = b.closest("[data-path]").dataset.path;
+    if (!confirm("Убрать эту картинку из состояния?")) return;
+    await api(`${base}/${st.id}`, { method: "PUT", json: { images: st.images.filter((i) => i.path !== path) } });
+    refresh();
+  }));
+  $$("[data-sdrop]").forEach((z) => dropzone(z, async (files) => {
+    if (!files.length) return;
+    const st = stateOf(z);
+    const fd = new FormData();
+    files.forEach((f) => fd.append("images", f));
+    toast(`Загружаю картинки: ${files.length}…`);
+    await api(`${base}/${st.id}/images`, { method: "POST", body: fd });
+    refresh();
+  }));
+  // новое состояние: название и картинки (названия картинок берутся из имён файлов, потом их можно поменять)
+  const picked = [];
+  const drawPicked = () => {
+    $("#sn-picked").innerHTML = picked.map((f, i) => `<figure><img src="${URL.createObjectURL(f)}"><button class="ghost small" data-sn-un="${i}" title="Убрать">✕</button></figure>`).join("");
+    $$("[data-sn-un]").forEach((b) => (b.onclick = () => { picked.splice(+b.dataset.snUn, 1); drawPicked(); }));
+  };
+  dropzone($("#sn-drop"), (files) => { picked.push(...files); drawPicked(); });
+  $("#sn-add").onclick = async () => {
+    const name = $("#sn-name").value.trim();
+    if (!name) return toast("Назовите состояние: например, «плачет» или «ночью»", true);
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("names", JSON.stringify(picked.map((f) => f.name.replace(/\.\w+$/, ""))));
+    picked.forEach((f) => fd.append("images", f));
+    await api(base, { method: "POST", body: fd });
+    toast(`Состояние «${name}» добавлено`);
+    refresh();
+  };
 }
 
 function versionDialog({ kind, asset, base }) {

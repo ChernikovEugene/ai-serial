@@ -182,7 +182,7 @@ def start(shot: dict, refs: list[dict], settings: dict, user_id: int | None, rea
 
 def preview(shot: dict, refs: list[dict], settings: dict) -> dict:
     """Readable request (images as file names, not base64): for Magnific the endpoint and body, for Google the Veo body."""
-    engine = shot.get("engine") or "veo"
+    engine = shot.get("engine") or models.DEFAULT_ENGINE
     if engine == "renderfarm":  # сюда шот фермы попадает только в режиме «Заглушка»: настоящий запрос см. farm.preview
         return {"model": models.spec(engine)["name"], "note": "Заглушка: шот ферме не отправлялся"}
     if engine == "veo" and models.veo_route(settings) == "google":

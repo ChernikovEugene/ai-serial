@@ -826,3 +826,57 @@ textarea.need { border-color: var(--warn); }
 .dlg-voice audio { height: 32px; max-width: 100%; }
 .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); animation: rec-pulse 1s ease-in-out infinite; }
 @keyframes rec-pulse { 50% { opacity: .25; } }
+
+/* Gemini Omni: кадры для видео (Nano Banana 2.1) */
+.frames-box { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.frames-box.ready { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 7%, transparent); box-shadow: 0 0 0 2px var(--ok) inset; }
+.frames-head { gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.frames-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.frame { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; background: var(--panel); }
+.frame.ready { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok) inset; background: color-mix(in srgb, var(--ok) 9%, var(--panel)); }
+.frame.bad { border-color: var(--err); }
+.frame-main { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; margin: 8px 0; }
+.frame-img { aspect-ratio: 9 / 16; border-radius: 8px; overflow: hidden; background: var(--panel2); border: 1px solid var(--line); }
+.frame-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.frame-ph { height: 100%; display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+.spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent2); animation: frame-spin 1s linear infinite; }
+@keyframes frame-spin { to { transform: rotate(360deg); } }
+.frame-form textarea { width: 100%; }
+.frefs { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 6px; }
+.fref { margin: 0; position: relative; width: 64px; text-align: center; }
+.fref img { width: 64px; height: 84px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.fref b { display: block; font-size: 10px; margin-top: 2px; }
+.fref figcaption { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fref button { position: absolute; top: 2px; right: 2px; background: #000a; color: #fff; padding: 0 5px; line-height: 1.3; }
+.fgroup { margin: 8px 0; }
+.fgroup-head { gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+.fgroup-head select { width: auto; padding: 2px 22px 2px 8px; font-size: 12px; }
+.fthumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+.fthumb { position: relative; width: 74px; padding: 0; border: 2px solid var(--line); border-radius: 8px; background: var(--panel2); overflow: hidden; text-align: center; }
+.fthumb img { width: 100%; height: 96px; object-fit: cover; display: block; }
+.fthumb span { display: block; font-size: 10px; padding: 2px 3px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fthumb i { position: absolute; top: 3px; right: 3px; font-style: normal; background: var(--ok); color: #04221e; border-radius: 50%; width: 18px; height: 18px; font-size: 12px; line-height: 18px; font-weight: 700; }
+.fthumb.on { border-color: var(--ok); }
+.small-drop { flex: 1; padding: 8px; font-size: 12px; }
+.frame pre { white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; margin: 6px 0 0; }
+@media (max-width: 900px) { .frames-grid { grid-template-columns: 1fr; } }
+
+/* состояния версии в «Библиотеке» */
+.states { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.state-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
+.state-imgs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.state-img { margin: 0; width: 96px; position: relative; }
+.state-img img { width: 96px; height: 128px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.state-img input { width: 100%; font-size: 11px; padding: 3px 5px; margin-top: 3px; }
+.state-img .rm { position: absolute; top: 3px; right: 3px; background: #000a; color: #fff; padding: 0 5px; line-height: 1.3; }
+
+/* остаток кредитов Magnific в меню */
+.credits { display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); color: var(--text); cursor: pointer; }
+.credits b { font-size: 14px; }
+.credits.low { border-color: var(--warn); }
+.credits.low b { color: var(--warn); }
+.credits.off { color: var(--muted); }
+.credits .cbar { height: 4px; border-radius: 2px; background: var(--line); margin-top: 5px; overflow: hidden; }
+.credits .cbar span { display: block; height: 100%; background: var(--ok); }
+.credits.low .cbar span { background: var(--warn); }
+@media (max-width: 800px) { .credits { display: none; } }

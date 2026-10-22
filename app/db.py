@@ -52,6 +52,16 @@ TABLES = {
         parent_version_id INTEGER,
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT ''""",
+    # Состояния версии персонажа или локации («в халате», «плачет», «ночью»): у каждого свои картинки с названиями.
+    # Если у версии состояний нет, считается, что оно одно: картинки самой версии.
+    "version_states": """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version_id INTEGER NOT NULL REFERENCES asset_versions(id) ON DELETE CASCADE,
+        name TEXT NOT NULL DEFAULT '',
+        position INTEGER NOT NULL DEFAULT 0,
+        images TEXT NOT NULL DEFAULT '[]',
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT ''""",
     "episodes": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         number INTEGER,
@@ -126,6 +136,8 @@ TABLES = {
         farm_shot_size TEXT NOT NULL DEFAULT '',
         farm_quality TEXT NOT NULL DEFAULT '',
         farm_len TEXT NOT NULL DEFAULT '',
+        frame_start TEXT NOT NULL DEFAULT '{}',
+        frame_end TEXT NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL DEFAULT ''""",
     "integrations": """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,13 +248,15 @@ TABLES = {
         value TEXT NOT NULL""",
 }
 
-JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members", "seen_by"}
+JSON_FIELDS = {"aliases", "images", "dialogue", "characters", "warnings", "parse_notes", "members", "seen_by", "frame_start", "frame_end"}
 
 DEFAULT_SETTINGS = {
     "veo_provider": "stub",          # устарело: было stub | gemini, теперь gen_mode + veo_route
     "gen_mode": "",                  # stub | live (пусто: ещё не перенесено из veo_provider, см. init)
     "veo_route": "magnific",         # Veo через Magnific или напрямую через Google (Gemini API)
     "magnific_api_key": "",
+    "omni_path": "",                 # адрес Gemini Omni в API Magnific (пусто: стандартный, см. models.OMNI_PATH)
+    "magnific_credits_path": "",     # адрес, откуда читать остаток кредитов Magnific (пусто: студия пробует известные)
     "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",

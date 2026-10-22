@@ -24,13 +24,13 @@ ENGINE_DURATIONS = {k: m["durations"] for k, m in models.MODELS.items()}
 
 
 def engine_durations(engine: str | None) -> tuple:
-    return ENGINE_DURATIONS.get(engine or "veo", ENGINE_DURATIONS["other"])
+    return ENGINE_DURATIONS.get(engine or models.DEFAULT_ENGINE, ENGINE_DURATIONS["other"])
 
 
 def engine_limit(engine: str | None, settings: dict) -> int:
     """Самый длинный клип нейросети: по нему считается «не влезает». Для Veo ещё ограничен настройкой «лимит шота»."""
     top = max(engine_durations(engine))
-    if (engine or "veo") == "veo":
+    if (engine or models.DEFAULT_ENGINE) == "veo":
         top = min(top, int(settings.get("max_shot_seconds") or top))
     return top
 
@@ -680,7 +680,7 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
     метками из библиотеки (@altushka), ограничений нейросети по числу и видам референсов нет — человек сам загружает
     файлы с такими именами, и сервис связывает их с текстом по имени."""
     lang = settings.get("dialogue_language") or "Russian"
-    engine = shot.get("engine") or "veo"
+    engine = shot.get("engine") or models.DEFAULT_ENGINE
     m = models.spec(engine)
     if manual:
         m = {**m, "ref_token": "at", "max_refs": 99, "ref_kinds": ("composition", "character", "location")}
@@ -710,6 +710,8 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
         refs = refs[:1]
     elif manual:
         pass
+    elif refs and m.get("frames"):
+        refs = []  # Gemini Omni берёт героев и локацию из стартового и финального кадров, отдельных референсов у него нет
     elif refs and not models.accepts_refs(engine, settings):
         if engine == "veo":
             warns.append("Референс-изображения поддерживает только Veo 3.1 — сейчас они не отправятся")
@@ -756,7 +758,10 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
         parts.append(_sent(settings["tt_prompt"]))
     parts.append(f"Vertical {settings.get('aspect_ratio', '9:16')} video, {shot['duration']} seconds, one continuous shot.")
 
-    if comp and mode == "first_frame":
+    if m.get("frames"):
+        parts.append("The video starts exactly from the provided start frame and ends on the provided end frame: keep the same "
+                     "characters, location, framing and lighting throughout, and animate the move from one frame to the other.")
+    elif comp and mode == "first_frame":
         parts.append("The video starts exactly from the provided first-frame image; keep its composition, framing and camera angle.")
     elif comp and comp_n:
         parts.append(f"Composition: match the framing, camera angle, blocking and layout of {tok(comp_n)}.")
@@ -821,7 +826,7 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
 
 def forced_duration(refs: list[dict], shot: dict, settings: dict) -> int | None:
     """Veo 3.1 only renders 8 s clips when reference images are attached (build_prompt already dropped them where unsupported)."""
-    if (shot.get("engine") or "veo") != "veo":
+    if (shot.get("engine") or models.DEFAULT_ENGINE) != "veo":
         return None
     if refs and (shot.get("composition_mode") != "first_frame" or not shot.get("composition_image")):
         return 8

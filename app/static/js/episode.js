@@ -3,6 +3,7 @@ import { deleteEpisode } from "./trash.js";
 import {
   POST_NETS, $, $$, api, assetColor, can, closeModal, engineName, esc, fitMeter, fmtDate, fmtDateTime, fmtDur, goBack, loadAssets, media, modal, replaceHash, state, statusSelect, STATUS_COLORS, toast, view,
 } from "./core.js";
+import { bindFrames, framesBusy, framesHtml, framesSig } from "./frames.js";
 import { attachMentions } from "./mention.js";
 import { attachHighlight } from "./highlight.js";
 import { drawReview, reviewPlaying, stopReview } from "./review.js";
@@ -96,7 +97,7 @@ async function redrawKeepingEdits(redraw) {
   window.scrollTo(0, y);
 }
 
-function signature(ep) { return ep.shots.map((s) => `${s.id}:${s.takes.map((t) => t.status).join(",")}:${s.selected_take_id}`).join("|") + ep.status; }
+function signature(ep) { return ep.shots.map((s) => `${s.id}:${s.takes.map((t) => t.status).join(",")}:${s.selected_take_id}:${framesSig(s)}`).join("|") + ep.status; }
 
 function patchFarm(s) {
   const prog = $(`#farm-prog-${s.id}`);
@@ -114,7 +115,7 @@ function patchFarm(s) {
 
 function schedulePoll() {
   clearTimeout(E.poll); // только таймер опроса: просмотр серии не трогаем, иначе он останавливался после каждой перерисовки
-  const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status)) || E.sig !== signature(E.ep); // второе: перерисовка отложена, пока человек печатает
+  const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status) || framesBusy(s)) || E.sig !== signature(E.ep); // второе: перерисовка отложена, пока человек печатает
   if (!busy) return;
   E.poll = setTimeout(async () => {
     if (!location.hash.startsWith(`#/episodes/${E.id}`)) return;
@@ -750,6 +751,7 @@ function shotHtml(s) {
   const roW = canWrite() ? "" : "disabled"; // content: the writer's part
   const roG = can.gen() ? "" : "disabled";  // generation: the editor's part
   const sel = s.selected_take;
+  const omni = !!engineInfo(s.engine).frames; // Gemini Omni: на вход старт- и финальный кадры (блок «Кадры для Gemini Omni»), композиция и референсы к видео не нужны
   return `
   <div class="card shot ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
     <div class="side">
@@ -758,7 +760,7 @@ function shotHtml(s) {
         <div class="small ${s.over_limit ? "warn-t" : "muted"}">нужно ~${s.est_seconds} с${s.speech_seconds ? ` · речь ${s.speech_seconds} с · ${s.words} сл.` : ""}</div></div>
       ${s.missing.length ? `<ul class="missing">${s.missing.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
       <ul class="checks ${s.ready ? "all" : ""}" title="Когда все пункты отмечены, рамка шота становится зелёной">${s.checks.map((c) => `<li class="${c.ok ? "ok" : ""}">${c.ok ? "✓" : "○"} ${esc(c.label)}</li>`).join("")}</ul>
-      ${can.gen() ? `<div><label>Нейросеть</label><select data-f="engine">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
+      ${can.gen() ? `<div><label>Нейросеть</label><select data-f="engine">${state.meta.engines.filter((e) => !e.legacy).map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
         ${engineHelp(s)}</div>` : ""}
       <div><label>Длина клипа</label><select data-f="duration" ${roG} ${s.forced_8 ? "disabled" : ""}>${engineInfo(s.engine).durations.map((d) => `<option ${d === s.duration ? "selected" : ""} value="${d}">${d} с</option>`).join("")}</select>
         <div class="muted small">${s.forced_8 ? "8 с: с референсами Veo 3.1 делает только 8 с" : esc(engineInfo(s.engine).duration_note)}</div></div>
@@ -824,7 +826,7 @@ function shotHtml(s) {
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     </div>
     ${can.gen() ? `<div>
-      <label style="margin-top:0">Референс композиции</label>
+      ${omni ? "" : `<label style="margin-top:0">Референс композиции</label>
       <div class="comp ${s.composition_image ? "has" : ""}" data-drop="${s.id}">
         ${s.composition_image
           ? `<img src="${media(s.composition_image)}"><div class="comp-tools">
@@ -833,14 +835,15 @@ function shotHtml(s) {
               <button class="ghost small danger" data-act="rmcomp">Убрать</button></div>`
           : `<label class="comp-empty">Перетащите картинку или нажмите — раскадровка, скетч, кадр-образец<input type="file" accept="image/png,image/jpeg,image/webp" data-comp hidden></label>`}
       </div>
-      <input data-f="composition_note" value="${esc(s.composition_note)}" placeholder="Пояснение к композиции (по желанию): героиня слева, окно справа…" ${roG} style="margin-top:6px">
+      <input data-f="composition_note" value="${esc(s.composition_note)}" placeholder="Пояснение к композиции (по желанию): героиня слева, окно справа…" ${roG} style="margin-top:6px">`}
       ${s.engine === "renderfarm" ? farmPanel(s) : `      <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
         <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
       <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>`}
-      <label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
+      ${omni ? `<div class="muted small" style="margin-top:8px">${esc(engineInfo(s.engine).refs_note)}</div>` : `<label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
       <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${refTag(s, r, i)} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
-      ${manualBlock(s)}
+      ${manualBlock(s)}`}
     </div>` : ""}
+    ${omni && can.gen() ? framesHtml(s) : ""}
   </div>`;
 }
 
@@ -1064,6 +1067,18 @@ function bindShot(s) {
   $$(".dlg-line input, .dlg-line select", el).forEach((inp) => (inp.onchange = () => save({ dialogue: readLines(+inp.closest(".dlg-line").dataset.line) })));
   $$("[data-rmline]", el).forEach((b) => (b.onclick = () => { dropVoiceDrafts(s.id); save({ dialogue: readLines().filter((_, i) => i !== +b.dataset.rmline) }); }));
   bindVoice(s, el);
+  if (engineInfo(s.engine).frames && can.gen()) {
+    bindFrames(s, {
+      get: (id) => E.ep.shots.find((x) => x.id === id),
+      update: (shot) => { // ответ сервера вносим в страницу, перерисовывается только блок кадров
+        const i = E.ep.shots.findIndex((x) => x.id === shot.id);
+        if (i >= 0) E.ep.shots[i] = { ...E.ep.shots[i], ...shot };
+        E.sig = signature(E.ep);
+        return E.ep.shots[i] || shot;
+      },
+      full: (shot) => replaceShot(shot),
+    });
+  }
 
   const comp = $("[data-comp]", el);
   if (comp) comp.onchange = () => comp.files[0] && uploadComposition(s, comp.files[0]);

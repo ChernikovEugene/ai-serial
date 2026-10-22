@@ -363,7 +363,7 @@ function drawShotTools() {
       <summary><b>${s.takes.length ? "Перегенерировать шот" : "Сгенерировать шот"}</b>
         <span class="muted small">— можно сменить нейросеть и улучшить промпт перед запуском; новый дубль не удаляет старые</span></summary>
       <label>Нейросеть для нового дубля <span class="muted small">(выбор запоминается в шоте: от неё зависят промпт и звук)</span></label>
-      <select id="r-engine" style="width:auto">${state.meta.engines.map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
+      <select id="r-engine" style="width:auto">${state.meta.engines.filter((e) => !e.legacy || e.key === s.engine).map((e) => `<option value="${e.key}" ${e.key === s.engine ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
       <div class="muted small" style="margin-top:4px">${soundNote(s)}</div>
       ${veo ? `<label>Длина клипа, секунд <span class="muted small">(введите вручную; сохранится в шот)</span></label>
       <div class="row"><input id="r-dur" type="number" inputmode="numeric" min="${Math.min(...engineOf(s).durations)}" max="${Math.max(...engineOf(s).durations)}"
