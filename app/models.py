@@ -410,16 +410,6 @@ def build(shot: dict, refs: list[dict], settings: dict, inline: bool) -> dict:
 
 # ---------- отправка ----------
 
-CREDIT_HEADERS: dict = {}  # заголовки ответов Magnific про кредиты (если они там есть): {"имя": значение, "_at": время}
-
-
-def _note_headers(headers) -> None:
-    found = {k.lower(): v for k, v in headers.items() if any(w in k.lower() for w in ("credit", "balance", "remaining"))}
-    if found:
-        CREDIT_HEADERS.clear()
-        CREDIT_HEADERS.update(found, _at=time.time())
-
-
 def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=False):
     headers = {"Content-Type": "application/json"}
     if key:
@@ -429,8 +419,6 @@ def _http(method: str, url: str, key: str | None, body: dict | None = None, raw=
     try:
         with urllib.request.urlopen(req, timeout=180) as r:
             data = r.read()
-            if key:
-                _note_headers(r.headers)
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Magnific: HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from None
     return data if raw else json.loads(data)

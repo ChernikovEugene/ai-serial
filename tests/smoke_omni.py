@@ -32,7 +32,6 @@ DATA = Path(tempfile.gettempdir())   # папка данных проверяе�
 
 class Fake(http.server.BaseHTTPRequestHandler):
     log: list = []          # (метод, путь, тело)
-    credits_ok = True
     fail_nano = False
 
     def log_message(self, *a):
@@ -66,8 +65,6 @@ class Fake(http.server.BaseHTTPRequestHandler):
             return self._send(200, PNG, "image/png")
         if self.path == "/files/clip.mp4":
             return self._send(200, MP4, "video/mp4")
-        if self.path == "/v1/ai/credits" and Fake.credits_ok:
-            return self._send(200, {"data": {"credits": {"available": 1234, "totalPlan": 5000, "spent": 3766}}})
         self._send(404, {"message": "not found"})
 
 
@@ -304,20 +301,6 @@ def run():
     Fake.fail_nano = False
     st, r = admin.call("DELETE", f"/api/shots/{s3['id']}/frames/start")
     check("frame can be reset", st == 200 and r["frames"]["start"]["status"] == "" and r["frames"]["start"]["prompt"] == "x y z", r["frames"]["start"])
-
-    # --- кредиты ---
-    st, c = admin.call("GET", "/api/magnific/credits?refresh=true")
-    check("credits are read from Magnific", st == 200 and c["ok"] and c["available"] == 1234 and c["total"] == 5000 and c["spent"] == 3766, c)
-    st, c = ed.call("GET", "/api/magnific/credits")
-    check("editor can see credits", st == 200 and c["ok"], (st, c))
-    Fake.credits_ok = False
-    admin.call("PUT", "/api/settings", {"magnific_credits_path": "/v1/nowhere"})
-    st, c = admin.call("GET", "/api/magnific/credits?refresh=true")
-    check("credits: honest message when Magnific gives no balance", st == 200 and not c["ok"] and c["message"], c)
-    Fake.credits_ok = True
-    admin.call("PUT", "/api/settings", {"magnific_credits_path": "/v1/ai/credits"})
-    st, c = admin.call("GET", "/api/magnific/credits?refresh=true")
-    check("credits: address from settings is used", c["ok"] and c["available"] == 1234 and c["path"] == "/v1/ai/credits", c)
 
     # --- удаление версии убирает картинки состояний ---
     st, a = admin.call("POST", f"/api/assets/{maria['id']}/versions", form={"label": "Зима", "images": ("w.png", PNG)})

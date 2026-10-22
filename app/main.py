@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, breakdown, credits, db, exporter, farm, feedback, frames, models, schedule, veo
+from . import auth, breakdown, db, exporter, farm, feedback, frames, models, schedule, veo
 from .github import GitHubError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -2951,12 +2951,6 @@ SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_s
 PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
 
 
-@app.get("/api/magnific/credits", dependencies=[Depends(auth.need("generation"))])
-def magnific_credits(refresh: bool = False):
-    """Остаток кредитов на аккаунте Magnific, по ключу которого работает студия (см. app/credits.py)."""
-    return credits.get(db.get_settings(), force=refresh)
-
-
 @app.get("/api/settings")
 def read_settings():
     s = db.get_settings()
@@ -2979,8 +2973,6 @@ def write_settings(values: dict):
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)", (k, str(v)))
     if PROMPT_SETTINGS & values.keys():
         refresh_all_prompts()
-    if {"magnific_api_key", "magnific_credits_path"} & values.keys():
-        credits._cache["value"] = None  # остаток кредитов перечитается с новым ключом или адресом
     return read_settings()
 
 

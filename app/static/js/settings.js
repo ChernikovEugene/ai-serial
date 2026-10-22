@@ -36,14 +36,12 @@ export async function renderSettings() {
           <option value="stub" ${s.gen_mode === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
           <option value="live" ${s.gen_mode === "live" ? "selected" : ""}>Реальная генерация (платно, тратит кредиты)</option></select>
         ${field("magnific_api_key", "API-ключ Magnific (кабинет Magnific → API Keys; хранится только у вас в data/studio.db)", "input", `type="password" placeholder="FPSX…" autocomplete="off"`)}
-        <div class="row" style="margin-top:8px"><span id="cr-line" class="muted small">Кредиты Magnific: …</span><button class="ghost small" id="cr-check" type="button">Проверить остаток</button></div>
         ${field("public_base_url", "Публичный адрес студии (например, https://pari-altushka.ru), по желанию", "input", `placeholder="пусто: студия на ноутбуке"`)}
         <p class="muted small">Если указан, картинки кадров для Gemini Omni уходят в Magnific защищённой ссылкой на студию, а не файлом внутри запроса.</p>
         <details style="margin-top:8px"><summary class="muted small">Адреса в API Magnific (менять, только если Magnific их сменил)</summary>
           ${field("omni_path", "Адрес Gemini Omni 1.1", "input", `placeholder="/v1/ai/video/gemini-omni-1-1"`)}
-          ${field("magnific_credits_path", "Адрес остатка кредитов", "input", `placeholder="пусто: студия пробует известные адреса"`)}
-          <p class="muted small">В открытой документации Magnific пока нет страниц Gemini Omni и остатка кредитов, поэтому студия использует предполагаемые адреса.
-            Если генерация или остаток не работают, текст ответа Magnific виден в дубле или во всплывающей подсказке плашки кредитов: пришлите его, и адрес поправим.</p></details>
+          <p class="muted small">В открытой документации Magnific пока нет страницы Gemini Omni, поэтому студия использует предполагаемые адреса.
+            Если генерация не работает, текст ответа Magnific виден в дубле: пришлите его, и адрес поправим.</p></details>
         <div style="max-width:260px">${field("veo_parallel", "Одновременных генераций")}</div>
         <p class="muted small">Число одновременных генераций применяется после перезапуска приложения. Готовое видео и кадры скачиваются в студию сразу:
           ссылка Magnific на результат живёт недолго.</p>
@@ -70,15 +68,6 @@ export async function renderSettings() {
     ${admin ? `<div class="row" style="margin-top:14px"><div class="spacer"></div><button class="primary" id="save">Сохранить настройки</button></div>` : ""}`;
 
   if (admin) drawIntegrations();
-  const crLine = $("#cr-line");
-  const showCredits = async (refresh) => {
-    crLine.textContent = "Кредиты Magnific: проверяю…";
-    const c = await api(`/api/magnific/credits${refresh ? "?refresh=true" : ""}`, { quiet: true }).catch(() => null);
-    crLine.textContent = !c ? "Кредиты Magnific: не удалось проверить"
-      : c.ok ? `Кредиты Magnific: осталось ${Math.round(c.available).toLocaleString("ru-RU")}${c.total ? ` из ${Math.round(c.total).toLocaleString("ru-RU")}` : ""}`
-        : `Кредиты Magnific: ${c.message}`;
-  };
-  if (crLine) { showCredits(false); $("#cr-check").onclick = () => showCredits(true); }
   if (admin) {
     $("#save").onclick = async () => {
       const values = Object.fromEntries($$("[data-k]").map((i) => [i.dataset.k, i.value]));

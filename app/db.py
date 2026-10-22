@@ -257,7 +257,6 @@ DEFAULT_SETTINGS = {
     "veo_route": "magnific",         # Veo через Magnific или напрямую через Google (Gemini API)
     "magnific_api_key": "",
     "omni_path": "",                 # адрес Gemini Omni в API Magnific (пусто: стандартный, см. models.OMNI_PATH)
-    "magnific_credits_path": "",     # адрес, откуда читать остаток кредитов Magnific (пусто: студия пробует известные)
     "magnific_resolution": "720p",   # 480p / 720p / 1080p / 4k (у каждой модели свой набор, берётся ближайшее)
     "public_base_url": "",           # адрес студии в интернете: по нему Magnific забирает картинки, которые принимает только ссылкой
     "veo_api_key": "",
