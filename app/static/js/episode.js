@@ -761,7 +761,8 @@ function shotHtml(s) {
   const sel = s.selected_take;
   const omni = !!engineInfo(s.engine).frames; // Gemini Omni: на вход старт- и финальный кадры (блок «Кадры для Gemini Omni»), композиция и референсы к видео не нужны
   const promptBlock = `      <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
-        <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
+        <div class="spacer"></div><button class="primary small" data-act="copyprompt" title="Скопировать промпт в буфер обмена: вставьте его в генератор">📋 Копировать промпт</button>
+        <button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
       <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>`;
   return `
   <div class="card shot ${omni && can.gen() ? "omni" : ""} ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
@@ -1114,7 +1115,7 @@ function bindShot(s) {
     if (act === "addline") return save({ dialogue: [...readLines(), { speaker: s.characters[0]?.name || "", asset_id: s.characters[0]?.asset_id ?? null, voice: "direct", parenthetical: "", text: "" }] });
     if (act === "rebuild") return replaceShot(await api(`/api/shots/${s.id}/rebuild-prompt`, { json: {} }));
     if (act === "rmcomp") return replaceShot(await api(`/api/shots/${s.id}/composition`, { method: "DELETE" }));
-    if (act === "copyprompt") return copyText(s.prompt);
+    if (act === "copyprompt") return copyText($("[data-f=prompt]", el)?.value ?? s.prompt); // то, что сейчас в поле, с несохранёнными правками
     if (act === "copymanual") return copyText(s.prompt_manual);
     if (act === "cancel") return cancelTake(s);
   }));
