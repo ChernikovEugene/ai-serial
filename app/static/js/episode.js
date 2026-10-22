@@ -752,6 +752,9 @@ function shotHtml(s) {
   const roG = can.gen() ? "" : "disabled";  // generation: the editor's part
   const sel = s.selected_take;
   const omni = !!engineInfo(s.engine).frames; // Gemini Omni: на вход старт- и финальный кадры (блок «Кадры для Gemini Omni»), композиция и референсы к видео не нужны
+  const promptBlock = `      <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
+        <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
+      <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>`;
   return `
   <div class="card shot ${omni && can.gen() ? "omni" : ""} ${can.gen() ? "" : "shot-w"} ${s.missing.length ? "is-incomplete" : ""} ${s.ready ? "is-ready" : ""}" id="shot-${s.id}">
     <div class="side">
@@ -824,6 +827,7 @@ function shotHtml(s) {
       </fieldset>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${omni && can.gen() ? promptBlock : ""}
     </div>
     ${can.gen() ? `<div>
       ${omni ? "" : `<label style="margin-top:0">Референс композиции</label>
@@ -836,9 +840,7 @@ function shotHtml(s) {
           : `<label class="comp-empty">Перетащите картинку или нажмите — раскадровка, скетч, кадр-образец<input type="file" accept="image/png,image/jpeg,image/webp" data-comp hidden></label>`}
       </div>
       <input data-f="composition_note" value="${esc(s.composition_note)}" placeholder="Пояснение к композиции (по желанию): героиня слева, окно справа…" ${roG} style="margin-top:6px">`}
-      ${s.engine === "renderfarm" ? farmPanel(s) : `      <div class="row" style="margin-top:12px"><label style="margin:0">Промпт для «${esc(engineName(s.engine))}» ${s.prompt_locked ? `<span class="badge warn">изменён вручную</span>` : `<span class="badge">авто</span>`}</label>
-        <div class="spacer"></div><button class="ghost small" data-act="rebuild" title="Собрать заново из полей шота">↻ пересобрать</button></div>
-      <textarea class="prompt" data-f="prompt" rows="9" style="margin-top:6px" ${roG}>${esc(s.prompt)}</textarea>`}
+      ${s.engine === "renderfarm" ? farmPanel(s) : omni ? "" : promptBlock}
       ${omni ? `<div class="muted small" style="margin-top:8px">${esc(engineInfo(s.engine).refs_note)}</div>` : `<label>Картинки-референсы</label><div class="muted small">${esc(engineInfo(s.engine).refs_note)}</div>
       <div class="refs">${s.references.map((r, i) => `<figure><img src="${media(r.path)}"><figcaption>${refTag(s, r, i)} · ${r.kind === "composition" ? "композиция" : esc(r.name)}</figcaption></figure>`).join("") || `<span class="muted small">нет изображений</span>`}</div>
       ${manualBlock(s)}`}

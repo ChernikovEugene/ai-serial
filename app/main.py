@@ -380,6 +380,7 @@ def unready_items(s: dict) -> list[str]:
 
 
 def shot_out(s: dict, ctx: Ctx, takes: list[dict]) -> dict:
+    s["est_seconds"], s["speech_seconds"] = breakdown.estimate(s["action"], s["dialogue"], ctx.wps)  # в базе значение прошлого сохранения
     if models.norm_engine(s.get("engine")) != s.get("engine"):  # шот со старой нейросетью открывается как «Gemini Omni 1.1»
         s["engine"] = models.norm_engine(s.get("engine"))
         fixed = refresh_shot(dict(s), ctx)   # длина и промпт под новую нейросеть (в базу попадут при следующем сохранении шота)
