@@ -898,6 +898,22 @@ st, r6 = editor.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "
 check("insert: editor can add to an approved episode", st == 200 and len(r6["shots"]) == len(r5["shots"]) + 1, (st, r6 if st != 200 else ""))
 st, r7 = admin.call("POST", f"/api/episodes/{iid}/shots", {"after": old["1"], "text": "Продюсер добавил"})
 check("insert: producer can add after approval", st == 200 and len(r7["shots"]) == len(r6["shots"]) + 1, (st, r7 if st != 200 else ""))
+
+# --- удаление шота: блок вырезается из сценария, остальные шоты не трогаем ---
+st, ed = writer.call("POST", "/api/episodes", {"title": "Удаление", "script": ins_script})
+did = ed["id"]; dold = {s_["label"]: s_["id"] for s_ in ed["shots"]}
+st, rd = writer.call("DELETE", f"/api/shots/{dold['2']}")
+check("delete shot: middle shot removed, others keep ids", st == 200 and {x["label"]: x["id"] for x in rd["shots"]} == {"1": dold["1"], "3": dold["3"]}, (st, rd))
+check("delete shot: block is gone from the script, scene heading stays", st == 200 and "Костя входит" not in rd["script"] and "ИНТ. УЛИЦА" in rd["script"] and "Шот 3" in rd["script"], rd.get("script"))
+check("delete shot: indexes contiguous", st == 200 and [x["idx"] for x in rd["shots"]] == [1, 2])
+st, _ = writer.call("DELETE", f"/api/shots/{dold['2']}")
+check("delete shot: already deleted -> 404", st == 404, st)
+st, _ = viewer.call("DELETE", f"/api/shots/{dold['1']}")
+check("delete shot: viewer cannot delete", st in (403, 404), st)
+st, rd = writer.call("DELETE", f"/api/shots/{dold['3']}")
+check("delete shot: last marked shot of the script goes too", st == 200 and [x["label"] for x in rd["shots"]] == ["1"] and "Шот 3" not in rd["script"], (st, rd))
+st, _ = writer.call("DELETE", f"/api/shots/{dold['1']}")
+check("delete shot: the only shot cannot be deleted", st == 400, st)
 check("insert: the same place again takes the next free letter, the shot stays where it was added", [x["label"] for x in r7["shots"]][:5] == ["1", "1в", "1б", "1а", "2"], [x["label"] for x in r7["shots"]][:5])
 
 # --- запись голоса к реплике: хранение, замена, удаление, права ---

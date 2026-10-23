@@ -687,6 +687,15 @@ function refreshGap(sid) {
   bindGap(sid);
 }
 
+async function removeShot(s) {
+  if (!confirm(`Удалить шот ${s.label}? Его блок исчезнет из сценария, пропадут дубли и кадры шота. Остальные шоты не изменятся. Это нельзя отменить.`)) return;
+  const res = await api(`/api/shots/${s.id}`, { method: "DELETE" });
+  E.ep = res; E.sig = signature(res);
+  drawHeader();
+  drawShots($("#ep-tab"));
+  toast(`Шот ${s.label} удалён`);
+}
+
 function bindGap(sid) {
   const box = $(`#gap-${sid}`);
   if (!box) return;
@@ -785,6 +794,7 @@ function shotHtml(s) {
       ${can.gen() ? `${engineInfo(s.engine).api ? "" : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>`}
            <button data-act="copyprompt">Скопировать промпт</button>
            <label class="btn primary up-label">Загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>` : ""}
+      ${canWrite() ? `<button class="ghost small danger" data-act="rmshot" title="Убрать шот из серии вместе с его дублями">🗑 Удалить шот</button>` : ""}
     </div>
     <div class="shot-main">
       <section class="sec sec-scene"><h4 class="sec-h"><span class="sec-i">📍</span>Сцена <span class="sec-sum">где и кто в кадре</span></h4>
@@ -1118,6 +1128,7 @@ function bindShot(s) {
     if (act === "copyprompt") return copyText($("[data-f=prompt]", el)?.value ?? s.prompt); // то, что сейчас в поле, с несохранёнными правками
     if (act === "copymanual") return copyText(s.prompt_manual);
     if (act === "cancel") return cancelTake(s);
+    if (act === "rmshot") return removeShot(s);
   }));
   const fr = $("[data-farmreq]", el);
   if (fr) fr.onclick = async () => {

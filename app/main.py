@@ -1917,15 +1917,18 @@ def carry_voice(old: list[dict], new: list[dict]) -> list[dict]:
     return out
 
 
-def apply_breakdown(eid: int, only_new: bool = False):
+def apply_breakdown(eid: int, only_new: bool = False, drop_id: int | None = None):
     """Re-parse the script and merge into existing shots by shot label, keeping composition refs,
     takes, comments and manually locked prompts. only_new: уже существующие шоты не трогаем (только их порядок),
-    создаём лишь те, которых ещё нет: так добавление шота не сбрасывает персонажей и локации, выбранные в карточках."""
+    создаём лишь те, которых ещё нет: так добавление шота не сбрасывает персонажей и локации, выбранные в карточках.
+    drop_id: шот, блок которого вырезан из сценария: он удаляется, остальные шоты не трогаются."""
     ep = load_episode_row(eid)
     ctx = Ctx()
     new, notes = breakdown.parse_script(ep["script"], ctx.assets, ctx.settings, episode_cast(eid))
     with db.connect() as c:
         old = db.rows(c.execute("SELECT * FROM shots WHERE episode_id=? ORDER BY idx", (eid,)))
+        dropped = [o for o in old if o["id"] == drop_id]
+        old = [o for o in old if o["id"] != drop_id]
         pool = {}
         for o in old:
             pool.setdefault(o["label"] or str(o["idx"]), []).append(o)
@@ -1958,7 +1961,7 @@ def apply_breakdown(eid: int, only_new: bool = False):
             refresh_shot(s, ctx)
             save_shot(c, s)
             keep_ids.add(s["id"])
-        for o in old:
+        for o in old + dropped:
             if o["id"] not in keep_ids:
                 c.execute("DELETE FROM shots WHERE id=?", (o["id"],))
                 frames.remove_files(o["id"])
@@ -2022,6 +2025,44 @@ def insert_shot(eid: int, p: ShotInsertIn, request: Request):
     out = get_episode(eid)
     out["inserted_shot_id"] = new_id
     return out
+
+
+@app.delete("/api/shots/{sid}", dependencies=[Depends(auth.need("script", "generation"))])
+def delete_shot(sid: int, request: Request):
+    """Удаляет шот из серии: блок «Шот N» вырезается из сценария, остальные шоты, дубли и комментарии остаются на месте."""
+    s = load_shot(sid)
+    eid = s["episode_id"]
+    visible_or_404(request, eid)
+    ep = load_episode_row(eid)
+    writer_may_edit(request, ep["status"])
+    if not breakdown.has_markers(ep["script"]):
+        raise HTTPException(400, "В сценарии нет пометок «Шот 1», «Шот 2»… — расставьте их на вкладке «Сценарий» или удалите шот из текста сценария")
+    if any(x["id"] == sid and x["gen_status"] in ("queued", "running") for x in get_episode(eid)["shots"]):
+        raise HTTPException(409, "Шот сейчас генерируется: отмените генерацию и повторите")
+    with db.connect() as c:
+        rows = [r["id"] for r in c.execute("SELECT id FROM shots WHERE episode_id=? ORDER BY idx", (eid,))]
+        same = [r["id"] for r in c.execute("SELECT id FROM shots WHERE episode_id=? AND label=? ORDER BY idx", (eid, s["label"]))]
+    if len(rows) <= 1:
+        raise HTTPException(400, "Это единственный шот серии")
+    try:
+        script = breakdown.remove_shot_block(ep["script"], s["label"], same.index(sid))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with db.connect() as c:
+        c.execute("UPDATE episodes SET script=?, updated_at=? WHERE id=?", (script, db.now(), eid))
+    try:
+        apply_breakdown(eid, only_new=True, drop_id=sid)
+    except ValueError as e:
+        with db.connect() as c:
+            c.execute("UPDATE episodes SET script=? WHERE id=?", (ep["script"], eid))
+        raise HTTPException(409, f"Не получилось удалить шот: {e}. Нажмите «Сохранить и разбить на шоты» на вкладке «Сценарий» и повторите")
+    if any(r["id"] == sid for r in get_episode(eid)["shots"]):  # шот остался (текст не нашёлся): ничего не меняем
+        with db.connect() as c:
+            c.execute("UPDATE episodes SET script=? WHERE id=?", (ep["script"], eid))
+        raise HTTPException(409, "Шот не удалился: нажмите «Сохранить и разбить на шоты» на вкладке «Сценарий» и повторите")
+    db.log(eid, uid(request), f"Удалён шот {s['label']}")
+    promote_if_ready(eid, uid(request))
+    return get_episode(eid)
 
 
 class CastIn(BaseModel):

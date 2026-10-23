@@ -301,6 +301,28 @@ def has_scene_heading(text: str) -> bool:
     return any(SCENE_RE.match(l.strip()) and not l.strip()[:1].islower() for l in text.splitlines())
 
 
+def remove_shot_block(text: str, label: str, occurrence: int) -> str:
+    """Вырезает из сценария с пометками блок шота `label` (occurrence — какой он по счёту, если номер повторяется).
+    Заголовок сцены и разделители в хвосте блока принадлежат следующему шоту и остаются. Остальные номера не меняются."""
+    lines = text.splitlines(keepends=True)
+    marks = [(i, m.group(1)) for i, l in enumerate(lines) if (m := SHOT_MARK_RE.match(l.strip()))]
+    same = [k for k, (_, lab) in enumerate(marks) if lab == label]
+    if occurrence >= len(same):
+        raise ValueError(f"В сценарии не нашёлся шот {label}. Нажмите «Сохранить и разбить на шоты» на вкладке «Сценарий» и повторите")
+    k = same[occurrence]
+    start = marks[k][0]
+    end = marks[k + 1][0] if k + 1 < len(marks) else len(lines)
+    at = end
+    while at > start + 1 and _belongs_to_next(lines[at - 1]):
+        at -= 1
+    head, tail = lines[:start], lines[at:]
+    while head and not head[-1].strip() and (not tail or not tail[0].strip()):  # не оставляем двойной пустой разрыв
+        head.pop()
+    if head and tail and tail[0].strip() and not head[-1].endswith("\n\n") and head[-1].strip():
+        head.append("\n")
+    return "".join(head + tail)
+
+
 def insert_shot_block(text: str, label: str, occurrence: int, body: str) -> tuple[str, str]:
     """Вставляет в сценарий с пометками «Шот N» новый шот сразу после шота `label` (occurrence — какой он по счёту,
     если номер в сценарии повторяется). Новый шот получает номер с буквой («2а» после «2»), поэтому номера остальных
