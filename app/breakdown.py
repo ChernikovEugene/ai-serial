@@ -43,11 +43,23 @@ def snap_duration(engine: str | None, duration: int, est: float = 0) -> int:
     need = max(duration or 0, est or 0)
     return next((d for d in allowed if d >= need), allowed[-1])
 DURATION_IN_PROMPT_RE = re.compile(r"(Vertical [^,\n]*?video,\s*)\d+(\s*seconds)", re.I)
+# Тайминг для Gemini Omni (параметра длины в API нет): «[0-5s]» и «ends at exactly 5 seconds»
+TIMELINE_RE = re.compile(r"(\[0-)\d+(s\])")
+TIMELINE_END_RE = re.compile(r"(ends at exactly\s*)\d+(\s*seconds)", re.I)
+TIMELINE_SPEECH_RE = re.compile(r"(finish by\s*)[\d.]+(\s*s\b)", re.I)
 
 
 def sync_duration(prompt: str, duration: int) -> str:
     """Число секунд в промпте («Vertical 9:16 video, 5 seconds») всегда равно длине клипа шота, даже если промпт правили руками."""
-    return DURATION_IN_PROMPT_RE.sub(lambda m: f"{m.group(1)}{int(duration)}{m.group(2)}", prompt or "", count=1)
+    out = DURATION_IN_PROMPT_RE.sub(lambda m: f"{m.group(1)}{int(duration)}{m.group(2)}", prompt or "", count=1)
+    out = TIMELINE_RE.sub(lambda m: f"{m.group(1)}{int(duration)}{m.group(2)}", out)
+    out = TIMELINE_END_RE.sub(lambda m: f"{m.group(1)}{int(duration)}{m.group(2)}", out)
+    return TIMELINE_SPEECH_RE.sub(lambda m: f"{m.group(1)}{_speech_end(duration)}{m.group(2)}", out)
+
+
+def _speech_end(duration: int) -> str:
+    """К какой секунде реплики должны закончиться: запас 0,5 с до конца клипа."""
+    return f"{max(float(duration) - 0.5, 1):g}"
 
 
 MAX_DIALOGUE_LINES_PER_SHOT = 2
@@ -854,6 +866,13 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
         parts.append("Nobody on screen speaks, lips closed, natural ambient sound only. No background music.")
     else:
         parts.append("No dialogue, natural ambient sound only.")
+    if m.get("frames"):
+        # у Gemini Omni нет параметра длины: ролик держит только текст. Слова «N seconds» он часто игнорирует и тянет клип до ~10 с,
+        # поэтому ставим таймкод Google «[0-Ns]» и прямой запрет продолжать после конца
+        d = int(shot["duration"])
+        speech = f" All spoken lines finish by {_speech_end(d)} s, at a natural calm pace." if on_screen and mode == "full" else ""
+        parts.append(f"Timeline: [0-{d}s] the whole shot, from the first frame to the last frame.{speech} "
+                     f"The clip ends at exactly {d} seconds on the last frame: nothing continues after it, no extra scenes, no fade-out.")
     return " ".join(parts), refs, warns
 
 
