@@ -233,7 +233,7 @@ def run():
     st, r = admin.call("POST", f"/api/shots/{sid}/frames/start/generate", {})
     check("frame without a prompt is rejected", st == 400, (st, r))
     st, r = admin.call("POST", f"/api/shots/{sid}/generate", {})
-    check("video is refused until both frames are ready", st == 400 and "кадры" in json.dumps(r, ensure_ascii=False).lower(), (st, r))
+    check("video without frames asks for confirmation (409)", st == 409 and "подтвердите" in json.dumps(r, ensure_ascii=False).lower(), (st, r))
     st, r = admin.call("POST", f"/api/shots/{sid}/frames/start/generate", {"prompt": "Image 1 sits at the table of Image 2, crying"})
     check("start frame is queued", st == 200 and r["frames"]["start"]["status"] in ("queued", "running", "done"), (st, r))
     done = wait_for(lambda: next((s for s in admin.call("GET", f"/api/episodes/{eid}")[1]["shots"]
@@ -246,7 +246,7 @@ def run():
     check("Nano Banana 2.1 request carries the library images as base64 with captions",
           len(body.get("reference_images", [])) == 2 and body["reference_images"][0]["image"] == base64.b64encode(PNG).decode()
           and body["reference_images"][0]["text"].startswith("Image 1: Маша"), body.get("reference_images"))
-    check("video is still refused with one frame", admin.call("POST", f"/api/shots/{sid}/generate", {})[0] == 400)
+    check("video with one frame still asks for confirmation", admin.call("POST", f"/api/shots/{sid}/generate", {})[0] == 409)
 
     # референсы: состояние персонажа + своя картинка; потом конец
     state_img = a["versions"][0]["states"][0]["images"][0]["path"]
@@ -341,6 +341,27 @@ def run():
     st, r = admin.call("POST", f"/api/shots/{s3['id']}/frames/end/image", form={"image": ("mine.png", PNG)})
     fe = r["frames"]["end"] if st == 200 else {}
     check("own image makes the frame ready", st == 200 and fe.get("ready") and fe.get("own") and (DATA / "media" / fe["path"]).exists(), r)
+    # отправка с одним кадром: только после подтверждения, и в запрос уходит только он
+    st, r = admin.call("POST", f"/api/shots/{s3['id']}/generate", {"force": True})
+    check("one frame only: not sent without confirmation", st == 409, (st, r))
+    n_part = len(Fake.log)
+    st, r = admin.call("POST", f"/api/shots/{s3['id']}/generate", {"force": True, "confirm_partial": True})
+    check("one frame only: sent after confirmation", st == 200, (st, r))
+    wait_for(lambda: next((t for s in admin.call("GET", f"/api/episodes/{ep2['id']}")[1]["shots"] if s["id"] == s3["id"]
+                           for t in s["takes"] if t["status"] in ("done", "error")), None))
+    pp = next((x for x in Fake.log[n_part:] if x[0] == "POST" and x[1].startswith("/v1/ai/") and "omni" in x[1]), None)
+    pb = pp[2] if pp else {}
+    check("one frame only: the request carries just that frame, prompt without frame tags",
+          bool(pb.get("end_image_url")) and "start_image_url" not in pb and "<FIRST_FRAME>" not in pb.get("prompt", ""), {k: str(v)[:60] for k, v in pb.items()})
+    admin.call("PUT", "/api/settings", {"omni_route": "google"})
+    n_g = len(Fake.log)
+    admin.call("POST", f"/api/shots/{s3['id']}/generate", {"force": True, "confirm_partial": True})
+    wait_for(lambda: len([x for x in Fake.log[n_g:] if x[1] == "/v1beta/interactions"]) or None)
+    gq = next((x for x in Fake.log[n_g:] if x[1] == "/v1beta/interactions"), None)
+    gi = gq[2]["input"] if gq else []
+    check("one frame only (Google): one image and the tag of that frame only",
+          [p.get("type") for p in gi] == ["image", "text"] and gi[1]["text"].startswith("<LAST_FRAME> ") and "<FIRST_FRAME>" not in gi[1]["text"], gi and [str(p)[:60] for p in gi])
+    admin.call("PUT", "/api/settings", {"omni_route": "magnific"})
     st, r = admin.call("DELETE", f"/api/shots/{s3['id']}/frames/end")
     check("own image can be removed", st == 200 and not r["frames"]["end"]["ready"] and not (DATA / "media" / fe["path"]).exists(), r)
 

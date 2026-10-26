@@ -2542,6 +2542,7 @@ class RegenerateIn(BaseModel):
     reason: str = ""            # what was wrong with the previous take
     duration: int | None = None  # длина клипа для нового дубля (вводится вручную, сохраняется в шот)
     force: bool = False          # только продюсер: отправить незаполненный шот
+    confirm_partial: bool = False  # Gemini Omni: подтверждено «отправить без стартового и/или финального кадра»
 
 
 @app.post("/api/shots/{sid}/generate", dependencies=[Depends(auth.need("generation"))])
@@ -2572,9 +2573,9 @@ def generate_shot(sid: int, request: Request, g: RegenerateIn | None = None):
         with db.connect() as c:
             save_shot(c, raw)
         s = shot_response(sid)
-    if models.spec(s["engine"]).get("frames") and not s["frames_ready"]:
-        raise HTTPException(400, f"Шот {s['label']}: сначала сделайте стартовый и финальный кадры (блок «Кадры для Gemini Omni»). "
-                                 "Когда оба станут зелёными, шот можно отправлять.")
+    if models.spec(s["engine"]).get("frames") and not s["frames_ready"] and not g.confirm_partial:
+        raise HTTPException(409, f"Шот {s['label']}: {frames.missing_text(s['frames'])}. Gemini Omni может работать и без них, "
+                                 "но результат будет менее предсказуемым. Подтвердите отправку.")
     if not s["ready"] and not (g.force and request.state.user["role"] == "admin"):
         raise HTTPException(400, f"Шот {s['label']} не заполнен: " + "; ".join(unready_items(s))
                                  + ". Если пункт не нужен, закройте его явно («-», «без персонажей»).")

@@ -122,9 +122,9 @@ export function framesHtml(s) {
   const last = s.takes.at(-1);
   return `<div class="frames-box ${ready ? "ready" : ""}" id="frames-${s.id}">
     <div class="row frames-head"><b>Кадры для Gemini Omni</b>
-      <span class="muted small">сначала два кадра из Nano Banana 2.1, потом видео ${s.duration} с, 720p</span><div class="spacer"></div>
+      <span class="muted small">лучше всего с двумя кадрами из Nano Banana 2.1, но можно и с одним или без них; видео ${s.duration} с, 720p</span><div class="spacer"></div>
       ${ready ? `<span class="badge ok">✓ оба кадра готовы</span>` : `<span class="badge warn">${f.start.ready || f.end.ready ? "готов один кадр из двух" : "кадры не сделаны"}</span>`}
-      ${ready ? `<button class="primary" data-fvideo ${running ? "disabled" : ""}>${running ? "Генерируется…" : last ? "▶ Сгенерировать ещё дубль" : "▶ Отправить в Gemini Omni"}</button>` : ""}</div>
+      <button class="${ready ? "primary" : "ghost"}" data-fvideo ${running ? "disabled" : ""}>${running ? "Генерируется…" : last ? "▶ Сгенерировать ещё дубль" : ready ? "▶ Отправить в Gemini Omni" : "▶ Отправить без части кадров"}</button></div>
     ${ready && !s.ready ? `<div class="small warn-t">Карточка шота заполнена не до конца: ${s.checks.filter((c) => !c.ok).map((c) => esc(c.label)).join("; ")}.</div>` : ""}
     <div class="frames-grid">${SIDES.map(([side, title]) => frameHtml(s, side, title)).join("")}</div>
   </div>`;
@@ -293,9 +293,15 @@ export function bindFrames(s, hooks) {
 
   const video = $("[data-fvideo]", box);
   if (video) video.onclick = async () => {
+    const cur = hooks.get(s.id) || s;
+    if (!cur.frames_ready) { // Омни умеет и по одному кадру, и по описанию, но без кадров результат менее предсказуем: переспрашиваем
+      const gone = [["start", "стартового"], ["end", "финального"]].filter(([side]) => !cur.frames[side].ready).map(([, g]) => g);
+      if (!confirm(`У шота ${cur.label} ${gone.length === 2 ? "нет ни стартового, ни финального кадра" : `нет ${gone[0]} кадра`} (или он ещё не готов).\n\n`
+        + "Gemini Omni может сгенерировать видео и так, но результат будет менее предсказуемым. Всё равно отправить на генерацию?")) return;
+    }
     video.disabled = true;
     try {
-      hooks.full(await api(`/api/shots/${s.id}/generate`, { json: {} }));
+      hooks.full(await api(`/api/shots/${s.id}/generate`, { json: { confirm_partial: true } }));
       toast(`Шот ${s.label} отправлен в Gemini Omni`);
     } catch { video.disabled = false; }
   };

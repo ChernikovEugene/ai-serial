@@ -59,17 +59,13 @@ def omni_request(shot: dict, settings: dict, inline: bool) -> dict:
     Длины в запросе нет: она задаётся словами в промпте («5 seconds»), который собирает студия."""
     fr = shot.get("frames") or {}
     parts = []
-    for side in ("start", "end"):
-        path = (fr.get(side) or {}).get("path")
-        if inline and not path:
-            raise RuntimeError("Для Gemini Omni нужны готовые стартовый и финальный кадры: сначала сделайте их в блоке «Кадры для Gemini Omni»")
-        if path:
-            mime = mimetypes.guess_type(path)[0] or "image/png"
-            data = base64.b64encode((db.MEDIA_DIR / path).read_bytes()).decode() if inline else f"<base64 {path}>"
+    for side in ("start", "end"):  # Омни работает и по одному кадру, и по одному описанию: чего нет, то не кладём
+        f = fr.get(side) or {}
+        if models.frame_ok(f):
+            mime = mimetypes.guess_type(f["path"])[0] or "image/png"
+            data = base64.b64encode((db.MEDIA_DIR / f["path"]).read_bytes()).decode() if inline else f"<base64 {f['path']}>"
             parts.append({"type": "image", "data": data, "mime_type": mime})
-        else:
-            parts.append({"type": "image", "data": f"<{side}: кадр ещё не готов>", "mime_type": "image/png"})
-    parts.append({"type": "text", "text": "<FIRST_FRAME> <LAST_FRAME> " + breakdown.sync_duration(shot["prompt"], shot["duration"])})
+    parts.append({"type": "text", "text": models.frame_tags(shot) + breakdown.sync_duration(shot["prompt"], shot["duration"])})
     ratio = settings.get("aspect_ratio") or "9:16"
     return {"model": OMNI_MODEL, "input": parts,
             "response_format": {"type": "video", "aspect_ratio": ratio if ratio in ("9:16", "16:9") else "9:16", "resolution": "720p"},

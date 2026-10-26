@@ -43,7 +43,7 @@ MODELS = {
         "duration_note": "Gemini Omni 1.1: 3 или 5 с, всегда 720p.",
         "refs_note": "Героев и локацию эта нейросеть берёт из стартового и финального кадров: их рисует Nano Banana 2.1 по картинкам "
                      "из библиотеки. Отдельных референсов к видео не нужно.",
-        "tips": ["Сначала сделайте стартовый и финальный кадры (блок «Кадры для Gemini Omni»), когда оба станут зелёными, шот можно отправлять.",
+        "tips": ["Лучше всего сделать стартовый и финальный кадры (блок «Кадры для Gemini Omni»). Без одного или обоих кадров шот тоже уйдёт, но студия переспросит: результат будет менее предсказуемым.",
                  "Промпт собирается из карточки шота: действие, камера, реплики. Пишите, что происходит между первым и последним кадром.",
                  "Звук и речь по репликам модель делает сама. Длина клипа: 3 или 5 секунд, разрешение 720p."],
     },
@@ -302,16 +302,28 @@ def omni_path(settings: dict) -> str:
     return p if p.startswith("/") else "/" + p
 
 
+def frame_ok(f: dict) -> bool:
+    """Кадр Nano Banana готов и лежит на диске (иначе он в запрос Gemini Omni не попадает)."""
+    return bool(f) and f.get("status") == "done" and bool(f.get("path")) and (db.MEDIA_DIR / f["path"]).is_file()
+
+
+def frame_tags(shot: dict) -> str:
+    """Метки кадров в промпте Gemini Omni: только для тех кадров, которые реально уходят («<FIRST_FRAME> <LAST_FRAME> » или пусто)."""
+    fr = shot.get("frames") or {}
+    tags = [tag for side, tag in (("start", "<FIRST_FRAME>"), ("end", "<LAST_FRAME>")) if frame_ok(fr.get(side) or {})]
+    return " ".join(tags) + " " if tags else ""
+
+
 def _build_omni(shot: dict, settings: dict, inline: bool) -> dict:
-    """Gemini Omni 1.1: старт-кадр, финальный кадр (оба из Nano Banana 2.1) и промпт; только 720p, 3 или 5 с."""
+    """Gemini Omni 1.1: старт-кадр и/или финальный кадр (из Nano Banana 2.1) и промпт; только 720p, 3 или 5 с.
+    Омни умеет и по одному кадру, и по одному описанию: чего нет, то в запрос не кладём (подтверждение спрашивает карточка шота)."""
     fr = shot.get("frames") or {}
     start, end = fr.get("start") or {}, fr.get("end") or {}
-    if inline and not (start.get("path") and end.get("path")):
-        raise RuntimeError("Для Gemini Omni нужны готовые стартовый и финальный кадры: сначала сделайте их в блоке «Кадры для Gemini Omni»")
     path = omni_path(settings)
     body: dict = {"prompt": shot["prompt"], "duration": int(shot["duration"]), "resolution": "720p", "aspect_ratio": _ratio(settings)}
     for side, f in (("start", start), ("end", end)):
-        body[OMNI_FIELDS[side]] = image_value(f["path"], settings, "gemini_omni", inline, False) if f.get("path") else f"<{side}: кадр ещё не готов>"
+        if frame_ok(f):
+            body[OMNI_FIELDS[side]] = image_value(f["path"], settings, "gemini_omni", inline, False)
     m = spec("gemini_omni")
     if m["prompt_max"] and len(shot["prompt"]) > m["prompt_max"]:
         raise RuntimeError(f"Промпт длиннее {m['prompt_max']} знаков, {m['name']} его не примет: сократите стиль или правила")

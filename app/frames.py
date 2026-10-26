@@ -107,6 +107,17 @@ def resolved(shot: dict, side: str, versions: dict, assets: dict) -> dict:
     return f
 
 
+def missing_text(fr: dict) -> str:
+    """Чего не хватает для Gemini Omni: «нет стартового и финального кадров» / «финальный кадр ещё не готов» и т.п."""
+    names = {"start": "стартового", "end": "финального"}
+    gone = [names[s] for s in SIDES if not is_ready(fr[s])]
+    if len(gone) == 2:
+        return "нет стартового и финального кадров"
+    if gone:
+        return f"нет {gone[0]} кадра"
+    return "кадры ещё не готовы"
+
+
 def all_ready(shot_id: int) -> bool:
     return all(is_ready(load(shot_id, side)) for side in SIDES)
 
