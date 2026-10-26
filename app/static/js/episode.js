@@ -7,7 +7,7 @@ import { bindFrames, framesBusy, framesHtml, framesSig } from "./frames.js";
 import { attachMentions } from "./mention.js";
 import { attachHighlight } from "./highlight.js";
 import { drawReview, reviewPlaying, stopReview } from "./review.js";
-import { seenEpisode } from "./notify.js";
+import { chime, seenEpisode } from "./notify.js";
 
 export const E = { id: null, ep: null, tab: "script", sel: null, poll: null, sig: "", gap: null };
 export const TAKE_STATUS = { queued: ["в очереди", "run"], running: ["генерация…", "run"], done: ["готово", "ok"],
@@ -113,6 +113,17 @@ function patchFarm(s) {
   }
 }
 
+/** Шот закончил генерацию, пока страница открыта: мягкий звук и сообщение, видео встаёт в карточку само. */
+function announceFinished(before, after) {
+  const was = new Map(before.shots.map((s) => [s.id, s.gen_status]));
+  const done = after.shots.filter((s) => ["queued", "running"].includes(was.get(s.id)) && s.gen_status === "done");
+  const failed = after.shots.filter((s) => ["queued", "running"].includes(was.get(s.id)) && s.gen_status === "error");
+  if (!done.length && !failed.length) return;
+  chime();
+  if (done.length) toast(`Видео готово: шот ${done.map((s) => s.label).join(", ")}`);
+  if (failed.length) toast(`Ошибка генерации: шот ${failed.map((s) => s.label).join(", ")}`, true);
+}
+
 function schedulePoll() {
   clearTimeout(E.poll); // только таймер опроса: просмотр серии не трогаем, иначе он останавливался после каждой перерисовки
   const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status) || framesBusy(s)) || E.sig !== signature(E.ep); // второе: перерисовка отложена, пока человек печатает
@@ -121,6 +132,7 @@ function schedulePoll() {
     if (!location.hash.startsWith(`#/episodes/${E.id}`)) return;
     const ep = await api(`/api/episodes/${E.id}`);
     const sig = signature(ep);
+    announceFinished(E.ep, ep);
     E.ep = ep;
     if (sig !== E.sig && ["script", "main"].includes(E.tab)) E.sig = sig; // never wipe the text being edited
     else if (sig !== E.sig && !busyNow()) {
@@ -879,6 +891,7 @@ function replaceShot(s) {
   if (i >= 0) E.ep.shots[i] = { ...E.ep.shots[i], ...s };
   const el = $(`#shot-${s.id}`);
   if (el) { el.outerHTML = shotHtml(E.ep.shots[i]); bindShot(E.ep.shots[i]); }
+  schedulePoll(); // шот ушёл в генерацию из его карточки: следим, пока не придёт видео (раньше помогало только обновление страницы)
   if (s.episode_status && s.episode_status !== E.ep.status) { // все шоты заполнены — сервер сам перевёл серию в «ТЗ готово»
     E.ep.status = s.episode_status;
     E.ep.incomplete = E.ep.shots.filter((x) => x.missing.length).length;

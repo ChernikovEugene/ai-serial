@@ -58,7 +58,7 @@ export async function seenEpisode(eid) {
 export const generatedIds = () => new Set(badges.notifications.map((n) => n.episode_id));
 
 /** Короткий мягкий сигнал из двух нот (без файла). Браузер играет звук, только если вкладка студии открыта. */
-function chime() {
+export function chime() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     [[880, 0], [1320, 0.16]].forEach(([f, t]) => {
