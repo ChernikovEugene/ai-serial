@@ -52,6 +52,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
         Fake.log.append(("POST", self.path, body, self.headers.get("x-magnific-api-key")))
         if self.path.startswith("/v1/ai/text-to-image/nano-banana-2-1") and Fake.fail_nano:
             return self._send(400, {"message": "Validation error"})
+        if self.path == "/v1beta/interactions" and (body.get("response_format") or {}).get("type") == "image":
+            return self._send(200, {"steps": [{"type": "model_output", "content": [{"type": "image", "mime_type": "image/png", "data": base64.b64encode(PNG).decode()}]}]})
         if self.path == "/v1beta/interactions":
             return self._send(200, {"steps": [{"type": "model_output", "content": [{"type": "video", "mime_type": "video/mp4", "data": base64.b64encode(MP4).decode()}]}]})
         if Fake.omni_missing and self.path.startswith("/v1/ai/video/gemini-omni") and self.path != "/v1/ai/video/gemini-omni-1-1-720p":
@@ -366,6 +368,21 @@ def run():
     gi = gq[2]["input"] if gq else []
     check("one frame only (Google): one image and the tag of that frame only",
           [p.get("type") for p in gi] == ["image", "text"] and gi[1]["text"].startswith("<LAST_FRAME> ") and "<FIRST_FRAME>" not in gi[1]["text"], gi and [str(p)[:60] for p in gi])
+    # кадр Nano Banana напрямую в Google: строго 1K, ответ сразу картинкой
+    admin.call("PUT", "/api/settings", {"frames_route": "google"})
+    n_f = len(Fake.log)
+    admin.call("PUT", f"/api/shots/{s3['id']}/frames/start", {"prompt": "Girl at the window"})
+    st, r = admin.call("POST", f"/api/shots/{s3['id']}/frames/start/generate", {})
+    gdone = wait_for(lambda: next((x for x in admin.call("GET", f"/api/episodes/{s3['episode_id']}")[1]["shots"]
+                                   if x["id"] == s3["id"] and x["frames"]["start"]["status"] in ("done", "error")), None))
+    gf = next((x for x in Fake.log[n_f:] if x[0] == "POST" and x[1] == "/v1beta/interactions"), None)
+    gfb = gf[2] if gf else {}
+    check("frame via Google: Nano Banana 2.1 model, 1K, 9:16, prompt last", gfb.get("model") == "gemini-nano-banana-2.1"
+          and gfb.get("response_format") == {"type": "image", "aspect_ratio": "9:16", "image_size": "1K"}
+          and gfb["input"][-1] == {"type": "text", "text": "Girl at the window"}, gfb and {k: str(v)[:80] for k, v in gfb.items()})
+    check("frame via Google: picture saved and ready", bool(gdone) and gdone["frames"]["start"]["ready"], str(gdone and gdone["frames"]["start"])[:600])
+    check("frame via Google: nothing went to Magnific", not [x for x in Fake.log[n_f:] if x[1].startswith("/v1/ai/text-to-image/")])
+    admin.call("PUT", "/api/settings", {"frames_route": "magnific"})
     admin.call("PUT", "/api/settings", {"omni_route": "magnific"})
     st, r = admin.call("DELETE", f"/api/shots/{s3['id']}/frames/end")
     check("own image can be removed", st == 200 and not r["frames"]["end"]["ready"] and not (DATA / "media" / fe["path"]).exists(), r)

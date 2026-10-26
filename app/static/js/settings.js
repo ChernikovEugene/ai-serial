@@ -35,6 +35,11 @@ export async function renderSettings() {
           <option value="stub" ${s.gen_mode === "stub" ? "selected" : ""}>Заглушка — ничего не отправлять, сохранять запрос в файл</option>
           <option value="live" ${s.gen_mode === "live" ? "selected" : ""}>Реальная генерация (платно, тратит кредиты)</option></select>
         ${field("magnific_api_key", "API-ключ Magnific (кабинет Magnific → API Keys; хранится только у вас в data/studio.db)", "input", `type="password" placeholder="FPSX…" autocomplete="off"`)}
+        <label>Кадры Nano Banana (для Gemini Omni) идут через</label>
+        <select data-k="frames_route" ${ro}>
+          <option value="magnific" ${s.frames_route !== "google" ? "selected" : ""}>Magnific (ключ Magnific)</option>
+          <option value="google" ${s.frames_route === "google" ? "selected" : ""}>Google напрямую (Gemini API, ключ Google)</option></select>
+        <p class="muted small">Кадры всегда 1K (2K и 4K не запрашиваются, чтобы не тратить лишние кредиты). Переключайте когда нужно: уже готовые кадры не меняются.</p>
         <label>Видео Gemini Omni идёт через</label>
         <select data-k="omni_route" ${ro}>
           <option value="google" ${s.omni_route !== "magnific" ? "selected" : ""}>Google напрямую (Gemini API, ключ Google)</option>

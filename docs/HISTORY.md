@@ -1063,3 +1063,13 @@ Magnific после перезапуска (нет ключа в тесте).
 - Про Google вместо Magnific для Nano Banana: сейчас кадры идут только через Magnific (`frames.py`, `/v1/ai/text-to-image/nano-banana-2-1`).
   По документации Google модель есть в Gemini API: `gemini-nano-banana-2.1`, Interactions API (`POST /v1beta/interactions`, как у Omni),
   до 14 референсов, 1K/2K/4K, формат 9:16 в `response_format`. Не сделано, ждём решения Евгения (ключ Google в настройках уже есть, `veo_api_key`).
+
+## 2026-10-26: кадры Nano Banana можно слать напрямую в Google (Claude)
+
+- В «Настройках» → «Генерация» новый выбор «Кадры Nano Banana (для Gemini Omni) идут через»: Magnific (по умолчанию, как было) или Google напрямую.
+  Настройка `frames_route`, переключается когда угодно; готовые кадры не меняются. Ключ Google тот же (`veo_api_key`).
+- Google: `POST /v1beta/interactions`, модель `gemini-nano-banana-2.1`, `response_format: {type: image, aspect_ratio: 9:16, image_size: "1K"}`,
+  референсы идут частями «Image N: имя» + картинка, промпт последним. Ответ сразу с картинкой (base64), опроса нет. Код: `frames._run_google`.
+- Строго 1K: `frames.RESOLUTION = "1K"` для обоих путей, 2K/4K не запрашиваются нигде.
+- Тест в `smoke_omni.py` (поддельный Google), зелёный. НЕ проверено на настоящем ключе Google: точная форма ответа с картинкой взята
+  из документации, по аналогии с Omni. Если Google ответит иначе, текст ответа виден в ошибке кадра.

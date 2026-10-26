@@ -195,6 +195,11 @@ def omni_route(settings: dict) -> str:
     return "magnific" if settings.get("omni_route") == "magnific" else "google"
 
 
+def frames_route(settings: dict) -> str:
+    """Кадры Nano Banana для Gemini Omni: через Magnific (по умолчанию) или напрямую в Google (Gemini API)."""
+    return "google" if settings.get("frames_route") == "google" else "magnific"
+
+
 def route(engine: str | None, settings: dict) -> str:
     """Куда уйдёт шот: stub (заглушка), magnific, google (Veo через Gemini API) или manual (делается вручную)."""
     if not has_api(engine):

@@ -22,11 +22,12 @@ import time
 from . import db, models
 
 NANO_PATH = "/v1/ai/text-to-image/nano-banana-2-1"
+GOOGLE_MODEL = "gemini-nano-banana-2.1"   # то же в Gemini API (Interactions API, как у Omni)
 SIDES = ("start", "end")
 COLS = {"start": "frame_start", "end": "frame_end"}
 SIDE_NAMES = {"start": "стартовый", "end": "финальный"}
 MAX_REFS = 14            # столько картинок принимает Nano Banana 2.1
-RESOLUTION = "1K"
+RESOLUTION = "1K"        # только 1K: 2K и 4K дороже, студия их не просит ни у Magnific, ни у Google
 REF_DIRS = ("characters/", "locations/", "frames/")   # откуда можно брать референсы: библиотека, свои загрузки, готовые кадры
 RATIOS = {"auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"}
 WAIT_MINUTES = 10
@@ -134,6 +135,18 @@ def build_request(shot: dict, side: str, settings: dict, versions: dict, assets:
     if len(prompt) < 2:
         raise RuntimeError(f"Напишите промпт для {SIDE_NAMES[side]} кадра")
     ratio = settings.get("aspect_ratio") or "9:16"
+    if models.frames_route(settings) == "google":
+        from . import veo
+        parts: list[dict] = []
+        for i, r in enumerate(f["refs"], 1):
+            parts.append({"type": "text", "text": f"Image {i}: {r['name']}" if r.get("name") else f"Image {i}"})
+            data = base64.b64encode((db.MEDIA_DIR / r["path"]).read_bytes()).decode() if inline else f"<base64 {r['path']}>"
+            parts.append({"type": "image", "data": data, "mime_type": _mime(r["path"])})
+        parts.append({"type": "text", "text": prompt})
+        return {"google": True, "path": "/interactions", "body": {
+            "model": GOOGLE_MODEL, "input": parts,
+            "response_format": {"type": "image", "aspect_ratio": ratio if ratio in RATIOS and ratio != "auto" else "9:16", "image_size": RESOLUTION},
+            "background": False, "store": False}}
     body: dict = {"prompt": prompt, "aspect_ratio": ratio if ratio in RATIOS else "9:16", "resolution": RESOLUTION}
     if f["refs"]:
         body["reference_images"] = []
@@ -149,6 +162,9 @@ def preview(shot: dict, side: str, settings: dict, versions: dict, assets: dict)
         req = build_request(shot, side, settings, versions, assets, inline=False)
     except RuntimeError as e:
         return {"model": "Nano Banana 2.1", "error": str(e)}
+    if req.get("google"):
+        from . import veo
+        return {"model": "Nano Banana 2.1 (Google)", "url": veo.API_BASE + req["path"], "body": req["body"]}
     return {"model": "Nano Banana 2.1", "url": models.API_BASE + req["path"], "body": req["body"]}
 
 
@@ -182,12 +198,52 @@ def _run(shot: dict, side: str, settings: dict, versions: dict, assets: dict, st
                                                                     "Включите «Реальная генерация» в настройках")
             return
         req = build_request(shot, side, settings, versions, assets, inline=True)
+        if req.get("google"):
+            _run_google(sid, side, req, settings, stamp)
+            return
         task = models._http("POST", models.API_BASE + req["path"], models._key(settings), req["body"])["data"]
         update(sid, side, task_id=task["task_id"], request=req_rel)
         _wait(sid, side, task["task_id"], settings, stamp)
     except Exception as e:  # noqa: BLE001 - причина видна на карточке
         if load(sid, side).get("started") == stamp:
             update(sid, side, status="error", error=str(e)[:900])
+
+
+def _find_image(obj):
+    """Первый кусок ответа Interactions API с картинкой: {"type": "image", "data" | "uri"}."""
+    if isinstance(obj, dict):
+        if obj.get("type") == "image" and (obj.get("data") or obj.get("uri")):
+            return obj
+        obj = list(obj.values())
+    if isinstance(obj, list):
+        for v in obj:
+            if (f := _find_image(v)):
+                return f
+    return None
+
+
+def _run_google(sid: int, side: str, req: dict, settings: dict, stamp: str) -> None:
+    """Кадр напрямую в Google: Interactions API отвечает сразу картинкой (base64), опроса нет."""
+    from . import veo
+    key = (settings.get("veo_api_key") or "").strip()
+    if not key:
+        raise RuntimeError("Не указан API-ключ Google (Gemini API) в настройках")
+    try:
+        resp = veo._http("POST", veo.API_BASE + req["path"], key, req["body"], timeout=300)
+    except RuntimeError as e:
+        raise RuntimeError(f"Google: {e}") from None
+    if not _alive(sid, side, stamp):
+        return
+    img = _find_image(resp.get("steps", resp))
+    if not img:
+        raise RuntimeError("Google не вернул картинку (возможно, сработал фильтр безопасности): " + json.dumps(resp, ensure_ascii=False)[:500])
+    data = base64.b64decode(img["data"]) if img.get("data") else veo._http("GET", img["uri"], key, raw=True, timeout=120)
+    rel = f"frames/{sid}/{side}_{stamp}{_sniff_ext(data, '')}"
+    (db.MEDIA_DIR / rel).write_bytes(data)
+    old = load(sid, side).get("path")
+    update(sid, side, status="done", path=rel, error="")
+    if old and old != rel:
+        _drop_file(old, sid)
 
 
 def _sniff_ext(data: bytes, url: str) -> str:
@@ -260,7 +316,7 @@ def recover() -> None:
             if f.get("task_id"):
                 veo.pool().submit(_resume, r["id"], side, f["task_id"], settings, f.get("started", ""))
             else:
-                update(r["id"], side, status="error", error="Студия перезапускалась до отправки в Magnific: нажмите «Сделать кадр» ещё раз")
+                update(r["id"], side, status="error", error="Студия перезапускалась до получения картинки: нажмите «Сделать кадр» ещё раз")
 
 
 def _resume(sid: int, side: str, tid: str, settings: dict, stamp: str) -> None:
