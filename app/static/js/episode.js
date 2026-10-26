@@ -115,13 +115,27 @@ function patchFarm(s) {
 
 /** Шот закончил генерацию, пока страница открыта: мягкий звук и сообщение, видео встаёт в карточку само. */
 function announceFinished(before, after) {
-  const was = new Map(before.shots.map((s) => [s.id, s.gen_status]));
-  const done = after.shots.filter((s) => ["queued", "running"].includes(was.get(s.id)) && s.gen_status === "done");
-  const failed = after.shots.filter((s) => ["queued", "running"].includes(was.get(s.id)) && s.gen_status === "error");
-  if (!done.length && !failed.length) return;
+  const busy = (st) => ["queued", "running"].includes(st);
+  const was = new Map(before.shots.map((s) => [s.id, s]));
+  const done = [], failed = [], fDone = [], fFailed = [];
+  for (const s of after.shots) {
+    const o = was.get(s.id);
+    if (!o) continue;
+    if (busy(o.gen_status) && s.gen_status === "done") done.push(s.label);
+    if (busy(o.gen_status) && s.gen_status === "error") failed.push(s.label);
+    for (const [side, name] of [["start", "старт"], ["end", "финал"]]) {
+      if (!busy(o.frames?.[side]?.status)) continue;
+      const st = s.frames?.[side]?.status;
+      if (st === "done") fDone.push(`${s.label} (${name})`);
+      if (st === "error") fFailed.push(`${s.label} (${name})`);
+    }
+  }
+  if (!done.length && !failed.length && !fDone.length && !fFailed.length) return;
   chime();
-  if (done.length) toast(`Видео готово: шот ${done.map((s) => s.label).join(", ")}`);
-  if (failed.length) toast(`Ошибка генерации: шот ${failed.map((s) => s.label).join(", ")}`, true);
+  if (done.length) toast(`Видео готово: шот ${done.join(", ")}`);
+  if (fDone.length) toast(`Кадр готов: шот ${fDone.join(", ")}`);
+  if (failed.length) toast(`Ошибка генерации: шот ${failed.join(", ")}`, true);
+  if (fFailed.length) toast(`Ошибка кадра: шот ${fFailed.join(", ")}`, true);
 }
 
 function schedulePoll() {
@@ -1114,6 +1128,7 @@ function bindShot(s) {
         const i = E.ep.shots.findIndex((x) => x.id === shot.id);
         if (i >= 0) E.ep.shots[i] = { ...E.ep.shots[i], ...shot };
         E.sig = signature(E.ep);
+        schedulePoll(); // кадр ушёл в Nano Banana из карточки: следим, пока не придёт картинка
         return E.ep.shots[i] || shot;
       },
       full: (shot) => replaceShot(shot),
