@@ -263,10 +263,11 @@ function engineHelp(s) {
       <ul style="margin:4px 0 0 16px;padding:0">${e.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}`;
 }
 
-// The writer cannot touch a script once the producer has approved it.
+// Сценарист правит и после согласования ТЗ; продюсер и монтажёр получают уведомление (см. writer_edit на сервере).
 // Править серию (не админу) можно, пока ТЗ не готово: те же этапы, что проверяет сервер (auth.WRITER_STATUSES).
 const EDITABLE_STATUSES = ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review"];
-const writerLocked = () => state.meta.user.role !== "admin" && !EDITABLE_STATUSES.includes(E.ep.status);
+const writerLocked = () => false; // после согласования ТЗ сценарист тоже правит: продюсер и монтажёр получают уведомление
+const afterApproval = () => !["admin", "editor"].includes(state.meta.user.role) && !EDITABLE_STATUSES.includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
 const canEp = () => can.episodes() && !writerLocked(); // название и синопсис серии
 
@@ -677,7 +678,7 @@ function drawShots(el) {
     : ep.marked ? `Не хватает шота по режиссуре? Нажмите «＋ Добавить шот» между карточками: он получит номер вроде «2а», остальные шоты не сдвинутся. Это можно и после согласования ТЗ.`
       : `Вставить шот между готовыми можно, когда в сценарии стоят пометки «Шот 1», «Шот 2»…: без них номера шотов идут по порядку и сдвинулись бы.`;
   el.innerHTML = ep.shots.length
-    ? `${writerLocked() ? `<div class="help warn-card" style="margin-bottom:12px">🔒 Сценарий согласован, править шоты может только продюсер. Чтобы внести правки, попросите вернуть серию в «В разработке».${canAddShot() && ep.marked ? " Новый шот между готовыми добавить можно." : ""}</div>` : ""}
+    ? `${afterApproval() && can.write() ? `<div class="help warn-card" style="margin-bottom:12px">ℹ️ Сценарий уже согласован. Править шоты можно, но продюсер и монтажёр получат уведомление о ваших правках.</div>` : ""}
        <div class="help" style="margin-bottom:12px">${can.write()
          ? `Шоты строятся из сценария. Здесь выбирают персонажей, локацию и тип озвучки реплик. Правки полей перезапишутся, если поменять текст этого шота в сценарии;
             референс композиции, дубли, комментарии и вручную изменённый промпт сохраняются.`

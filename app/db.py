@@ -243,7 +243,8 @@ TABLES = {
         episode_id INTEGER,
         text TEXT NOT NULL DEFAULT '',
         seen_by TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL DEFAULT ''""",
+        created_at TEXT NOT NULL DEFAULT '',
+        actor_id INTEGER""",
     "settings": """
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL""",

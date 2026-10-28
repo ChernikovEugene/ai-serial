@@ -480,11 +480,37 @@ def load_episode_row(eid: int) -> dict:
     return ep
 
 
-def writer_may_edit(request: Request, status: str) -> None:
-    """Once the script is approved only the producer can change it, so the editor works on a stable text."""
-    if request.state.user["role"] != "admin" and status not in auth.WRITER_STATUSES:
-        raise HTTPException(403, "ТЗ уже готово — править серию может только продюсер. "
-                                 "Верните серию в «Пишется ТЗ» или попросите продюсера")
+def ep_name(ep: dict) -> str:
+    return (f"№{ep['number']} " if ep.get("number") else "") + f"«{ep.get('title') or 'Без названия'}»"
+
+
+def add_notification(role: str, kind: str, episode_id: int | None, text: str, actor_id: int | None = None, merge: bool = False) -> None:
+    """Событие для трея уведомлений. role: через запятую, кому показывать (admin, editor, writer) или all.
+    merge: повтор того же автора по той же серии за 15 минут обновляет прежнюю запись (и снова делает её непрочитанной), а не плодит новые."""
+    with db.connect() as c:
+        if merge and actor_id:
+            since = (datetime.now() - timedelta(minutes=15)).isoformat(timespec="seconds")
+            old = c.execute("SELECT id FROM notifications WHERE kind=? AND episode_id=? AND actor_id=? AND created_at>=? ORDER BY id DESC LIMIT 1",
+                            (kind, episode_id, actor_id, since)).fetchone()
+            if old:
+                c.execute("UPDATE notifications SET text=?, seen_by='[]', created_at=? WHERE id=?", (text, db.now(), old["id"]))
+                return
+        c.execute("INSERT INTO notifications(role, kind, episode_id, text, created_at, actor_id) VALUES (?,?,?,?,?,?)",
+                  (role, kind, episode_id, text, db.now(), actor_id))
+
+
+def writer_edit(request: Request, eid: int, what: str) -> None:
+    """Сценарист правит серию после согласования ТЗ: раньше это было запрещено, теперь можно, но продюсер и монтажёр получают уведомление.
+    До согласования (и правки самого продюсера или нейронщика) ничего не шлём."""
+    user = request.state.user
+    if user["role"] in ("admin", "editor"):
+        return
+    ep = load_episode_row(eid)
+    if ep["status"] in auth.WRITER_STATUSES:
+        return
+    add_notification("admin,editor", "writer_edit", eid, f"{user['name']} изменил(а) серию {ep_name(ep)} после согласования ТЗ: {what}",
+                     user["id"], merge=True)
+    db.log(eid, user["id"], f"Правка после согласования ТЗ: {what}")
 
 
 def incomplete_shots(eid: int) -> list[str]:
@@ -1560,6 +1586,7 @@ def create_episode_row(e: EpisodeIn, user_id) -> int:
     elif not e.backlog:
         schedule.append_to_arc(eid, e.arc_id)
     db.log(eid, user_id, "Серия создана" + (" — срочная" if e.urgent else ""))
+    add_notification("all", "episode_new", eid, f"Новая серия: {ep_name({'title': e.title.strip()})}" + (" — срочная" if e.urgent else ""), user_id)
     if e.script.strip():
         apply_breakdown(eid)
         promote_if_ready(eid, user_id)
@@ -1657,7 +1684,7 @@ def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = 
     if set(changes) - {"script"} and not auth.has(user, "episodes"):
         raise HTTPException(403, "Нет доступа: серии. Доступ настраивает админ в «Команде»")
     if set(changes) - ANY_STAGE_FIELDS:  # описание для поста и «срочно» сценарист правит на любом этапе
-        writer_may_edit(request, ep["status"])
+        writer_edit(request, eid, "сценарий" if "script" in changes else "данные серии")
     with db.connect() as c:
         for k, v in changes.items():
             if v is not None:
@@ -1970,7 +1997,7 @@ def apply_breakdown(eid: int, only_new: bool = False, drop_id: int | None = None
 
 @app.post("/api/episodes/{eid}/breakdown", dependencies=[Depends(auth.need("script"))])
 def breakdown_episode(eid: int, request: Request):
-    writer_may_edit(request, load_episode_row(eid)["status"])
+    writer_edit(request, eid, "сценарий заново разобран на шоты")
     apply_breakdown(eid)
     promote_if_ready(eid, uid(request))
     return get_episode(eid)
@@ -2034,7 +2061,7 @@ def delete_shot(sid: int, request: Request):
     eid = s["episode_id"]
     visible_or_404(request, eid)
     ep = load_episode_row(eid)
-    writer_may_edit(request, ep["status"])
+    writer_edit(request, eid, f"удалён шот {s['label']}")
     if not breakdown.has_markers(ep["script"]):
         raise HTTPException(400, "В сценарии нет пометок «Шот 1», «Шот 2»… — расставьте их на вкладке «Сценарий» или удалите шот из текста сценария")
     if any(x["id"] == sid and x["gen_status"] in ("queued", "running") for x in get_episode(eid)["shots"]):
@@ -2071,7 +2098,7 @@ class CastIn(BaseModel):
 
 @app.put("/api/episodes/{eid}/cast", dependencies=[Depends(auth.need("script"))])
 def set_cast(eid: int, body: CastIn, request: Request):
-    writer_may_edit(request, load_episode_row(eid)["status"])
+    writer_edit(request, eid, "версии персонажей и локаций")
     with db.connect() as c:
         for item in body.cast:
             if item.get("version_id"):
@@ -2215,7 +2242,7 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         if foreign:
             raise HTTPException(403, f"Нет доступа к полям шота: {', '.join(foreign)}. Доступ настраивает админ в «Команде»")
         if set(data) & (WRITER_SHOT_FIELDS - EDITOR_SHOT_FIELDS):
-            writer_may_edit(request, load_episode_row(s["episode_id"])["status"])
+            writer_edit(request, s["episode_id"], f"шот {s['label']} ({', '.join(sorted(set(data) & WRITER_SHOT_FIELDS))})")
     if data.pop("clear_location", False):
         s["location_version_id"] = None
     if data.get("engine") not in (None, *models.ACTIVE_ENGINES):
@@ -2931,17 +2958,66 @@ def badges(request: Request):
                 if me not in (n["seen_by"] or []):
                     notes.append({k: n[k] for k in ("id", "kind", "episode_id", "text", "created_at", "ep_status")})
         new_reports = c.execute("SELECT COUNT(*) FROM reports WHERE status='new'").fetchone()[0] if user["role"] == "admin" else 0
-    return {"urgent": urgent, "notifications": notes, "reports": new_reports}
+        tray = tray_items(c, user)
+    return {"urgent": urgent, "notifications": notes, "reports": new_reports, "tray": tray,
+            "tray_unseen": sum(1 for n in tray if not n["seen"])}
+
+
+TRAY_DAYS = 30
+
+
+def tray_visible(user: dict, n: dict) -> bool:
+    """Трей: «all» видят все; продюсер ещё свои («admin»), нейронщик «editor», сценарист «writer». Свои же события не показываем."""
+    roles = (n["role"] or "").split(",")
+    if n.get("actor_id") and n["actor_id"] == user["id"]:
+        return False
+    return "all" in roles or user["role"] in roles or ("editor" in roles and user["role"] != "admin" and auth.has(user, "generation"))
+
+
+def tray_items(c, user: dict, limit: int = 40) -> list[dict]:
+    since = (date.today() - timedelta(days=TRAY_DAYS)).isoformat()
+    rows = db.rows(c.execute("SELECT n.*, e.status AS ep_status, COALESCE(e.deleted_at,'') AS deleted FROM notifications n "
+                             "LEFT JOIN episodes e ON e.id=n.episode_id WHERE n.created_at >= ? ORDER BY n.created_at DESC, n.id DESC LIMIT 300", (since,)))
+    out = []
+    for n in rows:
+        if n["deleted"] or not tray_visible(user, n):
+            continue
+        out.append({"id": n["id"], "kind": n["kind"], "episode_id": n["episode_id"], "text": n["text"], "created_at": n["created_at"],
+                    "seen": user["id"] in (n["seen_by"] or [])})
+        if len(out) >= limit:
+            break
+    return out
+
+
+class AnnounceIn(BaseModel):
+    text: str
+
+
+@app.post("/api/announce")
+def announce(p: AnnounceIn, request: Request):
+    """Продюсер объявляет команде важное (например, «на сайте появилась такая-то возможность»): попадает в трей всем."""
+    if request.state.user["role"] != "admin":
+        raise HTTPException(403, "Объявления пишет только продюсер")
+    text = p.text.strip()
+    if not text:
+        raise HTTPException(400, "Напишите текст объявления")
+    add_notification("all", "announce", None, text[:500], request.state.user["id"])
+    return {"ok": True}
 
 
 class SeenIn(BaseModel):
     ids: list[int] = []
     episode_id: int | None = None
+    all: bool = False
 
 
 @app.post("/api/notifications/seen")
 def notifications_seen(p: SeenIn, request: Request):
     me = uid(request)
+    if p.all:  # «Отметить всё прочитанным» в трее
+        with db.connect() as c:
+            ids = [n["id"] for n in tray_items(c, request.state.user, 300) if not n["seen"]]
+        p = SeenIn(ids=ids)
     with db.connect() as c:
         q, args = ("SELECT id, seen_by FROM notifications WHERE episode_id=?", (p.episode_id,)) if p.episode_id \
             else (f"SELECT id, seen_by FROM notifications WHERE id IN ({','.join('?' * len(p.ids)) or 'NULL'})", tuple(p.ids))

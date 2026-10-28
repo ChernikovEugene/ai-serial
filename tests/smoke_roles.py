@@ -113,8 +113,8 @@ check("producer approves complete script", st == 200, st)
 # after approval
 st, eps = editor.call("GET", "/api/episodes")
 check("editor sees approved episode", any(e["id"] == eid for e in eps))
-st, _ = writer.call("PUT", f"/api/episodes/{eid}", {"script": script + "\nШот 8\nещё"})
-check("writer cannot edit approved script", st == 403, st)
+st, _ = writer.call("PUT", f"/api/episodes/{eid}", {"script": script})
+check("writer can edit approved script now (producer and editor get a notification)", st == 200, st)
 s1 = ep["shots"][0]
 st, _ = editor.call("PUT", f"/api/shots/{s1['id']}", {"action": "поменял сюжет"})
 check("editor cannot change shot content", st == 403, st)
@@ -243,7 +243,8 @@ check("writer ticks sound_off -> ready", st == 200 and r["sound_off"] and r["rea
 # все шоты заполнены и зелёные -> серия сама переходит в «ТЗ готово»; вернуть в «Пишется ТЗ», чтобы проверять дальше
 check("all shots green -> episode auto-moves to approved", st == 200 and r.get("episode_status") == "approved", (st, r.get("episode_status")))
 st, _ = writer.call("PUT", f"/api/shots/{s4['id']}", {"camera": "Slow push-in"})
-check("writer locked after auto approve", st == 403, st)
+check("writer can still edit after auto approve (notification goes to the tray)", st == 200, st)
+writer.call("PUT", f"/api/shots/{s4['id']}", {"camera": s4["camera"]})
 admin.call("POST", f"/api/episodes/{ep4['id']}/status", {"status": "dev"})
 st, r = editor.call("PUT", f"/api/shots/{s4['id']}", {"engine": "kling", "voiceover": True, "sound_off": False})
 check("editor sets voiceover; replica required again", st == 200 and r["voiceover"] and not r["ready"], (st, r.get("checks")))
@@ -989,3 +990,30 @@ check("shots switched to the active version", any(c["asset_id"] == alt["id"] and
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)
+
+# --- после согласования ТЗ сценарист правит шоты, а продюсер и монтажёр получают уведомление в трее ---
+st, et = writer.call("POST", "/api/episodes", {"title": "Трей", "script": "Шот 1\nМаша сидит.\n\nШот 2\nКостя входит.\n"})
+tid_ = et["id"]; tshots = et["shots"]
+st, _ = admin.call("POST", f"/api/episodes/{tid_}/status", {"status": "approved", "force": True})
+st, r = writer.call("PUT", f"/api/shots/{tshots[0]['id']}", {"action": "Маша встаёт."})
+check("tray: writer may edit a shot after approval", st == 200 and r["action"] == "Маша встаёт.", (st, r))
+st, b = admin.call("GET", "/api/badges")
+tray = b.get("tray", []) if st == 200 else []
+check("tray: producer sees the writer's edit", any(n["kind"] == "writer_edit" and n["episode_id"] == tid_ and "Трей" in n["text"] and not n["seen"] for n in tray), tray)
+st, b = editor.call("GET", "/api/badges")
+check("tray: editor sees the writer's edit", st == 200 and any(n["kind"] == "writer_edit" and n["episode_id"] == tid_ for n in b.get("tray", [])), b)
+st, b = writer.call("GET", "/api/badges")
+check("tray: the author does not get their own edit", st == 200 and not any(n["kind"] == "writer_edit" for n in b.get("tray", [])), b)
+st, _ = writer.call("PUT", f"/api/shots/{tshots[0]['id']}", {"action": "Маша встаёт и уходит."})
+st, b = admin.call("GET", "/api/badges")
+check("tray: repeated edits merge into one item", sum(1 for n in b["tray"] if n["kind"] == "writer_edit" and n["episode_id"] == tid_) == 1, b["tray"])
+st, r = writer.call("DELETE", f"/api/shots/{tshots[1]['id']}")
+check("tray: writer may delete a shot after approval", st == 200 and len(r["shots"]) == 1, (st, r))
+st, _ = admin.call("POST", "/api/notifications/seen", {"all": True})
+st, b = admin.call("GET", "/api/badges")
+check("tray: mark all as read", b["tray_unseen"] == 0 and len(b["tray"]) >= 1, b)
+st, _ = writer.call("POST", "/api/announce", {"text": "x"})
+check("tray: only the producer announces", st == 403, st)
+st, _ = admin.call("POST", "/api/announce", {"text": "Новая кнопка на сайте"})
+st, b = editor.call("GET", "/api/badges")
+check("tray: announcement reaches the team", any(n["kind"] == "announce" and "Новая кнопка" in n["text"] for n in b["tray"]), b["tray"])
