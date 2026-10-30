@@ -295,7 +295,15 @@ export function archiveButton(ep) {
   const v = `v${ep.approved_version}`;
   if (ep.export_status === "building") return `<span class="btn ghost" title="Шоты перекодируются в MP4 FHD 1080x1920, 60 кадров/с">⏳ Архив ${v} собирается…</span>`;
   if (ep.export_status === "error") return `<span class="btn ghost danger" title="${esc(ep.export_error)}">Архив ${v} не собрался: ${esc(ep.export_error)}</span>`;
-  return `<a class="btn primary" href="/api/episodes/${ep.id}/download" title="Шоты отдельными файлами MP4 FHD 1080x1920, 60 кадров/с: папки «номер серии» / «название серии», файлы «название_номер шота»">⬇ Скачать архив ${v}</a>`;
+  // версию можно согласовать не целиком: помечаем, каких шотов в архиве нет
+  let miss = [];
+  try {
+    const picked = JSON.parse(ep.approved_takes || "{}");
+    miss = (ep.shots || []).filter((s) => !picked[String(s.id)]).map((s) => s.label || s.idx);
+  } catch { /* старый формат — без предупреждения */ }
+  const note = miss.length ? ` ⚠ В архиве нет шотов: ${miss.join(", ")} (внутри лежит файл missing_shots.txt со списком)` : "";
+  const tag = miss.length ? ` <span class="warn-t small" title="${esc(note.trim())}">⚠ нет шотов: ${esc(miss.join(", "))}</span>` : "";
+  return `<a class="btn primary" href="/api/episodes/${ep.id}/download" title="Шоты отдельными файлами MP4 FHD 1080x1920, 60 кадров/с: папки «номер серии» / «название серии», файлы «название_номер шота».${esc(note)}">⬇ Скачать архив ${v}</a>${tag}`;
 }
 
 export function drawHeader() {

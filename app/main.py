@@ -2716,8 +2716,6 @@ def approve_version(eid: int, a: ApproveVersionIn, request: Request):
     if a.version < 1 or a.version > top or not any(p["video_path"] for p in picks):
         raise HTTPException(400, f"В версии v{a.version} нет видео")
     empty = [p["label"] or str(p["idx"]) for p in picks if not p["video_path"]]
-    if empty:
-        raise HTTPException(409, f"Версию v{a.version} нельзя согласовать: нет видео у шотов {', '.join(empty)}")
     slug = latin_slug(ep["title"], f"episode_{ep['number'] or eid}")
     folder = f"{ep['number']:02d}" if ep["number"] is not None else f"id{eid}"
     with db.connect() as c:
@@ -2726,8 +2724,8 @@ def approve_version(eid: int, a: ApproveVersionIn, request: Request):
                   "status=CASE WHEN status IN ('generating','fixes','client_review') THEN 'ready' ELSE status END WHERE id=?",
                   (a.version, json.dumps({str(p["shot_id"]): p["take_id"] for p in picks}), uid(request), db.now(),
                    db.now(), eid))
-    db.log(eid, uid(request), f"Согласована версия v{a.version}")
-    exporter.start(eid, a.version, folder, slug, [(p["idx"], p["video_path"]) for p in picks])
+    db.log(eid, uid(request), f"Согласована версия v{a.version}" + (f" (без видео: шоты {', '.join(empty)})" if empty else ""))
+    exporter.start(eid, a.version, folder, slug, [(p["idx"], p["video_path"]) for p in picks if p["video_path"]], missing=empty)
     return get_episode(eid)
 
 

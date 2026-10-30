@@ -289,7 +289,9 @@ function bindChrome() {
   $("#p-prev").onclick = () => { const o = offsets(); seek(R.local > 1 ? o[R.i] : o[Math.max(0, R.i - 1)]); };
   $("#p-next").onclick = () => seek((offsets()[R.i + 1] ?? total() - 0.02));
   $("#approve-ver") && ($("#approve-ver").onclick = async () => {
-    if (!confirm(`Точно согласовать версию №${R.version}? После этого её можно будет скачать архивом: шоты отдельными файлами MP4, FHD 1080x1920, 60 кадров/с.`)) return;
+    const missing = shots().filter((s) => !takeFor(s, R.version)).map((s) => s.label);
+    const warn = missing.length ? `\n\n⚠ Нет видео у шотов: ${missing.join(", ")}. Их в архиве не будет — сможете догенерировать и согласовать заново.` : "";
+    if (!confirm(`Точно согласовать версию №${R.version}? После этого её можно будет скачать архивом: шоты отдельными файлами MP4, FHD 1080x1920, 60 кадров/с.${warn}`)) return;
     await api(`/api/episodes/${E.id}/approve-version`, { json: { version: +R.version } });
     toast(`Версия v${R.version} согласована, собираю архив…`);
     renderEpisode(E.id);

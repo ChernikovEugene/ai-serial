@@ -38,8 +38,8 @@ def transcode(ffmpeg: str, src: Path, dst: Path) -> None:
         raise RuntimeError((r.stderr or "ffmpeg завершился с ошибкой").strip().splitlines()[-1][:300])
 
 
-def build(eid: int, version: int, folder: str, slug: str, shots: list[tuple[int, str]]) -> None:
-    """shots: [(номер шота, путь к видео относительно media)]. Пишет zip в media/exports и обновляет статус сборки."""
+def build(eid: int, version: int, folder: str, slug: str, shots: list[tuple[int, str]], missing: list[str] | None = None) -> None:
+    """shots: [(номер шота, путь к видео относительно media)], missing: подписи шотов без видео. Пишет zip в media/exports и обновляет статус сборки."""
     try:
         ffmpeg = ffmpeg_path()
         if not ffmpeg:
@@ -58,6 +58,10 @@ def build(eid: int, version: int, folder: str, slug: str, shots: list[tuple[int,
                     transcode(ffmpeg, src, dst)
                     z.write(dst, f"{folder}/{slug}/{slug}_{n:02d}.mp4")
                     dst.unlink()
+                if missing:
+                    txt = ("В архиве этой версии нет видео у шотов: " + ", ".join(missing) + ".\r\n"
+                           "Сгенерируйте их и согласуйте версию заново — архив будет полным.\r\n")
+                    z.writestr(f"{folder}/{slug}/missing_shots.txt", txt.encode("utf-8"))
             shutil.move(str(tmp_zip), out)
         status, err = "ready", ""
     except Exception as e:  # noqa: BLE001
@@ -67,8 +71,8 @@ def build(eid: int, version: int, folder: str, slug: str, shots: list[tuple[int,
                   (status, err, eid, version))
 
 
-def start(eid: int, version: int, folder: str, slug: str, shots: list[tuple[int, str]]) -> None:
-    threading.Thread(target=build, args=(eid, version, folder, slug, shots), daemon=True).start()
+def start(eid: int, version: int, folder: str, slug: str, shots: list[tuple[int, str]], missing: list[str] | None = None) -> None:
+    threading.Thread(target=build, args=(eid, version, folder, slug, shots, missing), daemon=True).start()
 
 
 def recover() -> None:
