@@ -7,7 +7,7 @@ import { $, $$, api, esc, media, state, toast } from "./core.js";
 const SIDES = [["start", "Стартовый кадр"], ["end", "Финальный кадр"]];
 const MAX_REFS = 14;
 const open = new Set();      // раскрытые «Выбрать из библиотеки» / «Что уйдёт»: перерисовка их не закрывает
-const picked = new Map();    // «шот:сторона:герой» -> выбранное состояние ("" — основное, иначе id состояния)
+const picked = new Map();    // «шот:сторона:герой» -> массив id отмеченных состояний ("" — основное); пусто/нет записи — показаны все
 const extra = new Map();     // шот -> [id героев и локаций, добавленных из библиотеки сверх тех, что в шоте]
 
 const STATUS = {
@@ -44,10 +44,22 @@ function stateOptions(v) {
 
 const refName = (g, opt, img) => [g.asset.name + (g.version.label ? ` (${g.version.label})` : ""), opt.id ? opt.name : "", img.name].filter(Boolean).join(" · ");
 
-function currentOption(s, side, g, refs) {
-  const opts = stateOptions(g.version);
-  const want = picked.get(`${s.id}:${side}:${g.key}`);
-  return opts.find((o) => o.id === want) || opts.find((o) => o.images.some((i) => refs.some((r) => r.path === i.path))) || opts[0];
+/** Отмеченные состояния группы; пустой массив = ничего не отмечено = показываем все картинки версии. */
+function pickedStates(s, side, g) {
+  return picked.get(`${s.id}:${side}:${g.key}`) || [];
+}
+
+/** Картинки к показу: из отмеченных состояний, а если отметок нет — из всех; без повторов одного и того же файла. */
+function visibleImages(opts, sel) {
+  const shown = sel.length ? opts.filter((o) => sel.includes(o.id)) : opts;
+  const seen = new Set();
+  const out = [];
+  for (const opt of shown) for (const img of opt.images) {
+    if (seen.has(img.path)) continue;
+    seen.add(img.path);
+    out.push({ opt, img });
+  }
+  return out;
 }
 
 // ---------- разметка ----------
@@ -64,12 +76,12 @@ function pickerHtml(s, side, f) {
   const taken = new Set(gs.map((g) => g.asset.id));
   const more = state.assets.filter((a) => !taken.has(a.id));
   return gs.map((g) => {
-    const opt = currentOption(s, side, g, f.refs);
     const opts = stateOptions(g.version);
-    const head = `<div class="row fgroup-head"><b>${esc(g.asset.name)}</b><span class="muted small">${g.asset.kind === "location" ? "локация" : "персонаж"} · v${g.version.version_no} ${esc(g.version.label)}</span>
-      ${opts.length > 1 ? `<select data-fstate="${g.key}" title="Состояние версии">${opts.map((o) => `<option value="${o.id}" ${o === opt ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>` : ""}</div>`;
-    if (!opt) return `<div class="fgroup">${head}<div class="muted small">В этой версии нет картинок. Добавьте их в «Библиотеке».</div></div>`;
-    return `<div class="fgroup">${head}<div class="fthumbs">${opt.images.map((img) => {
+    const sel = pickedStates(s, side, g);
+    const head = `<div class="fgroup-head"><b>${esc(g.asset.name)}</b><span class="muted small">${g.asset.kind === "location" ? "локация" : "персонаж"} · v${g.version.version_no} ${esc(g.version.label)}</span>
+      ${opts.length > 1 ? `<span class="fstate-picks" title="Отметьте одно или несколько состояний; без отметок показаны все картинки">${opts.map((o) => `<label class="check small"><input type="checkbox" data-fstate="${g.key}" value="${o.id}" ${sel.includes(o.id) ? "checked" : ""}> ${esc(o.name)}</label>`).join("")}</span>` : ""}</div>`;
+    if (!opts.length) return `<div class="fgroup">${head}<div class="muted small">В этой версии нет картинок. Добавьте их в «Библиотеке».</div></div>`;
+    return `<div class="fgroup">${head}<div class="fthumbs">${visibleImages(opts, sel).map(({ opt, img }) => {
       const on = f.refs.some((r) => r.path === img.path);
       return `<button type="button" class="fthumb ${on ? "on" : ""}" data-fpick="${esc(img.path)}" data-fname="${esc(refName(g, opt, img))}" data-fkind="${g.asset.kind}" title="${esc(img.name || opt.name)}">
         <img src="${media(img.path)}">${on ? `<i>✓</i>` : ""}<span>${esc(img.name || opt.name)}</span></button>`;
@@ -232,8 +244,10 @@ export function bindFrames(s, hooks) {
       if (refs.length >= MAX_REFS) return toast(`Nano Banana 2.1 принимает до ${MAX_REFS} картинок`, true);
       setRefs([...refs, { path, name: b.dataset.fname, kind: b.dataset.fkind }]);
     }));
-    $$("[data-fstate]", fr).forEach((sel) => (sel.onchange = () => {
-      picked.set(`${s.id}:${side}:${sel.dataset.fstate}`, sel.value);
+    $$("[data-fstate]", fr).forEach((box) => (box.onchange = () => {
+      const key = `${s.id}:${side}:${box.dataset.fstate}`;
+      const sel = picked.get(key) || [];
+      picked.set(key, box.checked ? [...new Set([...sel, box.value])] : sel.filter((id) => id !== box.value));
       open.add(`${s.id}:${side}:lib`);
       redraw(cur());
     }));

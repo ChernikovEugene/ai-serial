@@ -708,6 +708,27 @@ def load_version(asset_id: int, version_id: int) -> tuple[dict, dict]:
     return a, v
 
 
+class DescriptionIn(BaseModel):
+    description: str = ""
+
+
+@app.put("/api/assets/{asset_id}/versions/{version_id}/description", dependencies=[Depends(auth.need("library"))])
+def update_version_description(asset_id: int, version_id: int, p: DescriptionIn):
+    """Правка промпта-описания версии без создания новой. Промпты шотов с этой версией пересобираются
+    (кроме закреплённых вручную и выложенных серий — как при удалении версии)."""
+    load_version(asset_id, version_id)
+    with db.connect() as c:
+        c.execute("UPDATE asset_versions SET description=? WHERE id=?", (p.description, version_id))
+        shots = _version_usage(c, asset_id, version_id)["shots"]
+    ctx = Ctx()
+    with db.connect() as c:
+        for sh in db.rows(c.execute(f"SELECT s.* FROM shots s JOIN episodes e ON e.id=s.episode_id WHERE s.id IN "
+                                    f"({','.join('?' * len(shots)) or 'NULL'}) AND e.status<>'posted'", shots)):
+            refresh_shot(sh, ctx)
+            save_shot(c, sh)
+    return get_asset(asset_id)
+
+
 @app.post("/api/assets/{asset_id}/versions/{version_id}/images", dependencies=[Depends(auth.need("library"))])
 def add_version_images(asset_id: int, version_id: int, images: list[UploadFile] = File(default=[])):
     """Догрузить фото в версию (ракурсы со всех сторон). Первое фото версии остаётся главным референсом."""
@@ -2227,7 +2248,8 @@ def shot_response(sid: int) -> dict:
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
                        "location_mode", "location_text", "sound_off", "sound_mode", "no_characters", "voiceover"}
 EDITOR_SHOT_FIELDS = {"sound_off", "sound_mode", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
-                      "prompt_locked", "needs_redo", "engine", "farm_action", "farm_voice", "farm_camera", "farm_shot_size", "farm_quality", "farm_len"}
+                      "prompt_locked", "needs_redo", "engine", "farm_action", "farm_voice", "farm_camera", "farm_shot_size", "farm_quality", "farm_len",
+                      "characters"}  # characters: монтажёр выбирает версии персонажей в кадре (его рабочая среда)
 
 
 @app.put("/api/shots/{sid}")
@@ -3083,8 +3105,8 @@ def delete_template(tid: int):
 # ---------- settings ----------
 
 # farmhub_api_key, farmhub_webhook_secret и anthropic_api_key: прежние схемы связи с фермой и перевода; значения, если их успели вписать, остаются в базе и не отдаются
-SECRET_SETTINGS = ("veo_api_key", "github_token", "magnific_api_key", "farmhub_secret", "farmhub_api_key", "farmhub_webhook_secret", "anthropic_api_key")
-PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "dialogue_language", "words_per_second", "max_shot_seconds"}
+SECRET_SETTINGS = ("veo_api_key", "veo_api_key_2", "github_token", "magnific_api_key", "farmhub_secret", "farmhub_api_key", "farmhub_webhook_secret", "anthropic_api_key")
+PROMPT_SETTINGS = {"style", "consistency_character", "consistency_location", "aspect_ratio", "veo_model", "veo_route", "words_per_second", "max_shot_seconds"}
 
 
 @app.get("/api/settings")

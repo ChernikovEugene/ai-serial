@@ -36,7 +36,7 @@ export function startBadges() {
 export function stopBadges() { clearTimeout(timer); timer = null; known = null; trayKnown = null; $("#tray")?.remove(); }
 
 // ---------- трей уведомлений (колокольчик справа вверху) ----------
-const KIND_ICON = { writer_edit: "✏️", episode_new: "🆕", generated: "🎬", announce: "📣" };
+const KIND_ICON = { writer_edit: "✏️", episode_new: "🆕", generated: "🎬", announce: "📣", api_key: "🔑" };
 let trayOpen = false;
 
 function ago(iso) {

@@ -229,7 +229,7 @@ def _run_google(sid: int, side: str, req: dict, settings: dict, stamp: str) -> N
     if not key:
         raise RuntimeError("Не указан API-ключ Google (Gemini API) в настройках")
     try:
-        resp = veo._http("POST", veo.API_BASE + req["path"], key, req["body"], timeout=300)
+        resp, key = veo.google_post(sid, settings, veo.API_BASE + req["path"], req["body"], timeout=300)  # при лимите основного ключа — резервный
     except RuntimeError as e:
         raise RuntimeError(f"Google: {e}") from None
     if not _alive(sid, side, stamp):

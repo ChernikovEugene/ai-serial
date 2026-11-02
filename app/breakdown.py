@@ -724,7 +724,6 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
     manual=True — промпт для ручной генерации (Magnific и другие сервисы в браузере): картинки называются латинскими
     метками из библиотеки (@altushka), ограничений нейросети по числу и видам референсов нет — человек сам загружает
     файлы с такими именами, и сервис связывает их с текстом по имени."""
-    lang = settings.get("dialogue_language") or "Russian"
     engine = shot.get("engine") or models.DEFAULT_ENGINE
     m = models.spec(engine)
     if manual:
@@ -859,7 +858,7 @@ def build_prompt(shot: dict, versions: dict, assets: dict, settings: dict,
             how = f", {d['parenthetical']}" if d.get("parenthetical") else ""
             voice = " " + _sent(f"Voice: {v['voice']}") if v and v.get("voice") else ""
             who = _cap(label[d["asset_id"]]) if d.get("asset_id") in label else (d["speaker"] or "A character")
-            parts.append(f'{who} says in {lang}{how}: "{d["text"].strip()}"{voice}')
+            parts.append(f'{who} says{how}: "{d["text"].strip()}"{voice}')  # язык не указываем: реплики и так пишутся на русском
         parts.append("Lip-sync the spoken lines. No background music.")
     elif shot.get("dialogue"):
         # voice-over only: the voice is recorded separately, so nobody on screen speaks

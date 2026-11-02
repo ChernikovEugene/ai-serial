@@ -158,11 +158,11 @@ function schedulePoll() {
 }
 
 function draw() {
-  view().innerHTML = `<div id="ep-header"></div>
+  view().innerHTML = `<div class="ep-top"><div id="ep-header"></div>
     <div class="tabs">
       ${[["script", "Сценарий"], ["shots", "Шоты"], ["review", "Просмотр и правки"], ["main", "Информация"], ["history", "История"]]
         .map(([k, n]) => `<button class="tab ${E.tab === k ? "on" : ""}" data-tab="${k}">${n}</button>`).join("")}
-    </div>
+    </div></div>
     <div id="ep-tab"></div>`;
   $$("[data-tab]").forEach((b) => (b.onclick = () => replaceHash(`#/episodes/${E.id}/${b.dataset.tab}`)));
   drawHeader();
@@ -847,7 +847,7 @@ function shotHtml(s) {
       <div class="chips">${s.characters.map((c, i) => {
         const a = chars.find((x) => x.id === c.asset_id);
         return `<span class="chip" style="--c:${a ? assetColor(a) : "var(--line)"}">${esc(c.name)}
-          <select data-char="${i}" ${roW}>${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
+          <select data-char="${i}" ${canWrite() || can.gen() ? "" : "disabled"} title="Версия персонажа (доступна и монтажёру)">${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
           ${canWrite() ? `<button data-rmchar="${i}" title="Убрать">✕</button>` : ""}</span>`;
       }).join("") || (s.no_characters ? `<span class="chip">без персонажей ${canWrite() ? `<button data-nochar="0" title="Убрать">✕</button>` : ""}</span>` : `<span class="muted small need-t">не выбраны</span>`)}
         ${canWrite() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>

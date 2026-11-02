@@ -45,6 +45,7 @@ export async function renderSettings() {
           <option value="google" ${s.omni_route !== "magnific" ? "selected" : ""}>Google напрямую (Gemini API, ключ Google)</option>
           <option value="magnific" ${s.omni_route === "magnific" ? "selected" : ""}>Magnific (когда там откроют Omni в API)</option></select>
         ${field("veo_api_key", "API-ключ Google (Gemini API; aistudio.google.com/apikey, нужен платный аккаунт с оплатой за использование)", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
+        ${field("veo_api_key_2", "Резервный API-ключ Google (по желанию): если основной упёрся в дневной лимит, студия сама переключится на резервный и пришлёт уведомление", "input", `type="password" placeholder="AIza…" autocomplete="off"`)}
         ${field("public_base_url", "Публичный адрес студии (например, https://pari-altushka.ru), по желанию", "input", `placeholder="пусто: студия на ноутбуке"`)}
         <p class="muted small">Если указан, картинки кадров для Gemini Omni уходят в Magnific защищённой ссылкой на студию, а не файлом внутри запроса.</p>
         <details style="margin-top:8px"><summary class="muted small">Адрес Gemini Omni в Magnific (нужен, только если выбрана доставка через Magnific)</summary>

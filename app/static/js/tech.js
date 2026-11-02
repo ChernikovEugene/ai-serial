@@ -34,8 +34,7 @@ export async function renderTech() {
         <div class="row"><div style="flex:1">${field("aspect_ratio", "Соотношение сторон")}</div>
           <div style="flex:1">${field("resolution", "Разрешение (720p / 1080p)")}</div>
           <div style="flex:1">${field("max_shot_seconds", "Лимит шота, с")}</div></div>
-        <div class="row"><div style="flex:1">${field("dialogue_language", "Язык реплик")}</div>
-          <div style="flex:1">${field("words_per_second", "Темп речи, слов/с")}</div></div>
+        <div class="row"><div style="flex:1">${field("words_per_second", "Темп речи, слов/с")}</div></div>
       </div>
       <div class="card">
         <h3 style="margin-top:0">Промпт</h3>

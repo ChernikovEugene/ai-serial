@@ -66,7 +66,11 @@ export async function renderAsset(id) {
         ${can.library() ? `<div class="dropzone" id="add-photos" style="margin-top:10px"></div>
           <div class="muted small" style="margin-top:4px">Добавляйте сколько угодно фото: ракурсы со всех сторон, крупно лицо, в полный рост${a.kind === "location" ? ", разные углы помещения" : ""}. Первое фото — главный референс для видеогенератора, звёздочка ★ делает главным другое.</div>` : ""}
         ${statesHtml(a, active)}
-        <label>Описание для промпта</label><div class="pre">${esc(active.description) || `<span class="muted">—</span>`}</div>
+        <label>Описание для промпта</label>
+        ${can.library() ? `<textarea id="desc-edit" rows="7">${esc(active.description)}</textarea>
+          <div class="row" style="margin-top:6px"><span class="muted small">Сохранение пересоберёт промпты шотов с этой версией (кроме изменённых вручную и выложенных серий).</span>
+            <div class="spacer"></div><button id="save-desc">Сохранить описание</button></div>`
+          : `<div class="pre">${esc(active.description) || `<span class="muted">—</span>`}</div>`}
         ${a.kind === "character" ? `<label>Голос</label><div>${esc(active.voice) || `<span class="muted">—</span>`}</div>` : ""}
         ${active.notes ? `<label>Заметки</label><div class="pre">${esc(active.notes)}</div>` : ""}
         ${can.library() ? `<div class="row" style="margin-top:14px"><button class="primary" id="new-ver">+ Новая версия на основе активной</button></div>` : ""}
@@ -89,6 +93,11 @@ export async function renderAsset(id) {
   $("#copy").onclick = () => { navigator.clipboard.writeText(handle(a.name)); toast("Скопировано"); };
   $$("[data-copy]").forEach((b) => (b.onclick = () => copyImage(media(b.closest("[data-img]").dataset.img))));
   if (!can.library()) return;
+  $("#save-desc").onclick = async () => {
+    await api(`/api/assets/${id}/versions/${active.id}/description`, { method: "PUT", json: { description: $("#desc-edit").value } });
+    toast("Описание сохранено, промпты шотов пересобраны");
+    renderAsset(id);
+  };
   const setImages = async (images) => {
     await api(`/api/assets/${id}/versions/${active.id}/images`, { method: "PUT", json: { images } });
     renderAsset(id);
@@ -261,8 +270,8 @@ function versionDialog({ kind, asset, base }) {
     <textarea id="v-desc" rows="4">${esc(base?.description || "")}</textarea>
     ${isChar ? `<label>Голос (тембр, манера речи)</label><input id="v-voice" value="${esc(base?.voice || "")}" placeholder="young female voice, sarcastic, fast">` : ""}
     <label>Заметки для команды (в промпт не идут)</label><textarea id="v-notes" rows="2">${esc(base?.notes || "")}</textarea>
-    ${base?.images?.length ? `<label>Фото из v${base.version_no} — снимите галочку, чтобы не переносить</label>
-      <div class="img-pick">${base.images.map((p) => `<label><input type="checkbox" checked value="${esc(p)}"><img src="${media(p)}"></label>`).join("")}</div>` : ""}
+    ${base?.images?.length ? `<label>Фото из v${base.version_no} — по умолчанию не переносятся; отметьте те, что нужны в новой версии</label>
+      <div class="img-pick">${base.images.map((p) => `<label><input type="checkbox" value="${esc(p)}"><img src="${media(p)}"></label>`).join("")}</div>` : ""}
     <label>Фото (PNG / JPG / WEBP): сколько угодно, лучше со всех сторон. Первое фото — главный референс для видеогенератора.</label>
     <div class="dropzone" id="v-drop"></div>
     <div class="img-new" id="v-new"></div>

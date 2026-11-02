@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 from . import breakdown, db, models
 
@@ -96,6 +97,35 @@ def _http(method: str, url: str, key: str, body: dict | None = None, raw=False, 
     return data if raw else json.loads(data)
 
 
+def google_post(shot_id: int, settings: dict, url: str, body: dict, timeout: int = 180) -> tuple[dict, str]:
+    """POST в Gemini API. Если основной ключ упёрся в лимит (HTTP 429) и в настройках заполнен резервный —
+    повторяем запрос на резервном и шлём уведомление. Возвращает (ответ, использованный ключ):
+    этим же ключом нужно опрашивать операцию и скачивать результат."""
+    key = settings.get("veo_api_key", "").strip()
+    backup = settings.get("veo_api_key_2", "").strip()
+    try:
+        return _http("POST", url, key, body, timeout=timeout), key
+    except RuntimeError as e:
+        if not backup or "HTTP 429" not in str(e):
+            raise
+        _notify_backup_key(shot_id)
+        return _http("POST", url, backup, body, timeout=timeout), backup
+
+
+def _notify_backup_key(shot_id: int) -> None:
+    """Уведомление продюсеру и монтажёру о переходе на резервный ключ (не чаще одного раза в 6 часов)."""
+    with db.connect() as c:
+        cutoff = (datetime.now() - timedelta(hours=6)).isoformat(timespec="seconds")
+        if c.execute("SELECT 1 FROM notifications WHERE kind='api_key' AND created_at>=?", (cutoff,)).fetchone():
+            return
+        ep = c.execute("SELECT episode_id FROM shots WHERE id=?", (shot_id,)).fetchone()
+        eid = ep[0] if ep else None
+        text = "Основной ключ Google исчерпал дневной лимит: генерация автоматически переключена на резервный ключ"
+        for role in ("admin", "editor"):
+            c.execute("INSERT INTO notifications(role, kind, episode_id, text, created_at) VALUES (?,?,?,?,?)",
+                      (role, "api_key", eid, text, db.now()))
+
+
 def _cancelled(take_id: int) -> bool:
     with db.connect() as c:
         row = c.execute("SELECT status FROM takes WHERE id=?", (take_id,)).fetchone()
@@ -165,7 +195,7 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
             if not key:
                 raise RuntimeError("Не указан API-ключ Google (Gemini API) в настройках")
             try:  # Interactions API отвечает сразу готовым видео: запрос идёт долго (минуты), опроса нет
-                resp = _http("POST", f"{API_BASE}/interactions", key, omni_request(shot, settings, True), timeout=900)
+                resp, key = google_post(shot_id, settings, f"{API_BASE}/interactions", omni_request(shot, settings, True), timeout=900)
             except RuntimeError as e:
                 raise RuntimeError(f"Google: {e}") from None
             if _cancelled(take_id):
@@ -180,8 +210,8 @@ def _run(take_id: int, shot: dict, refs: list[dict], settings: dict):
         if not key:
             raise RuntimeError("Не указан API-ключ Veo в настройках")
         model = settings.get("veo_model", "veo-3.1-generate-preview")
-        op = _http("POST", f"{API_BASE}/models/{model}:predictLongRunning", key,
-                   build_request(shot, refs, settings, inline_images=True))
+        op, key = google_post(shot_id, settings, f"{API_BASE}/models/{model}:predictLongRunning",
+                              build_request(shot, refs, settings, inline_images=True))
         _remember(take_id, op["name"], "google")
         _wait_google(take_id, shot_id, base, op["name"], key, req_rel)
     except Exception as e:  # noqa: BLE001 - surface any failure in the UI
