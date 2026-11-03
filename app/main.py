@@ -513,6 +513,20 @@ def writer_edit(request: Request, eid: int, what: str) -> None:
     db.log(eid, user["id"], f"Правка после согласования ТЗ: {what}")
 
 
+def content_edit(request: Request, eid: int, what: str) -> None:
+    """Правка содержимого серии/шота (тексты, реплики, персонажи, локации).
+    Монтажёр имеет полный доступ к карточкам шотов — продюсер получает уведомление о КАЖДОЙ такой правке
+    (повторы того же автора по той же серии за 15 минут сливаются). Сценарист — как раньше, через writer_edit."""
+    user = request.state.user
+    if user["role"] == "editor":
+        ep = load_episode_row(eid)
+        add_notification("admin", "editor_edit", eid, f"{user['name']} (монтажёр) изменил(а) серию {ep_name(ep)}: {what}",
+                         user["id"], merge=True)
+        db.log(eid, user["id"], f"Правка монтажёра: {what}")
+        return
+    writer_edit(request, eid, what)
+
+
 def incomplete_shots(eid: int) -> list[str]:
     ep = get_episode(eid)
     if not ep["shots"]:
@@ -1705,7 +1719,7 @@ def update_episode(eid: int, p: EpisodePatch, request: Request, reparse: bool = 
     if set(changes) - {"script"} and not auth.has(user, "episodes"):
         raise HTTPException(403, "Нет доступа: серии. Доступ настраивает админ в «Команде»")
     if set(changes) - ANY_STAGE_FIELDS:  # описание для поста и «срочно» сценарист правит на любом этапе
-        writer_edit(request, eid, "сценарий" if "script" in changes else "данные серии")
+        content_edit(request, eid, "сценарий" if "script" in changes else "данные серии")
     with db.connect() as c:
         for k, v in changes.items():
             if v is not None:
@@ -2018,7 +2032,7 @@ def apply_breakdown(eid: int, only_new: bool = False, drop_id: int | None = None
 
 @app.post("/api/episodes/{eid}/breakdown", dependencies=[Depends(auth.need("script"))])
 def breakdown_episode(eid: int, request: Request):
-    writer_edit(request, eid, "сценарий заново разобран на шоты")
+    content_edit(request, eid, "сценарий заново разобран на шоты")
     apply_breakdown(eid)
     promote_if_ready(eid, uid(request))
     return get_episode(eid)
@@ -2082,7 +2096,7 @@ def delete_shot(sid: int, request: Request):
     eid = s["episode_id"]
     visible_or_404(request, eid)
     ep = load_episode_row(eid)
-    writer_edit(request, eid, f"удалён шот {s['label']}")
+    content_edit(request, eid, f"удалён шот {s['label']}")
     if not breakdown.has_markers(ep["script"]):
         raise HTTPException(400, "В сценарии нет пометок «Шот 1», «Шот 2»… — расставьте их на вкладке «Сценарий» или удалите шот из текста сценария")
     if any(x["id"] == sid and x["gen_status"] in ("queued", "running") for x in get_episode(eid)["shots"]):
@@ -2119,7 +2133,7 @@ class CastIn(BaseModel):
 
 @app.put("/api/episodes/{eid}/cast", dependencies=[Depends(auth.need("script"))])
 def set_cast(eid: int, body: CastIn, request: Request):
-    writer_edit(request, eid, "версии персонажей и локаций")
+    content_edit(request, eid, "версии персонажей и локаций")
     with db.connect() as c:
         for item in body.cast:
             if item.get("version_id"):
@@ -2244,12 +2258,12 @@ def shot_response(sid: int) -> dict:
     return shot_out(s, Ctx(), takes)
 
 
-# Content belongs to the writer, generation settings to the editor (the producer may touch both).
+# Content: the writer and the editor (the producer may touch both); generation settings: the editor.
 WRITER_SHOT_FIELDS = {"scene", "camera", "action", "dialogue", "characters", "location_version_id", "clear_location",
                        "location_mode", "location_text", "sound_off", "sound_mode", "no_characters", "voiceover"}
-EDITOR_SHOT_FIELDS = {"sound_off", "sound_mode", "voiceover", "duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
+EDITOR_SHOT_FIELDS = {"duration", "composition_mode", "composition_note", "prompt", "negative_prompt",
                       "prompt_locked", "needs_redo", "engine", "farm_action", "farm_voice", "farm_camera", "farm_shot_size", "farm_quality", "farm_len",
-                      "characters"}  # characters: монтажёр выбирает версии персонажей в кадре (его рабочая среда)
+                      } | WRITER_SHOT_FIELDS  # монтажёр правит карточку шота целиком; продюсер получает уведомление (content_edit)
 
 
 @app.put("/api/shots/{sid}")
@@ -2263,8 +2277,8 @@ def update_shot(sid: int, p: ShotPatch, request: Request):
         foreign = sorted(set(data) - own)
         if foreign:
             raise HTTPException(403, f"Нет доступа к полям шота: {', '.join(foreign)}. Доступ настраивает админ в «Команде»")
-        if set(data) & (WRITER_SHOT_FIELDS - EDITOR_SHOT_FIELDS):
-            writer_edit(request, s["episode_id"], f"шот {s['label']} ({', '.join(sorted(set(data) & WRITER_SHOT_FIELDS))})")
+        if set(data) & WRITER_SHOT_FIELDS:
+            content_edit(request, s["episode_id"], f"шот {s['label']} ({', '.join(sorted(set(data) & WRITER_SHOT_FIELDS))})")
     if data.pop("clear_location", False):
         s["location_version_id"] = None
     if data.get("engine") not in (None, *models.ACTIVE_ENGINES):

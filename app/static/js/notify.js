@@ -36,7 +36,7 @@ export function startBadges() {
 export function stopBadges() { clearTimeout(timer); timer = null; known = null; trayKnown = null; $("#tray")?.remove(); }
 
 // ---------- трей уведомлений (колокольчик справа вверху) ----------
-const KIND_ICON = { writer_edit: "✏️", episode_new: "🆕", generated: "🎬", announce: "📣", api_key: "🔑" };
+const KIND_ICON = { writer_edit: "✏️", editor_edit: "✂️", episode_new: "🆕", generated: "🎬", announce: "📣", api_key: "🔑" };
 let trayOpen = false;
 
 function ago(iso) {
@@ -95,7 +95,7 @@ export function drawTray() {
     }
     trayOpen = false;
     drawTray();
-    if (row.dataset.ep) location.hash = `#/episodes/${row.dataset.ep}/${n?.kind === "writer_edit" ? "shots" : "main"}`;
+    if (row.dataset.ep) location.hash = `#/episodes/${row.dataset.ep}/${["writer_edit", "editor_edit"].includes(n?.kind) ? "shots" : "main"}`;
   }));
   $("[data-tray-say]", el)?.addEventListener("click", async () => {
     const ta = $("textarea", el);

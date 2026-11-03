@@ -269,6 +269,7 @@ const EDITABLE_STATUSES = ["synopsis", "synopsis_review", "synopsis_ok", "dev", 
 const writerLocked = () => false; // после согласования ТЗ сценарист тоже правит: продюсер и монтажёр получают уведомление
 const afterApproval = () => !["admin", "editor"].includes(state.meta.user.role) && !EDITABLE_STATUSES.includes(E.ep.status);
 const canWrite = () => can.write() && !writerLocked();
+const canShot = () => canWrite() || can.gen(); // монтажёр полноценно правит карточку шота (тексты, реплики, герои); продюсер получает уведомление
 const canEp = () => can.episodes() && !writerLocked(); // название и синопсис серии
 
 const canPost = () => can.episodes(); // описание поста — на любом этапе
@@ -800,7 +801,7 @@ function shotHtml(s) {
   const camCustom = customCam.has(s.id) || !CAMERA_PRESETS.some(([, v]) => v === s.camera);
   const locText = s.location_mode === "text"; // одноразовая локация: описание вместо выбора из библиотеки
   const curLoc = locs.find((v) => v.id === s.location_version_id);
-  const roW = canWrite() ? "" : "disabled"; // content: the writer's part
+  const roW = canShot() ? "" : "disabled"; // content: писатель и монтажёр
   const roG = can.gen() ? "" : "disabled";  // generation: the editor's part
   const sel = s.selected_take;
   const omni = !!engineInfo(s.engine).frames; // Gemini Omni: на вход старт- и финальный кадры (блок «Кадры для Gemini Omni»), композиция и референсы к видео не нужны
@@ -829,7 +830,7 @@ function shotHtml(s) {
       ${can.gen() ? `${engineInfo(s.engine).api ? "" : `<div class="small muted">Шот делается в «${esc(engineName(s.engine))}»: через API он не уходит. Сделайте видео там и загрузите файл.</div>`}
            <button data-act="copyprompt">Скопировать промпт</button>
            <label class="btn primary up-label">Загрузить готовое видео<input type="file" accept="video/mp4,video/quicktime,video/webm" data-upload hidden></label>` : ""}
-      ${canWrite() ? `<button class="ghost small danger" data-act="rmshot" title="Убрать шот из серии вместе с его дублями">🗑 Удалить шот</button>` : ""}
+      ${canShot() ? `<button class="ghost small danger" data-act="rmshot" title="Убрать шот из серии вместе с его дублями">🗑 Удалить шот</button>` : ""}
     </div>
     <div class="shot-main">
       <section class="sec sec-scene"><h4 class="sec-h"><span class="sec-i">📍</span>Сцена <span class="sec-sum">где и кто в кадре</span></h4>
@@ -847,10 +848,10 @@ function shotHtml(s) {
       <div class="chips">${s.characters.map((c, i) => {
         const a = chars.find((x) => x.id === c.asset_id);
         return `<span class="chip" style="--c:${a ? assetColor(a) : "var(--line)"}">${esc(c.name)}
-          <select data-char="${i}" ${canWrite() || can.gen() ? "" : "disabled"} title="Версия персонажа (доступна и монтажёру)">${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
-          ${canWrite() ? `<button data-rmchar="${i}" title="Убрать">✕</button>` : ""}</span>`;
-      }).join("") || (s.no_characters ? `<span class="chip">без персонажей ${canWrite() ? `<button data-nochar="0" title="Убрать">✕</button>` : ""}</span>` : `<span class="muted small need-t">не выбраны</span>`)}
-        ${canWrite() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>
+          <select data-char="${i}" ${roW} title="Версия персонажа">${(a ? a.versions : []).map((v) => `<option value="${v.id}" ${v.id === c.version_id ? "selected" : ""}>v${v.version_no} ${esc(v.label)}</option>`).join("")}</select>
+          ${canShot() ? `<button data-rmchar="${i}" title="Убрать">✕</button>` : ""}</span>`;
+      }).join("") || (s.no_characters ? `<span class="chip">без персонажей ${canShot() ? `<button data-nochar="0" title="Убрать">✕</button>` : ""}</span>` : `<span class="muted small need-t">не выбраны</span>`)}
+        ${canShot() ? `<select data-addchar style="width:auto"><option value="">+ добавить</option>
           ${s.characters.length || s.no_characters ? "" : `<option value="none">— без персонажей (пейзаж, макро)</option>`}
           ${chars.filter((a) => !s.characters.some((c) => c.asset_id === a.id)).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>` : ""}
       </div></section>
@@ -879,11 +880,11 @@ function shotHtml(s) {
           <select data-d="voice" ${roW} title="Как звучит реплика">${Object.entries(VOICE).map(([k, n]) => `<option value="${k}" ${(d.voice || "direct") === k ? "selected" : ""}>${n}</option>`).join("")}</select>
           <input data-d="parenthetical" class="${d.auto && !d.parenthetical ? "need-red" : ""}" value="${esc(d.parenthetical)}" placeholder="как (тихо)" ${roW}>
           <span class="dlg-t" title="Примерная длина реплики">${s.words ? `~${(s.speech_seconds * speechWords(d) / s.words).toFixed(1)} с` : ""}</span>
-          ${canWrite() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}
+          ${canShot() ? `<button class="ghost" data-rmline="${i}" title="Удалить реплику">✕</button>` : ""}
           <input data-d="text" value="${esc(d.text)}" placeholder="Текст реплики" ${roW}>
           ${voiceHtml(s, i, d)}</div>`).join("") || `<div class="muted small">без реплик</div>`}</div>
       ${canVoice() && s.dialogue.length ? `<details class="hint"><summary>про «Записать голос»</summary>На ферме запись становится речью шота, остальные нейросети её не берут. Запись можно прослушать, увидеть её длину, оставить или удалить.</details>` : ""}
-      ${canWrite() ? `<button class="ghost add-line" data-act="addline">+ реплика</button>` : ""}
+      ${canShot() ? `<button class="ghost add-line" data-act="addline">+ реплика</button>` : ""}
       </fieldset></section>
       <datalist id="char-names-${s.id}">${[...s.characters.map((c) => c.name), ...chars.map((a) => a.name)].filter((n, i, arr) => arr.indexOf(n) === i).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       ${s.warnings.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
@@ -1068,7 +1069,7 @@ function bindShot(s) {
   const save = async (patch) => replaceShot(await api(`/api/shots/${s.id}`, { method: "PUT", json: patch }));
   // «@» в текстовых полях шота подсказывает персонажей и локации из библиотеки (как в сценарии); выбор сразу сохраняется
   $$("[data-f=action], [data-f=camera]", el).forEach(attachHighlight); // герои из библиотеки подсвечены цветом
-  if (canWrite()) {
+  if (canShot()) {
     $$("[data-f=action], [data-f=camera], [data-d=text], [data-d=parenthetical]", el)
       .forEach((inp) => attachMentions(inp, () => inp.dispatchEvent(new Event("change"))));
   }

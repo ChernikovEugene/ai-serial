@@ -117,7 +117,9 @@ st, _ = writer.call("PUT", f"/api/episodes/{eid}", {"script": script})
 check("writer can edit approved script now (producer and editor get a notification)", st == 200, st)
 s1 = ep["shots"][0]
 st, _ = editor.call("PUT", f"/api/shots/{s1['id']}", {"action": "поменял сюжет"})
-check("editor cannot change shot content", st == 403, st)
+check("editor can change shot content now", st == 200, st)
+st, b = admin.call("GET", "/api/badges")
+check("producer gets a notification about the editor's edit", st == 200 and any(n["kind"] == "editor_edit" and n["episode_id"] == eid for n in b.get("tray", [])), b)
 st, _ = writer.call("PUT", f"/api/shots/{s1['id']}", {"prompt": "x"})
 check("writer cannot change prompt", st == 403, st)
 
