@@ -9,18 +9,19 @@ const STAGES = [
   { name: "Синопсис", color: "#7fb2ff" },
   { name: "Сценарий", color: "#f5b642" },
   { name: "Генерация", color: "#b36bff" },
-  { name: "Монтаж", color: "#ff8a3d" },
+  { name: "У клиента", color: "#ff6fa8" },
   { name: "Готов к выкладке", color: "#3ccf7e" },
   { name: "Выложено", color: "#25d0d6" },
 ];
 // Какой статус серии в приложении к какому этапу относится. До генерации (синопсис … ТЗ готово) этап зависит от текста:
-// сценарий прописан — «Сценарий», нет — «Синопсис» (см. stageOf).
+// сценарий прописан — «Сценарий», нет — «Синопсис» (см. stageOf). Только на этой странице «Генерация» включает и монтаж
+// (статус «Монтаж»), а ролик у клиента — отдельный этап «У клиента»; статусы серий в остальной студии не меняются.
 const PRE_GEN = ["synopsis", "synopsis_review", "synopsis_ok", "dev", "review", "approved"];
-const STAGE_BY_STATUS = { generating: 3, fixes: 4, client_review: 4, ready: 5, posted: 6 };
+const STAGE_BY_STATUS = { generating: 3, fixes: 3, client_review: 4, ready: 5, posted: 6 };
 const SYN_SUB = { synopsis_review: "у клиента", synopsis_ok: "согласован", dev: "сценарий не прописан",
   review: "сценарий не прописан", approved: "сценарий не прописан" };
 const SCRIPT_SUB = { dev: "пишется ТЗ", review: "ТЗ на проверке", approved: "ТЗ готово" };
-const SEG_LABELS = ["Синопсис", "Сценарий", "Генерация", "Монтаж", "К выкладке", "Выложено"];
+const SEG_LABELS = ["Синопсис", "Сценарий", "Генерация", "У клиента", "К выкладке", "Выложено"];
 const READY = 5, POSTED = 6;
 const WD_SHORT = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
 const WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
@@ -72,7 +73,7 @@ function buildRows(data, today) {
     const todayBad = isToday && stage < READY;
     const risk = diff > 0 && diff <= 2 && stage < READY;
     const sub = stage === 1 ? SYN_SUB[ep.status] : stage === 2 ? SCRIPT_SUB[ep.status] : "";
-    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет синопсиса" : sub ? `${STAGES[stage].name} · ${sub}` : ep.status === "client_review" ? "Ролик у клиента" : STAGES[stage].name;
+    const label = !ep ? "Не начато · серии нет" : stage === 0 ? "Не начато · нет синопсиса" : sub ? `${STAGES[stage].name} · ${sub}` : ep.status === "client_review" ? "Ролик у клиента" : STAGES[stage].name; // монтаж — тоже «Генерация»
     let flag = "", flagCls = "";
     if (late) { flag = `Просрочено на ${-diff} ${plural(-diff)}`; flagCls = "bad"; }
     else if (todayBad) { flag = "Сегодня выход, а ролик не готов"; flagCls = "bad"; }
