@@ -947,3 +947,7 @@ fieldset.sound-zone legend { display: none; }
 .tray-announce textarea { width: 100%; box-sizing: border-box; }
 body:has(#tray) .page { padding-right: 60px; } /* колокольчик справа вверху не закрывает заголовки */
 @media (max-width: 700px) { body:has(#tray) .page { padding-right: 0; padding-top: 52px; } }
+
+/* «Статус» у админа: статус меняется прямо в строке */
+.sm-row[data-open] { cursor: pointer; }
+.sm-pick select { width: auto; max-width: 100%; font-size: 13px; padding: 4px 8px; }

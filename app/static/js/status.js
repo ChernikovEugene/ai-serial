@@ -1,6 +1,6 @@
 // «Статус»: 30 серий на одном экране — 5 прошедших дней, сегодня и дальше вперёд; этап, мини-описание, просрочки.
 // Окно сдвигается само каждый день. Данные: GET /api/status-window. Страница обновляется раз в 30 секунд.
-import { $, $$, api, esc, view } from "./core.js";
+import { $, $$, api, can, esc, statusSelect, toast, view } from "./core.js";
 import { arcDivider, bindArcDividers, ensureAssets } from "./arcs.js";
 
 // Этапы. Цвета те же, что у статусов серий на остальных страницах.
@@ -100,13 +100,18 @@ function rowHtml(r) {
     : r.ep.locked ? "Откроется, когда сценарий согласуют" : esc(r.ep.blurb || "Сценария пока нет");
   const cls = ["sm-row", r.isToday && "today", r.late && !r.isToday && "late", r.stage === POSTED && !r.isToday && "past", !r.ep && "empty"].filter(Boolean).join(" ");
   const link = r.ep && !r.ep.locked; // монтажёр не открывает серии до согласования сценария
-  const tag = link ? "a" : "div";
-  const href = link ? ` href="#/episodes/${r.ep.id}"` : "";
+  // Админ меняет статус прямо здесь (выпадающий список вместо плашки): строка — не ссылка, а переход по клику мимо списка
+  const pick = link && can.admin();
+  const tag = link && !pick ? "a" : "div";
+  const href = link && !pick ? ` href="#/episodes/${r.ep.id}"` : pick ? ` data-open="${r.ep.id}" role="link" tabindex="0"` : "";
+  const stat = pick
+    ? `<span class="sm-pick" title="Статус серии в студии">${statusSelect(r.ep.status, `data-sm-status="${r.ep.id}"`)}</span><span class="muted small">${esc(r.label)}</span>`
+    : `<span class="status" style="--c:${color}">${esc(r.label)}</span>`;
   return `<${tag} class="${cls}" style="--c:${color}"${href}>
     <div class="sm-num"><b>${r.ep ? `Серия ${r.arcNumber ?? ""}`.trim() : "Свободный день"}</b>${r.arcNumber ? `<span class="arc-label">${esc(r.arcTitle)}</span>` : ""}<span class="muted small">${WD_SHORT[r.wd]} · ${r.d} ${MONTHS_GEN[r.mon].slice(0, 3)}</span>${r.isToday ? `<span class="sm-tag">Сегодня</span>` : ""}</div>
     <div class="sm-info"><div class="sm-title ${r.ep ? "" : "muted"}">${title}</div><div class="sm-desc muted">${desc}</div></div>
     <div class="sm-segs">${segs}</div>
-    <div class="sm-stat"><span class="status" style="--c:${color}">${esc(r.label)}</span>${r.flag ? `<span class="sm-flag ${r.flagCls}">${esc(r.flag)}</span>` : ""}</div>
+    <div class="sm-stat">${stat}${r.flag ? `<span class="sm-flag ${r.flagCls}">${esc(r.flag)}</span>` : ""}</div>
   </${tag}>`;
 }
 
@@ -218,6 +223,28 @@ function render() {
   });
   $("#sm-stage-reset") && ($("#sm-stage-reset").onclick = () => { S.stage = null; render(); });
   $("#sm-hide").onchange = (e) => { S.hidePosted = e.target.checked; render(); };
+  // админ: строка открывает серию по клику мимо списка статусов
+  $$(".sm-row[data-open]").forEach((row) => {
+    const open = () => (location.hash = `#/episodes/${row.dataset.open}`);
+    row.onclick = (e) => { if (!e.target.closest(".sm-pick")) open(); };
+    row.onkeydown = (e) => { if (e.key === "Enter" && !e.target.closest(".sm-pick")) open(); };
+  });
+  $$("[data-sm-status]").forEach((sel) => (sel.onchange = async () => {
+    const id = sel.dataset.smStatus, status = sel.value;
+    try {
+      await api(`/api/episodes/${id}/status`, { json: { status }, quiet: true });
+    } catch (err) {
+      // 409: сценарий заполнен не до конца — продюсер может поменять статус всё равно
+      if (err.status === 409 && confirm(`${err.message}\n\nПоменять статус всё равно?`)) {
+        await api(`/api/episodes/${id}/status`, { json: { status, force: true } });
+      } else {
+        if (err.message !== "auth") toast(err.message, true);
+        return load(true);
+      }
+    }
+    toast("Статус изменён");
+    load(true);
+  }));
 }
 
 async function load(force = false) {
