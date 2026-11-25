@@ -138,13 +138,28 @@ function announceFinished(before, after) {
   if (fFailed.length) toast(`Ошибка кадра: шот ${fFailed.join(", ")}`, true);
 }
 
+let pollDown = false;
+
 function schedulePoll() {
   clearTimeout(E.poll); // только таймер опроса: просмотр серии не трогаем, иначе он останавливался после каждой перерисовки
   const busy = E.ep.shots.some((s) => ["queued", "running"].includes(s.gen_status) || framesBusy(s)) || E.sig !== signature(E.ep); // второе: перерисовка отложена, пока человек печатает
   if (!busy) return;
   E.poll = setTimeout(async () => {
     if (!location.hash.startsWith(`#/episodes/${E.id}`)) return;
-    const ep = await api(`/api/episodes/${E.id}`);
+    let ep;
+    try {
+      ep = await api(`/api/episodes/${E.id}`, { quiet: true });
+    } catch (e) {
+      if (e.message === "auth") return;
+      if (!pollDown) toast("Нет связи со студией: статус генерации обновлю автоматически", true);
+      pollDown = true;
+      schedulePoll();
+      return;
+    }
+    if (pollDown) {
+      pollDown = false;
+      toast("Связь со студией восстановлена: обновляю статус генерации");
+    }
     const sig = signature(ep);
     announceFinished(E.ep, ep);
     E.ep = ep;

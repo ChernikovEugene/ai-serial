@@ -234,7 +234,14 @@ export function bindFrames(s, hooks) {
       const shot = await api(`/api/shots/${s.id}/frames/${side}`, { method: "PUT", json: { prompt: ta.value } });
       hooks.update(shot);
     };
-    $("[data-fgen]", fr).onclick = () => call(`${side}/generate`, { json: { prompt: ta.value } }).then(() => toast(`${side === "start" ? "Стартовый" : "Финальный"} кадр отправлен в Nano Banana 2.1`));
+    $("[data-fgen]", fr).onclick = async () => {
+      try {
+        await call(`${side}/generate`, { json: { prompt: ta.value } });
+        toast(`${side === "start" ? "Стартовый" : "Финальный"} кадр отправлен в Nano Banana 2.1`);
+      } catch (e) {
+        if (!e.status && e.message !== "auth") toast("Не удалось отправить кадр: нет связи со студией. Попробуйте ещё раз", true);
+      }
+    };
     $$("[data-freset]", fr).forEach((b) => (b.onclick = () => call(side, { method: "DELETE" })));
     $$("[data-frm]", fr).forEach((b) => (b.onclick = () => setRefs(f().refs.filter((_, i) => i !== +b.dataset.frm))));
     $$("[data-fpick]", fr).forEach((b) => (b.onclick = () => {
@@ -273,7 +280,14 @@ export function bindFrames(s, hooks) {
         if (!x) return toast("Подходят PNG, JPG и WEBP", true);
         const fd = new FormData();
         fd.append("image", x);
-        redraw(await api(`/api/shots/${s.id}/frames/${side}/image`, { method: "POST", body: fd }));
+        let next;
+        try {
+          next = await api(`/api/shots/${s.id}/frames/${side}/image`, { method: "POST", body: fd });
+        } catch (e) {
+          if (!e.status && e.message !== "auth") toast("Не удалось установить картинку: соединение с сервером прервано. Попробуйте ещё раз", true);
+          return;
+        }
+        redraw(next);
         toast("Готовая картинка установлена: кадр считается готовым");
       };
       fr._setImage = put;
@@ -293,7 +307,14 @@ export function bindFrames(s, hooks) {
       const fd = new FormData();
       imgs.forEach((x) => fd.append("images", x));
       toast(`Загружаю картинок: ${imgs.length}…`);
-      redraw(await api(`/api/shots/${s.id}/frames/${side}/upload`, { method: "POST", body: fd }));
+      let next;
+      try {
+        next = await api(`/api/shots/${s.id}/frames/${side}/upload`, { method: "POST", body: fd });
+      } catch (e) {
+        if (!e.status && e.message !== "auth") toast("Не удалось загрузить картинки: соединение с сервером прервано. Попробуйте ещё раз", true);
+        return;
+      }
+      redraw(next);
     };
     fr._upload = upload; // Ctrl+V: см. слушатель ниже
     drop.onclick = () => input.click();
@@ -302,7 +323,7 @@ export function bindFrames(s, hooks) {
     drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drop-over"); });
     drop.addEventListener("dragleave", () => drop.classList.remove("drop-over"));
     drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("drop-over"); upload(e.dataTransfer.files); });
-    drop.addEventListener("paste", (e) => { if (e.clipboardData.files.length) { e.preventDefault(); upload(e.clipboardData.files); } });
+    drop.addEventListener("paste", (e) => { if (e.clipboardData.files.length) { e.preventDefault(); e.stopPropagation(); upload(e.clipboardData.files); } });
   });
 
   const video = $("[data-fvideo]", box);
@@ -317,7 +338,10 @@ export function bindFrames(s, hooks) {
     try {
       hooks.full(await api(`/api/shots/${s.id}/generate`, { json: { confirm_partial: true } }));
       toast(`Шот ${s.label} отправлен в Gemini Omni`);
-    } catch { video.disabled = false; }
+    } catch (e) {
+      video.disabled = false;
+      if (!e.status && e.message !== "auth") toast("Не удалось отправить шот: нет связи со студией. Попробуйте ещё раз", true);
+    }
   };
 }
 
